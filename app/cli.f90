@@ -820,8 +820,8 @@ contains
                              action=not_less_than(1), &
                              dest="drop_proj_level", metavar="INT", &
                              help="Projection solver level", &
-                             choices=[character(len=26) :: "1=Newton, octree retry", "3=Coarse octree", &
-                                      "4=Fine octree"], &
+                             choices=[character(len=26) :: "1=Newton, mesh retry", "2=Selective coarse mesh", &
+                                      "3=Coarse mesh", "4=Fine mesh"], &
                              print_choices=.true., &
                              group_idx=grp_technical)
          call p%add_argument("--batch-size", data_type="integer", &

@@ -7,8 +7,8 @@
 !>   - [[retract_to_surface]] -- Newton along the normal back onto `S = 0`
 !>
 !> [[polish_batch]] applies them to every converged column of a batch, reusing
-!> the jet Newton left there, and re-polishes escaped saddles with one more
-!> batched Newton pass
+!> the jet Newton left there, and re-polishes escaped saddles, constrained maxima
+!> included, with batched Newton passes
 !>
 !> Run context read only, shared by the worker threads: traces gated by
 !> verbosity 5 or `debug`, written straight to `ctx%unit` inside the
@@ -19,32 +19,90 @@
 !> derivative of the degenerate test included; a point beyond the level set
 !> reach is a recoverable failure of the routine that met it, never build-fatal
 module moist_cavity_drop_projection_polish
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
    use moist_context, only: moist_context_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
-   use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
-   use moist_math_packed, only: packed_contract2, packed_full_contract3
+   use moist_math_packed, only: packed_full_contract3
    use moist_cavity_drop_projection_batch, only: projection_batch_type, &
-                                                point_pending, point_converged, point_accepted, &
-                                                point_failed_not_kkt, point_failed_saddle
-   use moist_cavity_drop_projection_newton, only: newton_scratch_type, newton_solve_batch
+                                                point_pending, point_converged, point_accepted, point_captured, &
+                                                point_failed
+   use moist_cavity_drop_projection_newton, only: newton_scratch_type, newton_solve_batch, captor_list_type, &
+                                                  kkt_residuals, reduced_hessian
    use moist_cavity_drop_projection_parameters, only: drop_solve_parameters_type, drop_polish_parameters_type
    implicit none(type, external)
    private
 
-   public :: polish_batch
+   public :: polish_batch, saddle_cache_type
    public :: check_constrained_optimality, riemannian_newton_escape, retract_to_surface
 
-   !> Diagonal and off-diagonal slots of a packed 3x3 Hessian
-   integer, parameter :: diag_slots(3) = [1, 3, 6], offdiag_slots(3) = [2, 4, 5]
-   !> Floor of the reduced-Hessian eigenvalue threshold
-   real(wp), parameter :: tol_eig_base = 1.0e-10_wp
    !> Third directional derivative of the Lagrangian above which a flat point is an inflection
    real(wp), parameter :: tol_D3 = 1.0e-8_wp
    !> Largest objective drop an escape step must achieve; less is ok for a step with a smaller
    !> curvature-based gain at the threshold
    real(wp), parameter :: escape_drop_max = 1.0e-10_wp
+   !> Fixed step along negative curvature when leaving a saddle
+   real(wp), parameter :: escape_step = 0.5_wp
+   !> Line-search trials per escape iteration
+   integer, parameter :: escape_max_ls_iter = 20
+   !> Reduction of a rejected escape line-search step
+   real(wp), parameter :: escape_alpha_reduce = 0.75_wp
+   !> Armijo coefficient of the escape line search
+   real(wp), parameter :: escape_armijo_c = 1.0e-4_wp
+   !> Squared distance (Bohr^2) within which two saddles of one anchor match for deduplication
+   real(wp), parameter :: saddle_dedup_tol2 = 1.0e-12_wp
+   !> Relative eigenvalue gap below which an index-2 saddle is isotropic and never deduplicated
+   real(wp), parameter :: saddle_iso_rel = 1.0e-3_wp
+   !> Relative objective gap below which a saddle's two escape signs are near-symmetric
+   real(wp), parameter :: saddle_sym_rel = 1.0e-3_wp
+
+   !> Escape direction of a saddle entry no walk has taken
+   integer, parameter :: lead_free = 0
+   !> Escape direction whose walk is confirmed; a positive state is the leading column
+   integer, parameter :: lead_confirmed = -1
+   !> State of both directions of a dropped entry
+   integer, parameter :: lead_dropped = -2
+   !> A visit of a cached saddle: captured, waiting for its leader, or walking the opposite sign
+   integer, parameter :: visit_capture = 1, visit_wait = 2, visit_opposite = 3
+
+   !> Per-anchor cache of escaped saddles for symmetry-safe duplicate skipping
+   !>
+   !> - keyed by an anchor key (`1..nkey`): the run index within one batch, or the
+   !>   caller's anchor index, persistent across the rounds of the extended search
+   !> - one entry per non-isotropic saddle: its position, the unit 3D escape
+   !>   direction of its first walk, whether the two signs were near-symmetric,
+   !>   and per direction (first, opposite) its state: free, led by a walk not yet
+   !>   settled, or confirmed
+   !> - confirmed: the walk ended `point_accepted` or captured by an accepted point,
+   !>   so the point it leads to is in the run; a walk that fails drops the entry
+   !> - [[polish_batch]] settles every walk before it returns, so the entries a
+   !>   persistent cache carries across calls hold free and confirmed directions only
+   type :: saddle_cache_type
+      !> Active anchor keys (`1:nkey`)
+      integer :: nkey = 0
+      !> Linked-list head saddle index per anchor key (0 for none)
+      integer, allocatable :: head(:)
+      !> Stored saddles across active keys, dropped ones included
+      integer :: n = 0
+      !> Next saddle index in the same anchor key's list (0 for end)
+      integer, allocatable :: next(:)
+      !> Anchor key of the saddle
+      integer, allocatable :: key(:)
+      !> Saddle positions (3, :) and unit 3D escape direction of the first walk (3, :)
+      real(wp), allocatable :: x(:, :), dir(:, :)
+      !> Whether the saddle's initial escape signs had near-equal objectives; cleared
+      !> once the opposite sign showed no descent
+      logical, allocatable :: near_sym(:)
+      !> State of the first and the opposite direction (2, :): `lead_free`,
+      !> `lead_confirmed`, `lead_dropped` or the leading column
+      integer, allocatable :: lead(:, :)
+   contains
+      !> Clear all stored saddles while preserving allocated storage
+      procedure :: reset => saddle_cache_reset
+      !> Release all storage
+      procedure :: destroy => saddle_cache_destroy
+   end type saddle_cache_type
 
 contains
 
@@ -54,23 +112,40 @@ contains
 
    !> Verify every converged column in `first:last`, escaping saddles
    !>
-   !> - minimum: `point_accepted`; no KKT point: `point_failed_not_kkt`
-   !> - saddle: escaped, re-solved by one batched Newton pass and re-checked; a
-   !>   point that is still a saddle afterwards is `point_failed_saddle`
+   !> - minimum: `point_accepted`; no KKT point: `point_failed`
+   !> - saddle (a constrained maximum included): escaped, re-solved by a batched
+   !>   Newton pass and re-checked; a point that is still a saddle afterwards is
+   !>   `point_failed`
    !> - a classification the third-order test cannot settle keeps the point,
    !>   as the single-anchor projector did
    !>
-   !> @param[in]    ctx       Run context, read only; traces at verbosity 5
-   !> @param[inout] batch     Points with Newton's final jets
-   !> @param[inout] lsf       Thread-local level set
-   !> @param[in]    cfg       Polish settings
-   !> @param[in]    ncfg      Newton settings for the re-polish
-   !> @param[in]    phi_alpha Anchor objective weight
-   !> @param[inout] nscratch  Newton scratch
-   !> @param[out]   error     LSF evaluation failure (build-fatal)
-   !> @param[in]    first     First column (default 1)
-   !> @param[in]    last      Last column (default `batch%n`)
-   subroutine polish_batch(ctx, batch, lsf, cfg, ncfg, phi_alpha, nscratch, error, first, last)
+   !> With `capture_duplicates` (of `ncfg`), per anchor:
+   !>   - the escape walk stops as `point_captured` once it lands on an accepted
+   !>     point of its run
+   !>   - a repeated visit of a non-isotropic saddle is `point_captured` without a
+   !>     walk once every direction it could take is confirmed (one direction, both
+   !>     signs of a near-symmetric saddle, whose second visit walks the opposite
+   !>     sign); a visit whose leader is not settled waits for the re-check of its
+   !>     round, a failed leader drops the entry and a waiting visit walks itself
+   !>   - an opposite sign that finds no descent at the saddle (an inflection, a
+   !>     saddle its third order dominates) is no failed walk: the entry stays,
+   !>     one-sided, and the visit is a repeat of the first direction
+   !>   - rounds repeat until no visit waits; each round settles every walk of
+   !>     the previous one, so its first visit of a saddle never waits, and the
+   !>     outcome depends on the column order of the batch only
+   !>
+   !> @param[in]    ctx          Run context, read only; traces at verbosity 5
+   !> @param[inout] batch        Points with Newton's final jets
+   !> @param[inout] lsf          Thread-local level set
+   !> @param[in]    cfg          Polish settings
+   !> @param[in]    ncfg         Newton settings for the re-polish
+   !> @param[in]    phi_alpha    Anchor objective weight
+   !> @param[inout] nscratch     Newton scratch
+   !> @param[out]   error        LSF evaluation failure (build-fatal)
+   !> @param[in]    first        First column (default 1)
+   !> @param[in]    last         Last column (default `batch%n`)
+   !> @param[inout] saddle_cache Persistent per-anchor saddle cache (keyed by `batch%run_anchor`)
+   subroutine polish_batch(ctx, batch, lsf, cfg, ncfg, phi_alpha, nscratch, error, first, last, saddle_cache)
       type(moist_context_type), intent(in) :: ctx
       type(projection_batch_type), intent(inout) :: batch
       class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
@@ -81,98 +156,230 @@ contains
       type(error_type), allocatable, intent(out) :: error
       integer, intent(in), optional :: first
       integer, intent(in), optional :: last
+      type(saddle_cache_type), intent(inout), optional, target :: saddle_cache
 
-      type(error_type), allocatable :: class_error, escape_error
-      real(wp) :: a(3), r_out(3), lambda_out
-      integer :: j0, j1, j, n_escaped, index, ncap
-      logical :: saddle, kkt
+      type(error_type), allocatable :: escape_error
+      type(saddle_cache_type), target :: local_cache
+      type(saddle_cache_type), pointer :: scache
+      !> Saddle columns in column order and whether each is isotropic
+      integer, allocatable :: sad_col(:)
+      logical, allocatable :: sad_iso(:)
+      !> Cache entry and direction (1 first, 2 opposite) each saddle leads, 0 for none
+      integer, allocatable :: sad_entry(:), sad_sign(:)
+      !> Saddles of the round, saddles waiting for the next one, saddles walked in the round
+      integer, allocatable :: todo(:), waiting(:), walked(:)
+      !> Direction the walk must not take; run whose captors stop the walk (unallocated: absent)
+      real(wp), allocatable :: avoid(:)
+      integer, allocatable :: cap_run
+      real(wp) :: r_out(3), lambda_out, mu_min, mu_max, esc_dir(3)
+      integer :: j0, j1, j, k, i, irun, skey, m, n_sad, n_todo, n_wait, n_walk
+      logical :: saddle, kkt, do_cap, is_sym, esc_cap
 
       j0 = 1
       j1 = batch%n
       if (present(first)) j0 = first
       if (present(last)) j1 = last
       if (j1 < j0) return
-      if (.not. allocated(nscratch%escaped)) allocate (nscratch%escaped(max(16, j1)))
-      if (size(nscratch%escaped) < j1) then
-         ncap = max(j1, 2*size(nscratch%escaped))
-         deallocate (nscratch%escaped)
-         allocate (nscratch%escaped(ncap))
-      end if
-      nscratch%escaped(j0:j1) = .false.
+      do_cap = ncfg%capture_duplicates
+      allocate (sad_col(j1 - j0 + 1), sad_iso(j1 - j0 + 1))
 
-      n_escaped = 0
+      if (do_cap) then
+         call nscratch%captors%init(batch, batch%run_start(batch%run_of(j0)), j1)
+         if (present(saddle_cache)) then
+            scache => saddle_cache
+         else
+            scache => local_cache
+            call scache%reset(batch%nrun)
+         end if
+      else
+         nullify (scache)
+      end if
+
+      !> Pass 1: classify every converged column first so all non-saddle minima in
+      !> the batch are registered as captors before any saddle escape walk begins
+      n_sad = 0
       do j = j0, j1
          if (batch%status(j) /= point_converged) cycle
-         a = batch%run_xyz(:, batch%run_of(j))
-         index = batch%run_anchor(batch%run_of(j))
-         call check_constrained_optimality(ctx, cfg, phi_alpha, lsf, batch%x(:, j), a, batch%lambda(j), class_error, &
-                                           is_saddle=saddle, is_kkt=kkt, index=index, &
-                                           jet_S=batch%S(j), jet_grad=batch%gradS(:, j), &
-                                           jet_hess=batch%hessS(:, j), lsf_error=error)
+         call classify(j, saddle, kkt, mu_min, mu_max)
          if (allocated(error)) return
-         if (allocated(class_error)) then
+         if (.not. kkt) then
+            batch%status(j) = point_failed
+         else if (.not. saddle) then
+            batch%status(j) = point_accepted
+            if (do_cap) call nscratch%captors%add(batch, j)
+         else
+            n_sad = n_sad + 1
+            sad_col(n_sad) = j
+            sad_iso(n_sad) = (mu_max - mu_min) <= saddle_iso_rel*max(1.0_wp, abs(mu_min))
+         end if
+      end do
+      if (n_sad == 0) return
+
+      !> Pass 2: escape the saddles in column order, in rounds
+      allocate (sad_entry(n_sad), sad_sign(n_sad), todo(n_sad), waiting(n_sad), walked(n_sad))
+      do k = 1, n_sad
+         todo(k) = k
+      end do
+      n_todo = n_sad
+      do while (n_todo > 0)
+         n_wait = 0
+         n_walk = 0
+         do i = 1, n_todo
+            k = todo(i)
+            j = sad_col(k)
+            irun = batch%run_of(j)
+            skey = irun
+            if (present(saddle_cache)) skey = batch%run_anchor(irun)
+            sad_entry(k) = 0
+            sad_sign(k) = 1
+            if (allocated(avoid)) deallocate (avoid)
+
+            !> Symmetry-safe per-anchor saddle deduplication
+            if (do_cap .and. .not. sad_iso(k)) then
+               m = saddle_cache_find(scache, skey, batch%x(:, j))
+               if (m > 0) then
+                  select case (saddle_cache_visit(scache, m))
+                  case (visit_capture)
+                     batch%status(j) = point_captured
+                     cycle
+                  case (visit_wait)
+                     n_wait = n_wait + 1
+                     waiting(n_wait) = k
+                     cycle
+                  case default
+                     sad_entry(k) = m
+                     sad_sign(k) = 2
+                     scache%lead(2, m) = j
+                     avoid = scache%dir(:, m)
+                  end select
+               end if
+            end if
+
             if (ctx%verbosity(5)) then
                !$omp critical (moist_context_io)
-               write (ctx%unit, "(1x,i12,1x,a,a)") index, "[optimality] ", trim(class_error%message)
+               write (ctx%unit, "(1x,i12,1x,a)") batch%run_anchor(irun), &
+                  "[optimality] Saddle point detected, attempting escape ..."
                !$omp end critical (moist_context_io)
             end if
-            deallocate (class_error)
-         end if
-         if (.not. kkt) then
-            batch%status(j) = point_failed_not_kkt
-            cycle
-         end if
-         if (.not. saddle) then
-            batch%status(j) = point_accepted
-            cycle
+            if (do_cap) cap_run = irun
+            call riemannian_newton_escape(ctx, cfg, phi_alpha, ncfg%max_step, lsf, batch%x(:, j), &
+                                          batch%run_xyz(:, irun), batch%lambda(j), r_out, lambda_out, &
+                                          escape_error, lsf_error=error, jet_S=batch%S(j), &
+                                          jet_grad=batch%gradS(:, j), jet_hess=batch%hessS(:, j), &
+                                          avoid_dir=avoid, escape_dir=esc_dir, is_near_sym=is_sym, &
+                                          captor_batch=batch, captors=nscratch%captors, capture_run=cap_run, &
+                                          captured=esc_cap)
+            if (allocated(error)) return
+            ! A walk that ran out of iterations still hands back its best point;
+            ! Newton and the re-check below decide whether it is usable
+            if (allocated(escape_error)) deallocate (escape_error)
+
+            ! An opposite sign without descent leads nowhere: the saddle is one-sided
+            ! from here on and the visit a plain repeat of its first direction
+            if (sad_sign(k) == 2 .and. all(esc_dir == 0.0_wp)) then
+               m = sad_entry(k)
+               scache%near_sym(m) = .false.
+               scache%lead(2, m) = lead_free
+               if (saddle_cache_visit(scache, m) == visit_capture) then
+                  batch%status(j) = point_captured
+               else
+                  n_wait = n_wait + 1
+                  waiting(n_wait) = k
+               end if
+               cycle
+            end if
+
+            ! A first visit opens the saddle's entry and leads its first direction
+            if (do_cap .and. .not. sad_iso(k) .and. sad_entry(k) == 0 .and. &
+                dot_product(esc_dir, esc_dir) > 0.0_wp) then
+               call saddle_cache_add(scache, skey, batch%x(:, j), esc_dir, is_sym, j, sad_entry(k))
+            end if
+
+            if (esc_cap) then
+               ! Stopped on an accepted point: the direction is confirmed
+               batch%status(j) = point_captured
+               if (sad_entry(k) > 0) call saddle_cache_settle(scache, sad_entry(k), sad_sign(k), .true.)
+               cycle
+            end if
+
+            batch%x(:, j) = r_out
+            batch%lambda(j) = lambda_out
+            batch%status(j) = point_pending
+            n_walk = n_walk + 1
+            walked(n_walk) = k
+         end do
+
+         if (n_walk > 0) then
+            call newton_solve_batch(batch, lsf, ncfg, cfg, phi_alpha, nscratch, error, first=j0, last=j1)
+            if (allocated(error)) return
+            do i = 1, n_walk
+               k = walked(i)
+               j = sad_col(k)
+               if (batch%status(j) == point_converged) then
+                  call classify(j, saddle, kkt, mu_min, mu_max)
+                  if (allocated(error)) return
+                  if (.not. kkt) then
+                     batch%status(j) = point_failed
+                  else if (saddle) then
+                     if (ctx%verbosity(5)) then
+                        !$omp critical (moist_context_io)
+                        write (ctx%unit, "(1x,i12,1x,a)") batch%run_anchor(batch%run_of(j)), &
+                           "[optimality] Failed to escape saddle point!"
+                        !$omp end critical (moist_context_io)
+                     end if
+                     batch%status(j) = point_failed
+                  else
+                     batch%status(j) = point_accepted
+                  end if
+               end if
+               ! Confirmed: accepted, or captured by Newton on a captor the check accepts
+               if (sad_entry(k) > 0) then
+                  call saddle_cache_settle(scache, sad_entry(k), sad_sign(k), &
+                                           batch%status(j) == point_accepted .or. batch%status(j) == point_captured)
+               end if
+            end do
          end if
 
+         ! Waiting visits form the next round; the captors of its walks are the
+         ! points accepted so far
+         todo(1:n_wait) = waiting(1:n_wait)
+         n_todo = n_wait
+         if (n_todo > 0) call nscratch%captors%init(batch, batch%run_start(batch%run_of(j0)), j1)
+      end do
+
+   contains
+
+      !> Classify converged column `j`; an unreliable classification is traced
+      !>
+      !> @param[in]  j      Column
+      !> @param[out] saddle Saddle or inflection
+      !> @param[out] kkt    Feasible and stationary
+      !> @param[out] mu_min Smaller reduced-Hessian eigenvalue
+      !> @param[out] mu_max Larger reduced-Hessian eigenvalue
+      subroutine classify(j, saddle, kkt, mu_min, mu_max)
+         integer, intent(in) :: j
+         logical, intent(out) :: saddle
+         logical, intent(out) :: kkt
+         real(wp), intent(out) :: mu_min
+         real(wp), intent(out) :: mu_max
+
+         type(error_type), allocatable :: class_error
+         integer :: irun
+
+         irun = batch%run_of(j)
+         call check_constrained_optimality(ctx, cfg, phi_alpha, lsf, batch%x(:, j), batch%run_xyz(:, irun), &
+                                           batch%lambda(j), class_error, is_saddle=saddle, is_kkt=kkt, &
+                                           anchor_id=batch%run_anchor(irun), jet_S=batch%S(j), &
+                                           jet_grad=batch%gradS(:, j), jet_hess=batch%hessS(:, j), &
+                                           lsf_error=error, mu_min_out=mu_min, mu_max_out=mu_max)
+         if (.not. allocated(class_error)) return
          if (ctx%verbosity(5)) then
             !$omp critical (moist_context_io)
-            write (ctx%unit, "(1x,i12,1x,a)") index, "[optimality] Saddle point detected, attempting escape ..."
+            write (ctx%unit, "(1x,i12,1x,a,a)") batch%run_anchor(irun), "[optimality] ", trim(class_error%message)
             !$omp end critical (moist_context_io)
          end if
-         call riemannian_newton_escape(ctx, cfg, phi_alpha, lsf, batch%x(:, j), a, batch%lambda(j), r_out, &
-                                       lambda_out, escape_error, lsf_error=error)
-         if (allocated(error)) return
-         ! A walk that ran out of iterations still hands back its best point;
-         ! Newton and the re-check below decide whether it is usable
-         if (allocated(escape_error)) deallocate (escape_error)
-         batch%x(:, j) = r_out
-         batch%lambda(j) = lambda_out
-         batch%status(j) = point_pending
-         nscratch%escaped(j) = .true.
-         n_escaped = n_escaped + 1
-      end do
-      if (n_escaped == 0) return
+      end subroutine classify
 
-      call newton_solve_batch(batch, lsf, ncfg, phi_alpha, nscratch, error, first=j0, last=j1)
-      if (allocated(error)) return
-
-      do j = j0, j1
-         if (.not. nscratch%escaped(j)) cycle
-         if (batch%status(j) /= point_converged) cycle
-         a = batch%run_xyz(:, batch%run_of(j))
-         index = batch%run_anchor(batch%run_of(j))
-         call check_constrained_optimality(ctx, cfg, phi_alpha, lsf, batch%x(:, j), a, batch%lambda(j), class_error, &
-                                           is_saddle=saddle, is_kkt=kkt, index=index, &
-                                           jet_S=batch%S(j), jet_grad=batch%gradS(:, j), &
-                                           jet_hess=batch%hessS(:, j), lsf_error=error)
-         if (allocated(error)) return
-         if (allocated(class_error)) deallocate (class_error)
-         if (.not. kkt) then
-            batch%status(j) = point_failed_not_kkt
-         else if (saddle) then
-            if (ctx%verbosity(5)) then
-               !$omp critical (moist_context_io)
-               write (ctx%unit, "(1x,i12,1x,a)") index, "[optimality] Failed to escape saddle point!"
-               !$omp end critical (moist_context_io)
-            end if
-            batch%status(j) = point_failed_saddle
-         else
-            batch%status(j) = point_accepted
-         end if
-      end do
    end subroutine polish_batch
 
    !* ================================================================================= *!
@@ -183,10 +390,12 @@ contains
    !>
    !> - reduced Hessian eigenvalues on the tangent plane, not the bordered KKT
    !>   matrix
+   !> - a constrained maximum is a saddle here: both eigenvalues are negative
    !> - a flat second-order test falls through to `D^3 L[d,d,d]` along the flat
    !>   direction; nonzero means an inflection, treated as an escapable saddle
    !> - flat to third order raises `error`, classification unreliable
    !> - `r_star` beyond the level set reach: `is_kkt = .false.` and `error`
+   !> - a point, multiplier or jet that is not finite: `is_kkt = .false.` and `error`
    !>
    !> @param[in]    ctx          Run context, read only
    !> @param[in]    cfg          Polish settings
@@ -199,14 +408,17 @@ contains
    !> @param[out]   is_saddle    Saddle or inflection
    !> @param[out]   is_kkt       Feasible and stationary
    !> @param[out]   is_converged Strict local minimum
-   !> @param[in]    index        Anchor index for traces
+   !> @param[in]    anchor_id    Anchor index for traces
    !> @param[in]    jet_S        Level set value at `r_star`, skips the evaluation
    !> @param[in]    jet_grad     Level set gradient at `r_star`
    !> @param[in]    jet_hess     Level set Hessian at `r_star`, packed (6)
    !> @param[out]   lsf_error    LSF evaluation failure; folded into `error` when absent
+   !> @param[out]   mu_min_out   Smaller reduced-Hessian eigenvalue
+   !> @param[out]   mu_max_out   Larger reduced-Hessian eigenvalue
    subroutine check_constrained_optimality(ctx, cfg, phi_alpha, lsf, r_star, anchor, lambda, error, &
-                                           is_saddle, is_kkt, is_converged, index, &
-                                           jet_S, jet_grad, jet_hess, lsf_error)
+                                           is_saddle, is_kkt, is_converged, anchor_id, &
+                                           jet_S, jet_grad, jet_hess, lsf_error, &
+                                           mu_min_out, mu_max_out)
       type(moist_context_type), intent(in) :: ctx
       type(drop_polish_parameters_type), intent(in) :: cfg
       real(wp), intent(in) :: phi_alpha
@@ -218,20 +430,18 @@ contains
       logical, intent(out), optional :: is_saddle
       logical, intent(out), optional :: is_kkt
       logical, intent(out), optional :: is_converged
-      integer, intent(in), optional :: index
+      integer, intent(in), optional :: anchor_id
       real(wp), intent(in), optional :: jet_S
       real(wp), intent(in), optional :: jet_grad(3)
       real(wp), intent(in), optional :: jet_hess(:)
       type(error_type), allocatable, intent(out), optional :: lsf_error
-
-      real(wp), parameter :: tol_feas = 1.0e-6_wp
-      real(wp), parameter :: tol_stat = 1.0e-6_wp
-      real(wp), parameter :: tol_grad = 1.0e-10_wp
+      real(wp), intent(out), optional :: mu_min_out
+      real(wp), intent(out), optional :: mu_max_out
 
       type(error_type), allocatable :: eval_error
-      real(wp) :: S_val, grad_S(3), hess_S(6), grad_phi(3)
-      real(wp) :: normal_vec(3), norm_grad_S, res_feas, res_stat, grad_L(3)
-      real(wp) :: H_lagrangian(6), R_reduced(2, 2), T_mat(3, 2), t1(3), t2(3), Ht1(3), Ht2(3)
+      real(wp) :: S_val, grad_S(3), hess_S(6)
+      real(wp) :: norm_grad_S, res_feas, res_stat
+      real(wp) :: T_mat(3, 2), t1(3), t2(3)
       real(wp) :: mu_min, mu_max, v_min(2), v_max(2), eig_tol
       real(wp) :: d_degen(3), D3_ddd
       integer :: id
@@ -240,8 +450,10 @@ contains
       if (present(is_saddle)) is_saddle = .false.
       if (present(is_kkt)) is_kkt = .true.
       if (present(is_converged)) is_converged = .false.
+      if (present(mu_min_out)) mu_min_out = 0.0_wp
+      if (present(mu_max_out)) mu_max_out = 0.0_wp
       id = 0
-      if (present(index)) id = index
+      if (present(anchor_id)) id = anchor_id
 
       if (present(jet_S) .and. present(jet_grad) .and. present(jet_hess)) then
          S_val = jet_S
@@ -261,9 +473,16 @@ contains
          end if
       end if
 
-      res_feas = abs(S_val)
+      call kkt_residuals(phi_alpha, r_star, anchor, lambda, S_val, grad_S, res_feas, res_stat)
+      ! NaN fails every comparison below and would end as a kept point; finite
+      ! residuals mean a finite point, multiplier, value and gradient
+      if (.not. (ieee_is_finite(res_feas) .and. ieee_is_finite(res_stat) .and. all(ieee_is_finite(hess_S)))) then
+         call fatal_error(error, "KKT check: candidate point or its level set jet not finite")
+         if (present(is_kkt)) is_kkt = .false.
+         return
+      end if
       norm_grad_S = norm2(grad_S)
-      if (norm_grad_S < tol_grad) then
+      if (norm_grad_S < cfg%kkt_tol_grad) then
          if (ctx%verbosity(5)) then
             !$omp critical (moist_context_io)
             write (ctx%unit, "(1x,i12,1x,a,es12.4)") id, &
@@ -271,26 +490,22 @@ contains
             !$omp end critical (moist_context_io)
          end if
          ! Cannot classify, but an infeasible point is no KKT point
-         if (present(is_kkt)) is_kkt = res_feas <= tol_feas
+         if (present(is_kkt)) is_kkt = res_feas <= cfg%kkt_tol_feas
          return
       end if
-
-      grad_phi = phi_alpha*(r_star - anchor)
-      grad_L = grad_phi - lambda*grad_S
-      res_stat = norm2(grad_L)
 
       if (ctx%debug) then
          ! One block, so no other thread's line lands inside it
          !$omp critical (moist_context_io)
          write (ctx%unit, "(1x,a)") "KKT verification:"
          write (ctx%unit, "(3x,a,es12.4,a,es12.4,a)") &
-            "Feasibility   |S(r*)| = ", res_feas, "  (tol: ", tol_feas, ")"
+            "Feasibility   |S(r*)| = ", res_feas, "  (tol: ", cfg%kkt_tol_feas, ")"
          write (ctx%unit, "(3x,a,es12.4,a,es12.4,a)") &
-            "Stationarity  ||dL||  = ", res_stat, "  (tol: ", tol_stat, ")"
+            "Stationarity  ||dL||  = ", res_stat, "  (tol: ", cfg%kkt_tol_stat, ")"
          !$omp end critical (moist_context_io)
       end if
 
-      if (res_feas > tol_feas .or. res_stat > tol_stat) then
+      if (res_feas > cfg%kkt_tol_feas .or. res_stat > cfg%kkt_tol_stat) then
          if (ctx%verbosity(5) .or. ctx%debug) then
             !$omp critical (moist_context_io)
             write (ctx%unit, "(1x,i12,1x,a,es12.4,a,es12.4)") id, &
@@ -301,24 +516,13 @@ contains
          return
       end if
 
-      !> Reduced Hessian R = T^T (Hess phi - lambda Hess S) T on the tangent plane,
-      !> packed `H_L` with `Hess phi = phi_alpha I` on the diagonal slots
-      normal_vec = grad_S/norm_grad_S
-      call setup_tangent_frame(normal_vec, t1, t2)
+      !> Reduced Hessian R = T^T (Hess phi - lambda Hess S) T on the tangent plane
+      call reduced_hessian(phi_alpha, lambda, grad_S, hess_S, cfg%saddle_eig_tol, t1, t2, &
+                           mu_min, mu_max, v_min, v_max, eig_tol)
       T_mat(:, 1) = t1
       T_mat(:, 2) = t2
-      H_lagrangian = -lambda*hess_S
-      H_lagrangian(diag_slots) = phi_alpha - lambda*hess_S(diag_slots)
-      call packed_contract2(H_lagrangian, t1, Ht1, 3)
-      call packed_contract2(H_lagrangian, t2, Ht2, 3)
-      R_reduced(1, 1) = dot_product(t1, Ht1)
-      R_reduced(1, 2) = dot_product(t1, Ht2)
-      R_reduced(2, 2) = dot_product(t2, Ht2)
-      R_reduced(2, 1) = R_reduced(1, 2)
-      call eig_2x2_symmetric(R_reduced(1, 1), R_reduced(1, 2), R_reduced(2, 2), &
-                             mu_min, mu_max, v_min, v_max)
-
-      eig_tol = saddle_eig_threshold(cfg%saddle_eig_tol, H_lagrangian)
+      if (present(mu_min_out)) mu_min_out = mu_min
+      if (present(mu_max_out)) mu_max_out = mu_max
 
       if (ctx%debug) then
          !$omp critical (moist_context_io)
@@ -367,6 +571,8 @@ contains
          end if
       else
          call fatal_error(error, "Degenerate to third order; classification unreliable")
+         ! Kept, unless the third derivative is NaN
+         if (present(is_kkt)) is_kkt = abs(D3_ddd) <= tol_D3
       end if
    end subroutine check_constrained_optimality
 
@@ -376,13 +582,14 @@ contains
 
    !> Walk off a saddle along the surface, then descend to a minimum
    !>
-   !> - at a saddle, or at a flat point whose third derivative makes it an inflection
-   !>   (the classification of [[check_constrained_optimality]]): fixed step along
-   !>   the negative-curvature or flat tangent direction; the first-order change
-   !>   there is roundoff at a KKT point, so both signs are tried and the lower
-   !>   objective kept
+   !> - at a saddle (a constrained maximum included), or at a flat point whose
+   !>   third derivative makes it an inflection (the classification of
+   !>   [[check_constrained_optimality]]): fixed step along the negative-curvature
+   !>   or flat tangent direction; the first-order change there is roundoff at a
+   !>   KKT point, so both signs are tried and the lower objective kept
    !> - a flat point with zero third derivative ends the walk, as the check keeps it
-   !> - elsewhere: Riemannian Newton (or steepest descent when nearly singular)
+   !> - elsewhere: Riemannian Newton (or steepest descent when nearly singular),
+   !>   the step at most `max_step` long
    !> - stops in the basin of a minimum, at a tangential gradient of `1e-6`;
    !>   [[polish_batch]] converges the point with the batched Newton like any other
    !>   column
@@ -390,23 +597,38 @@ contains
    !>   step must lower `phi`, a Newton or descent step must pass the Armijo test
    !> - `r_out`/`lambda_out` always hold the last accepted point, also on error
    !> - an iterate beyond the level set reach ends the walk with `error`
+   !> - with `capture_run`: stops as `captured` at a converged point, or before an
+   !>   uncapped Newton step on a convex patch, that lands on a captor of the run
    !>
-   !> @param[in]    ctx         Run context, read only
-   !> @param[in]    cfg         Polish settings
-   !> @param[in]    phi_alpha   Anchor objective weight
-   !> @param[inout] lsf         Thread-local level set
-   !> @param[in]    r_init      Start point
-   !> @param[in]    anchor      Anchor
-   !> @param[in]    lambda_init Multiplier at `r_init`
-   !> @param[out]   r_out       Final point
-   !> @param[out]   lambda_out  Multiplier at `r_out`
-   !> @param[out]   error       Degenerate gradient, unreached iterate or iteration budget exhausted
-   !> @param[out]   lsf_error   LSF evaluation failure; folded into `error` when absent
-   subroutine riemannian_newton_escape(ctx, cfg, phi_alpha, lsf, r_init, anchor, lambda_init, r_out, lambda_out, &
-                                       error, lsf_error)
+   !> @param[in]    ctx          Run context, read only
+   !> @param[in]    cfg          Polish settings
+   !> @param[in]    phi_alpha    Anchor objective weight
+   !> @param[in]    max_step     Longest Newton step (Bohr), the Newton `max_step`
+   !> @param[inout] lsf          Thread-local level set
+   !> @param[in]    r_init       Start point
+   !> @param[in]    anchor       Anchor
+   !> @param[in]    lambda_init  Multiplier at `r_init`
+   !> @param[out]   r_out        Final point
+   !> @param[out]   lambda_out   Multiplier at `r_out`
+   !> @param[out]   error        Degenerate gradient, unreached iterate or iteration budget exhausted
+   !> @param[out]   lsf_error    LSF evaluation failure; folded into `error` when absent
+   !> @param[in]    jet_S        Level set value at `r_init`, skips the `iter = 0` LSF call
+   !> @param[in]    jet_grad     Level set gradient at `r_init`
+   !> @param[in]    jet_hess     Level set Hessian at `r_init`, packed (6)
+   !> @param[in]    avoid_dir    3D unit escape direction to avoid at `iter = 0` (forces the opposite sign)
+   !> @param[out]   escape_dir   Unit 3D escape direction chosen at `iter = 0` (zero if none)
+   !> @param[out]   is_near_sym  Initial escape signs had near-equal retracted objectives
+   !> @param[in]    captor_batch Batch holding the captor columns of `capture_run`
+   !> @param[in]    captors      Captor lists of `captor_batch`
+   !> @param[in]    capture_run  Run whose captors stop the walk; capture is on only when present
+   !> @param[out]   captured     The walk stopped on a captor
+   subroutine riemannian_newton_escape(ctx, cfg, phi_alpha, max_step, lsf, r_init, anchor, lambda_init, r_out, &
+                                       lambda_out, error, lsf_error, jet_S, jet_grad, jet_hess, avoid_dir, &
+                                       escape_dir, is_near_sym, captor_batch, captors, capture_run, captured)
       type(moist_context_type), intent(in) :: ctx
       type(drop_polish_parameters_type), intent(in) :: cfg
       real(wp), intent(in) :: phi_alpha
+      real(wp), intent(in) :: max_step
       class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
       real(wp), intent(in) :: r_init(3)
       real(wp), intent(in) :: anchor(3)
@@ -415,6 +637,16 @@ contains
       real(wp), intent(out) :: lambda_out
       type(error_type), allocatable, intent(out) :: error
       type(error_type), allocatable, intent(out), optional :: lsf_error
+      real(wp), intent(in), optional :: jet_S
+      real(wp), intent(in), optional :: jet_grad(3)
+      real(wp), intent(in), optional :: jet_hess(:)
+      real(wp), intent(in), optional :: avoid_dir(3)
+      real(wp), intent(out), optional :: escape_dir(3)
+      logical, intent(out), optional :: is_near_sym
+      type(projection_batch_type), intent(in), optional :: captor_batch
+      type(captor_list_type), intent(in), optional :: captors
+      integer, intent(in), optional :: capture_run
+      logical, intent(out), optional :: captured
 
       !> Hand-over gradient: below about sqrt(eps) the objective-based line search
       !> cannot resolve progress, and a point handed over below Newton's residual
@@ -424,64 +656,72 @@ contains
       type(error_type), allocatable :: eval_error, retract_error
       real(wp) :: r_curr(3), r_trial(3), r_retracted(3), lambda_curr, lambda_trial
       real(wp) :: S_val, grad_S(3), hess_S(6), grad_phi(3)
-      real(wp) :: phi_curr, phi_trial, normal_vec(3), norm_grad_S
-      real(wp) :: T_mat(3, 2), t1(3), t2(3), g_tan(2), H_lagrangian(6), R_reduced(2, 2), Ht1(3), Ht2(3)
+      real(wp) :: phi_init, phi_curr, phi_trial, norm_grad_S
+      real(wp) :: T_mat(3, 2), t1(3), t2(3), g_tan(2)
       real(wp) :: delta_r(3), alpha, directional_deriv, norm_g_tan
       real(wp) :: mu_min, mu_max, v_min(2), v_max(2), s_tan(2), eig_tol, D3_ddd
-      real(wp) :: r_cand(3), lambda_cand, phi_cand, drop_min
-      integer :: iter, ls_iter, isign, nsign
+      real(wp) :: r_cand(3), lambda_cand, phi_cand, phi_pos, phi_neg, drop_min, dlen
+      integer :: iter, ls_iter, isign, nsign, chosen_sign
       logical :: converged, ls_success, at_saddle, escaping, have_trial, unreached
+      logical :: have_jet0, have_pos, have_neg, check_cap
 
+      have_jet0 = present(jet_S) .and. present(jet_grad) .and. present(jet_hess)
+      check_cap = present(captor_batch) .and. present(captors) .and. present(capture_run) .and. present(captured)
+      if (present(escape_dir)) escape_dir = 0.0_wp
+      if (present(is_near_sym)) is_near_sym = .false.
+      if (present(captured)) captured = .false.
       r_curr = r_init
       lambda_curr = lambda_init
       r_out = r_curr
       lambda_out = lambda_curr
       converged = .false.
       phi_curr = 0.5_wp*phi_alpha*sum((r_curr - anchor)**2)
+      phi_init = phi_curr
 
       do iter = 0, cfg%escape_max_iter
-         call point_jet(lsf, r_curr, 2, S_val, unreached, eval_error, grad_S, hess_S)
-         if (allocated(eval_error)) then
-            call hand_over(eval_error, error, lsf_error)
-            return
-         end if
-         if (unreached) then
-            call fatal_error(error, "Riemannian escape: iterate beyond the level set reach")
-            return
+         if (iter == 0 .and. have_jet0) then
+            S_val = jet_S
+            grad_S = jet_grad
+            hess_S = jet_hess
+            unreached = .false.
+         else
+            call point_jet(lsf, r_curr, 2, S_val, unreached, eval_error, grad_S, hess_S)
+            if (allocated(eval_error)) then
+               call hand_over(eval_error, error, lsf_error)
+               return
+            end if
+            if (unreached) then
+               call fatal_error(error, "Riemannian escape: iterate beyond the level set reach")
+               return
+            end if
          end if
          grad_phi = phi_alpha*(r_curr - anchor)
 
          norm_grad_S = norm2(grad_S)
-         if (norm_grad_S < 1.0e-10_wp) then
+         if (norm_grad_S < cfg%kkt_tol_grad) then
             call fatal_error(error, "Riemannian escape: degenerate LSF gradient")
             return
          end if
-         normal_vec = grad_S/norm_grad_S
-         call setup_tangent_frame(normal_vec, t1, t2)
+         ! Same reduced Hessian and threshold as the optimality check, so both agree on what a saddle is
+         call reduced_hessian(phi_alpha, lambda_curr, grad_S, hess_S, cfg%saddle_eig_tol, t1, t2, &
+                              mu_min, mu_max, v_min, v_max, eig_tol)
          T_mat(:, 1) = t1
          T_mat(:, 2) = t2
 
          g_tan(1) = dot_product(t1, grad_phi)
          g_tan(2) = dot_product(t2, grad_phi)
          norm_g_tan = norm2(g_tan)
-
-         H_lagrangian = -lambda_curr*hess_S
-         H_lagrangian(diag_slots) = phi_alpha - lambda_curr*hess_S(diag_slots)
-         call packed_contract2(H_lagrangian, t1, Ht1, 3)
-         call packed_contract2(H_lagrangian, t2, Ht2, 3)
-         R_reduced(1, 1) = dot_product(t1, Ht1)
-         R_reduced(1, 2) = dot_product(t1, Ht2)
-         R_reduced(2, 2) = dot_product(t2, Ht2)
-         R_reduced(2, 1) = R_reduced(1, 2)
-         call eig_2x2_symmetric(R_reduced(1, 1), R_reduced(1, 2), R_reduced(2, 2), &
-                                mu_min, mu_max, v_min, v_max)
-         ! Same threshold as the optimality check, so both agree on what a saddle is
-         eig_tol = saddle_eig_threshold(cfg%saddle_eig_tol, H_lagrangian)
          at_saddle = mu_min < -eig_tol
 
          escaping = at_saddle
          if (norm_g_tan < tol_grad_tan .and. .not. at_saddle) then
             if (mu_min > eig_tol) then
+               if (check_cap .and. iter >= 1) then
+                  if (captors%lands(captor_batch, capture_run, r_curr)) then
+                     captured = .true.
+                     return
+                  end if
+               end if
                converged = .true.
                exit
             end if
@@ -507,7 +747,7 @@ contains
             ! Unsigned: `grad phi . delta_r` is roundoff at a KKT point
             delta_r = T_mat(:, 1)*v_min(1) + T_mat(:, 2)*v_min(2)
             directional_deriv = 0.0_wp
-            alpha = cfg%escape_step
+            alpha = escape_step
          else
             if (mu_min > eig_tol) then
                ! s = -V diag(1/mu) V^T g
@@ -519,16 +759,41 @@ contains
                s_tan = -g_tan/max(norm_g_tan, 1.0e-10_wp)
             end if
             delta_r = T_mat(:, 1)*s_tan(1) + T_mat(:, 2)*s_tan(2)
+            dlen = norm2(delta_r)
+            ! Early duplicate capture: an uncapped Newton step on a convex patch
+            ! predicts the point it lands on
+            if (check_cap .and. iter >= 1 .and. mu_min > eig_tol .and. dlen < max_step) then
+               if (captors%lands(captor_batch, capture_run, r_curr + delta_r)) then
+                  captured = .true.
+                  return
+               end if
+            end if
+            if (dlen > max_step) delta_r = delta_r*(max_step/dlen)
             directional_deriv = dot_product(grad_phi, delta_r)
             alpha = cfg%escape_alpha_init
          end if
 
-         ! An escape step tries both signs and keeps the lower retracted objective
+         ! An escape step tries both signs and keeps the lower retracted objective;
+         ! when `avoid_dir` is given at `iter = 0`, force the opposite 3D sign directly
          nsign = 1
-         if (escaping) nsign = 2
+         if (escaping) then
+            if (iter == 0 .and. present(avoid_dir)) then
+               if (dot_product(delta_r, avoid_dir) > 0.0_wp) delta_r = -delta_r
+               nsign = 1
+            else
+               nsign = 2
+            end if
+         end if
          ls_success = .false.
-         do ls_iter = 1, cfg%escape_max_ls_iter
+         chosen_sign = 1
+         have_pos = .false.
+         have_neg = .false.
+         phi_pos = 0.0_wp
+         phi_neg = 0.0_wp
+         do ls_iter = 1, escape_max_ls_iter
             have_trial = .false.
+            have_pos = .false.
+            have_neg = .false.
             do isign = 1, nsign
                r_trial = r_curr + merge(alpha, -alpha, isign == 1)*delta_r
                call retract_to_surface(cfg, phi_alpha, lsf, r_trial, anchor, r_cand, lambda_cand, retract_error, &
@@ -542,16 +807,24 @@ contains
                   cycle
                end if
                phi_cand = 0.5_wp*phi_alpha*sum((r_cand - anchor)**2)
+               if (isign == 1) then
+                  have_pos = .true.
+                  phi_pos = phi_cand
+               else
+                  have_neg = .true.
+                  phi_neg = phi_cand
+               end if
                if (have_trial) then
                   if (phi_cand >= phi_trial) cycle
                end if
                r_retracted = r_cand
                lambda_trial = lambda_cand
                phi_trial = phi_cand
+               chosen_sign = merge(1, -1, isign == 1)
                have_trial = .true.
             end do
             if (.not. have_trial) then
-               alpha = alpha*cfg%escape_alpha_reduce
+               alpha = alpha*escape_alpha_reduce
                cycle
             end if
 
@@ -562,11 +835,22 @@ contains
                ls_success = phi_trial < phi_curr - drop_min
             else
                ! Sufficient decrease; a bare decrease accepts the overshoot of a long Newton step
-               ls_success = phi_trial <= phi_curr + cfg%escape_armijo_c*alpha*directional_deriv
+               ls_success = phi_trial <= phi_curr + escape_armijo_c*alpha*directional_deriv
             end if
             if (ls_success) exit
-            alpha = alpha*cfg%escape_alpha_reduce
+            alpha = alpha*escape_alpha_reduce
          end do
+
+         if (iter == 0 .and. escaping .and. ls_success) then
+            if (present(escape_dir)) then
+               dlen = norm2(delta_r)
+               if (dlen > 0.0_wp) escape_dir = (real(chosen_sign, wp)/dlen)*delta_r
+            end if
+            if (present(is_near_sym)) then
+               is_near_sym = have_pos .and. have_neg .and. &
+                             abs(phi_pos - phi_neg) <= saddle_sym_rel*max(1.0_wp, phi_init)
+            end if
+         end if
 
          if (.not. ls_success) exit
 
@@ -690,26 +974,6 @@ contains
       D3 = -lambda*packed_full_contract3(third3, d, 3)
    end subroutine lagrangian_third_derivative
 
-   !> Reduced-Hessian eigenvalue threshold of the saddle classification
-   !>
-   !>     max(tol_eig_base, rel_tol ||H_L||_F)
-   !>
-   !> - shared by [[check_constrained_optimality]] and [[riemannian_newton_escape]]
-   !> - Frobenius norm of the packed Hessian, off-diagonal slots twice
-   !>
-   !> @param[in] rel_tol      Threshold relative to `||H_L||_F`
-   !> @param[in] H_lagrangian Lagrangian Hessian, packed (6)
-   pure function saddle_eig_threshold(rel_tol, H_lagrangian) result(eig_tol)
-      real(wp), intent(in) :: rel_tol
-      real(wp), intent(in) :: H_lagrangian(6)
-      real(wp) :: eig_tol
-
-      real(wp) :: HL_norm
-
-      HL_norm = sqrt(sum(H_lagrangian(diag_slots)**2) + 2.0_wp*sum(H_lagrangian(offdiag_slots)**2))
-      eig_tol = max(tol_eig_base, rel_tol*HL_norm)
-   end function saddle_eig_threshold
-
    !* ================================================================================= *!
    !*                            Single-point level set jets                            *!
    !* ================================================================================= *!
@@ -779,5 +1043,207 @@ contains
          call move_alloc(eval_error, error)
       end if
    end subroutine hand_over
+
+   !* ================================================================================= *!
+   !*                                   Saddle cache                                    *!
+   !* ================================================================================= *!
+
+   !> Clear all stored saddles for `1..nkey` while keeping allocated buffers
+   !>
+   !> @param[inout] self Saddle cache
+   !> @param[in]    nkey Number of active anchor keys
+   subroutine saddle_cache_reset(self, nkey)
+      class(saddle_cache_type), intent(inout) :: self
+      integer, intent(in) :: nkey
+
+      integer :: cap
+
+      if (nkey > 0) then
+         if (.not. allocated(self%head)) then
+            allocate (self%head(max(64, nkey)))
+         else if (size(self%head) < nkey) then
+            cap = max(nkey, 2*size(self%head))
+            deallocate (self%head)
+            allocate (self%head(cap))
+         end if
+         self%head(1:nkey) = 0
+      end if
+      self%nkey = max(0, nkey)
+      self%n = 0
+   end subroutine saddle_cache_reset
+
+   !> Find a live saddle of anchor `key` within `sqrt(saddle_dedup_tol2)` of `x`
+   !>
+   !> @param[in] self Saddle cache
+   !> @param[in] key  Anchor key
+   !> @param[in] x    Saddle coordinates (3)
+   !> @return    idx  Matching saddle index, 0 when none
+   pure function saddle_cache_find(self, key, x) result(idx)
+      type(saddle_cache_type), intent(in) :: self
+      integer, intent(in) :: key
+      real(wp), intent(in) :: x(3)
+      integer :: idx
+
+      integer :: m
+      real(wp) :: d(3)
+
+      idx = 0
+      if (key < 1 .or. key > self%nkey) return
+      m = self%head(key)
+      do while (m > 0)
+         d = self%x(:, m) - x
+         if (dot_product(d, d) <= saddle_dedup_tol2) then
+            idx = m
+            return
+         end if
+         m = self%next(m)
+      end do
+   end function saddle_cache_find
+
+   !> What a visit of saddle `m` does
+   !>
+   !> - asymmetric saddle: captured once its first direction is confirmed, else waits
+   !> - near-symmetric saddle: walks the opposite sign while no walk took it;
+   !>   captured once both directions are confirmed, else waits
+   !>
+   !> @param[in] self Saddle cache
+   !> @param[in] m    Live saddle index
+   !> @return    action `visit_capture`, `visit_wait` or `visit_opposite`
+   pure function saddle_cache_visit(self, m) result(action)
+      type(saddle_cache_type), intent(in) :: self
+      integer, intent(in) :: m
+      integer :: action
+
+      if (self%near_sym(m) .and. self%lead(2, m) == lead_free) then
+         action = visit_opposite
+      else if (self%lead(1, m) == lead_confirmed .and. &
+               (self%lead(2, m) == lead_confirmed .or. .not. self%near_sym(m))) then
+         action = visit_capture
+      else
+         action = visit_wait
+      end if
+   end function saddle_cache_visit
+
+   !> Append a newly escaped saddle to anchor `key`'s list, its first direction led by `leader`
+   !>
+   !> @param[inout] self     Saddle cache
+   !> @param[in]    key      Anchor key
+   !> @param[in]    x        Saddle coordinates (3)
+   !> @param[in]    dir      Unit 3D escape direction of the first walk (3)
+   !> @param[in]    near_sym Whether the two initial escape signs had near-equal objectives
+   !> @param[in]    leader   Column of the first walk
+   !> @param[out]   idx      Index of the new saddle
+   subroutine saddle_cache_add(self, key, x, dir, near_sym, leader, idx)
+      type(saddle_cache_type), intent(inout) :: self
+      integer, intent(in) :: key
+      real(wp), intent(in) :: x(3), dir(3)
+      logical, intent(in) :: near_sym
+      integer, intent(in) :: leader
+      integer, intent(out) :: idx
+
+      integer, allocatable :: th(:), tn(:), tk(:), tl(:, :)
+      real(wp), allocatable :: tx(:, :), td(:, :)
+      logical, allocatable :: ts(:)
+      integer :: cap
+
+      idx = 0
+      if (key < 1) return
+      if (key > self%nkey) then
+         if (.not. allocated(self%head)) then
+            allocate (self%head(max(64, key)), source=0)
+         else if (key > size(self%head)) then
+            cap = max(key, 2*size(self%head))
+            allocate (th(cap), source=0)
+            if (self%nkey > 0) th(1:self%nkey) = self%head(1:self%nkey)
+            call move_alloc(th, self%head)
+         else
+            self%head(self%nkey + 1:key) = 0
+         end if
+         self%nkey = key
+      end if
+
+      if (.not. allocated(self%next)) then
+         cap = 64
+         allocate (self%next(cap), self%key(cap), self%lead(2, cap), self%near_sym(cap))
+         allocate (self%x(3, cap), self%dir(3, cap))
+      else if (self%n + 1 > size(self%next)) then
+         cap = 2*size(self%next)
+         allocate (tn(cap), tk(cap), tl(2, cap), ts(cap), tx(3, cap), td(3, cap))
+         tn(1:self%n) = self%next(1:self%n)
+         tk(1:self%n) = self%key(1:self%n)
+         tl(:, 1:self%n) = self%lead(:, 1:self%n)
+         ts(1:self%n) = self%near_sym(1:self%n)
+         tx(:, 1:self%n) = self%x(:, 1:self%n)
+         td(:, 1:self%n) = self%dir(:, 1:self%n)
+         call move_alloc(tn, self%next)
+         call move_alloc(tk, self%key)
+         call move_alloc(tl, self%lead)
+         call move_alloc(ts, self%near_sym)
+         call move_alloc(tx, self%x)
+         call move_alloc(td, self%dir)
+      end if
+
+      self%n = self%n + 1
+      idx = self%n
+      self%next(idx) = self%head(key)
+      self%key(idx) = key
+      self%x(:, idx) = x
+      self%dir(:, idx) = dir
+      self%near_sym(idx) = near_sym
+      self%lead(:, idx) = [leader, lead_free]
+      self%head(key) = idx
+   end subroutine saddle_cache_add
+
+   !> Settle the walk leading direction `sign` of saddle `m`
+   !>
+   !> - confirmed: the direction is `lead_confirmed`
+   !> - failed: the saddle leaves its key's list, so a later visit walks as a new
+   !>   first visit; a saddle dropped before stays dropped
+   !>
+   !> @param[inout] self      Saddle cache
+   !> @param[in]    m         Saddle index
+   !> @param[in]    sign      Direction, 1 first or 2 opposite
+   !> @param[in]    confirmed Whether the walk ended accepted or captured by an accepted point
+   subroutine saddle_cache_settle(self, m, sign, confirmed)
+      type(saddle_cache_type), intent(inout) :: self
+      integer, intent(in) :: m
+      integer, intent(in) :: sign
+      logical, intent(in) :: confirmed
+
+      integer :: p
+
+      if (self%lead(1, m) == lead_dropped) return
+      if (confirmed) then
+         self%lead(sign, m) = lead_confirmed
+         return
+      end if
+      if (self%head(self%key(m)) == m) then
+         self%head(self%key(m)) = self%next(m)
+      else
+         p = self%head(self%key(m))
+         do while (self%next(p) /= m)
+            p = self%next(p)
+         end do
+         self%next(p) = self%next(m)
+      end if
+      self%lead(:, m) = lead_dropped
+   end subroutine saddle_cache_settle
+
+   !> Release saddle cache storage
+   !>
+   !> @param[inout] self Saddle cache
+   subroutine saddle_cache_destroy(self)
+      class(saddle_cache_type), intent(inout) :: self
+
+      if (allocated(self%head)) deallocate (self%head)
+      if (allocated(self%next)) deallocate (self%next)
+      if (allocated(self%key)) deallocate (self%key)
+      if (allocated(self%x)) deallocate (self%x)
+      if (allocated(self%dir)) deallocate (self%dir)
+      if (allocated(self%near_sym)) deallocate (self%near_sym)
+      if (allocated(self%lead)) deallocate (self%lead)
+      self%nkey = 0
+      self%n = 0
+   end subroutine saddle_cache_destroy
 
 end module moist_cavity_drop_projection_polish

@@ -9,20 +9,16 @@ module moist_cavity_drop_projection_batch
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
+   use moist_utils_mem, only: grow_array
    implicit none(type, external)
    private
 
    public :: projection_batch_type
-   public :: point_pending, point_converged, point_accepted, point_captured
-   public :: point_failed_iterations, point_failed_singular, point_failed_gradient
-   public :: point_failed_not_kkt, point_failed_saddle, point_failed_unreached
-   public :: point_status_label, default_batch_size
+   public :: point_pending, point_converged, point_accepted, point_captured, point_failed
 
    !* ================================================================================= *!
    !*                                Column status codes                                *!
    !* ================================================================================= *!
-
-   ! TODO: maybe there is a more elegant way to handle this
 
    !> Not yet solved, or reopened for another Newton pass
    integer, parameter :: point_pending = 0
@@ -30,25 +26,22 @@ module moist_cavity_drop_projection_batch
    integer, parameter :: point_converged = 1
    !> Converged and verified as a constrained local minimum
    integer, parameter :: point_accepted = 2
-   !> Duplicate: Newton prediction on an earlier accepted column of its run
+   !> Duplicate of a point its run holds: a Newton prediction or an escape walk on
+   !> a captor, or a repeated saddle visit whose escape is confirmed
    integer, parameter :: point_captured = 3
-   !> Newton ran out of iterations
-   integer, parameter :: point_failed_iterations = -1
-   !> Singular KKT system
-   integer, parameter :: point_failed_singular = -2
-   !> Vanishing level set gradient
-   integer, parameter :: point_failed_gradient = -4
-   !> Converged point violates the KKT conditions
-   integer, parameter :: point_failed_not_kkt = -5
-   !> Saddle the Riemannian escape could not leave
-   integer, parameter :: point_failed_saddle = -6
-   !> Iterate beyond the level set's screening reach
-   integer, parameter :: point_failed_unreached = -7
-   !> Length of a `point_status_label` result
-   integer, parameter :: point_status_label_len = 40
+   !> Failed to produce a usable minimum
+   integer, parameter :: point_failed = -1
 
    !> Default flush target (columns per batch)
    integer, parameter :: default_batch_size = 8
+
+   !> One column's values, the copy between columns
+   type :: column_type
+      !> Iterate, multiplier, jet (Hessian packed), objective, anchor distance, normal
+      real(wp) :: x(3), lambda, S, gradS(3), hessS(6), phi, pdist, normal(3)
+      !> Column status
+      integer :: status
+   end type column_type
 
    !> Batch of projection points, structure of arrays
    !>
@@ -131,41 +124,6 @@ module moist_cavity_drop_projection_batch
    end type projection_batch_type
 
 contains
-
-   !> Human-readable label of a column status
-   !>
-   !> @param[in] status Column status code
-   pure function point_status_label(status) result(label)
-      !> Column status code
-      integer, intent(in) :: status
-      !> Label, blank-padded
-      character(len=point_status_label_len) :: label
-
-      select case (status)
-      case (point_pending)
-         label = "pending"
-      case (point_converged)
-         label = "converged"
-      case (point_accepted)
-         label = "accepted"
-      case (point_captured)
-         label = "duplicate of an accepted point"
-      case (point_failed_iterations)
-         label = "Newton iteration budget exhausted"
-      case (point_failed_singular)
-         label = "singular KKT system"
-      case (point_failed_gradient)
-         label = "vanishing level set gradient"
-      case (point_failed_not_kkt)
-         label = "not a KKT point"
-      case (point_failed_saddle)
-         label = "unescapable saddle"
-      case (point_failed_unreached)
-         label = "beyond the level set reach"
-      case default
-         label = "unknown"
-      end select
-   end function point_status_label
 
    !* ================================================================================= *!
    !*                                  Batch lifecycle                                  *!
@@ -329,15 +287,7 @@ contains
       integer, intent(in) :: j
       integer, intent(out) :: icol
 
-      ! TODO: column field list duplicated in batch_append_own; share one column value type or copy helper
-      call self%append(src%x(:, j), src%lambda(j), icol)
-      self%S(icol) = src%S(j)
-      self%gradS(:, icol) = src%gradS(:, j)
-      self%hessS(:, icol) = src%hessS(:, j)
-      self%phi(icol) = src%phi(j)
-      self%pdist(icol) = src%pdist(j)
-      self%normal(:, icol) = src%normal(:, j)
-      self%status(icol) = src%status(j)
+      call append_column(self, column_of(src, j), icol)
    end subroutine batch_append_copy
 
    !> Append a copy of a solved column of this batch to the open run
@@ -352,22 +302,48 @@ contains
       integer, intent(in) :: j
       integer, intent(out) :: icol
 
-      real(wp) :: x(3), lambda
-
-      ! TODO: column field list duplicated in batch_append_copy; share one column value type or copy helper
-      ! TODO: name says nothing about what is appended; rename (e.g. append_column, append_column_from)
-      ! By value: the append may reallocate the columns
-      x = self%x(:, j)
-      lambda = self%lambda(j)
-      call self%append(x, lambda, icol)
-      self%S(icol) = self%S(j)
-      self%gradS(:, icol) = self%gradS(:, j)
-      self%hessS(:, icol) = self%hessS(:, j)
-      self%phi(icol) = self%phi(j)
-      self%pdist(icol) = self%pdist(j)
-      self%normal(:, icol) = self%normal(:, j)
-      self%status(icol) = self%status(j)
+      call append_column(self, column_of(self, j), icol)
    end subroutine batch_append_own
+
+   !> Values of column `j`, by value: an append may reallocate the columns
+   !>
+   !> @param[in] batch Batch
+   !> @param[in] j     Column
+   pure function column_of(batch, j) result(col)
+      class(projection_batch_type), intent(in) :: batch
+      integer, intent(in) :: j
+      type(column_type) :: col
+
+      col%x = batch%x(:, j)
+      col%lambda = batch%lambda(j)
+      col%S = batch%S(j)
+      col%gradS = batch%gradS(:, j)
+      col%hessS = batch%hessS(:, j)
+      col%phi = batch%phi(j)
+      col%pdist = batch%pdist(j)
+      col%normal = batch%normal(:, j)
+      col%status = batch%status(j)
+   end function column_of
+
+   !> Append a column with the given values to the open run
+   !>
+   !> @param[inout] self Batch with an open run
+   !> @param[in]    col  Column values
+   !> @param[out]   icol Column index of the new column
+   subroutine append_column(self, col, icol)
+      class(projection_batch_type), intent(inout) :: self
+      type(column_type), intent(in) :: col
+      integer, intent(out) :: icol
+
+      call self%append(col%x, col%lambda, icol)
+      self%S(icol) = col%S
+      self%gradS(:, icol) = col%gradS
+      self%hessS(:, icol) = col%hessS
+      self%phi(icol) = col%phi
+      self%pdist(icol) = col%pdist
+      self%normal(:, icol) = col%normal
+      self%status(icol) = col%status
+   end subroutine append_column
 
    !> Record the level set jet at a run's anchor
    !>
@@ -435,16 +411,16 @@ contains
 
       if (required <= self%capacity) return
       cap = grown_capacity(self%capacity, required)
-      call grow_real_2d(self%x, 3, cap, self%n)
-      call grow_real_1d(self%lambda, cap, self%n)
-      call grow_real_1d(self%S, cap, self%n)
-      call grow_real_2d(self%gradS, 3, cap, self%n)
-      call grow_real_2d(self%hessS, 6, cap, self%n)
-      call grow_real_1d(self%phi, cap, self%n)
-      call grow_real_1d(self%pdist, cap, self%n)
-      call grow_real_2d(self%normal, 3, cap, self%n)
-      call grow_int_1d(self%status, cap, self%n)
-      call grow_int_1d(self%run_of, cap, self%n)
+      call grow_array(self%x, 3, cap)
+      call grow_array(self%lambda, cap)
+      call grow_array(self%S, cap)
+      call grow_array(self%gradS, 3, cap)
+      call grow_array(self%hessS, 6, cap)
+      call grow_array(self%phi, cap)
+      call grow_array(self%pdist, cap)
+      call grow_array(self%normal, 3, cap)
+      call grow_array(self%status, cap)
+      call grow_array(self%run_of, cap)
       self%capacity = cap
    end subroutine batch_reserve
 
@@ -460,84 +436,15 @@ contains
 
       if (required <= self%run_capacity) return
       cap = grown_capacity(self%run_capacity, required)
-      call grow_int_1d(self%run_start, cap, self%nrun)
-      call grow_int_1d(self%run_len, cap, self%nrun)
-      call grow_int_1d(self%run_anchor, cap, self%nrun)
-      call grow_int_1d(self%run_owner, cap, self%nrun)
-      call grow_real_2d(self%run_xyz, 3, cap, self%nrun)
-      call grow_real_1d(self%run_S, cap, self%nrun)
-      call grow_real_2d(self%run_gradS, 3, cap, self%nrun)
-      call grow_logical_1d(self%run_jet, cap, self%nrun)
+      call grow_array(self%run_start, cap)
+      call grow_array(self%run_len, cap)
+      call grow_array(self%run_anchor, cap)
+      call grow_array(self%run_owner, cap)
+      call grow_array(self%run_xyz, 3, cap)
+      call grow_array(self%run_S, cap)
+      call grow_array(self%run_gradS, 3, cap)
+      call grow_array(self%run_jet, cap)
       self%run_capacity = cap
    end subroutine batch_reserve_runs
-
-   !> Reallocate a real vector to `cap`, keeping its first `keep` entries
-   !>
-   !> @param[inout] a    Vector to grow
-   !> @param[in]    cap  New length
-   !> @param[in]    keep Leading entries to keep
-   subroutine grow_real_1d(a, cap, keep)
-      !> Vector to grow
-      real(wp), allocatable, intent(inout) :: a(:)
-      !> New length and leading entries to keep
-      integer, intent(in) :: cap, keep
-      real(wp), allocatable :: tmp(:)
-
-      allocate (tmp(cap))
-      if (allocated(a) .and. keep > 0) tmp(1:keep) = a(1:keep)
-      call move_alloc(tmp, a)
-   end subroutine grow_real_1d
-
-   !> Reallocate a real matrix to `(lead, cap)`, keeping its first `keep` columns
-   !>
-   !> @param[inout] a    Matrix to grow
-   !> @param[in]    lead Leading dimension
-   !> @param[in]    cap  New column count
-   !> @param[in]    keep Leading columns to keep
-   subroutine grow_real_2d(a, lead, cap, keep)
-      !> Matrix to grow
-      real(wp), allocatable, intent(inout) :: a(:, :)
-      !> Leading dimension, new column count and leading columns to keep
-      integer, intent(in) :: lead, cap, keep
-      real(wp), allocatable :: tmp(:, :)
-
-      allocate (tmp(lead, cap))
-      if (allocated(a) .and. keep > 0) tmp(:, 1:keep) = a(:, 1:keep)
-      call move_alloc(tmp, a)
-   end subroutine grow_real_2d
-
-   !> Reallocate an integer vector to `cap`, keeping its first `keep` entries
-   !>
-   !> @param[inout] a    Vector to grow
-   !> @param[in]    cap  New length
-   !> @param[in]    keep Leading entries to keep
-   subroutine grow_int_1d(a, cap, keep)
-      !> Vector to grow
-      integer, allocatable, intent(inout) :: a(:)
-      !> New length and leading entries to keep
-      integer, intent(in) :: cap, keep
-      integer, allocatable :: tmp(:)
-
-      allocate (tmp(cap))
-      if (allocated(a) .and. keep > 0) tmp(1:keep) = a(1:keep)
-      call move_alloc(tmp, a)
-   end subroutine grow_int_1d
-
-   !> Reallocate a logical vector to `cap`, keeping its first `keep` entries
-   !>
-   !> @param[inout] a    Vector to grow
-   !> @param[in]    cap  New length
-   !> @param[in]    keep Leading entries to keep
-   subroutine grow_logical_1d(a, cap, keep)
-      !> Vector to grow
-      logical, allocatable, intent(inout) :: a(:)
-      !> New length and leading entries to keep
-      integer, intent(in) :: cap, keep
-      logical, allocatable :: tmp(:)
-
-      allocate (tmp(cap))
-      if (allocated(a) .and. keep > 0) tmp(1:keep) = a(1:keep)
-      call move_alloc(tmp, a)
-   end subroutine grow_logical_1d
 
 end module moist_cavity_drop_projection_batch

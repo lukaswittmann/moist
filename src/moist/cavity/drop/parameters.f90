@@ -81,7 +81,7 @@ module moist_cavity_drop_parameters
       !> 3 = every anchor, filtered mesh seeds
       !> 4 = every anchor, fine mesh seeds
       !> Any other value is refused
-      !> A failed local solve is retried from the level's seeder, a coarse octree at level 1
+      !> A failed local solve is retried from the level's seeder, a coarse surface mesh at level 1
       !> Seeder, spacing and refinement of each level: `seed%init_level`
       integer :: proj_level = 2
 
@@ -603,7 +603,7 @@ contains
 
       select case (self%proj_level)
       case (1)
-         label = "Local Newton, octree retry"
+         label = "Local Newton, coarse mesh retry"
       case (2)
          label = "Selective coarse mesh seeds"
       case (3)

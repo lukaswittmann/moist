@@ -1,51 +1,42 @@
-!> DROP projection driver: chunked loop over per-thread workers
+!> DROP projection driver: two chunked passes over per-thread workers
 !>
-!> One OpenMP loop, `schedule(dynamic)` over chunks of `projection.batch_size`
-!> anchors; each thread's [[projection_worker_type]] runs local Newton,
-!> gate of the local point, seeder, batched Newton and finalize on its chunk and appends rows
-!> to its own buffer. Afterwards the per-anchor row counts are prefix-summed
-!> into `offset` and the buffers are scattered into the CSR row arrays
+!> Chunks of `projection.batch_size` anchors, one OpenMP loop per pass,
+!> `schedule(dynamic)`; every batch holds the same anchors at any thread count:
 !>
-!> - rows below the weight cut are never appended, so no post-filter follows
-!> - an anchor without an accepted point is lost and keeps no row; with seeds
-!>   that all failed it is counted in a warning, without any seed up to the
-!>   reach (no surface there) only in the report
-!> - LSF failures, an exhausted octree budget and a singular tangent block
-!>   abort the build through [[drop_abort_latch_type]], lowest anchor first
-!> - a warning when the reach gate removes more than [[reach_warn_share]] of
-!>   the area of the rows it keeps: their area without the gate is
-!>   `a/f_reach`; surface beyond the closed edge is never searched, so more of
-!>   it is likely lost
+!> 1. local pass: local Newton and next step per anchor
+!>    ([[projection_worker_type]]); the chunk's [[local_pass_type]] kept
+!> 2. seeder `seed%method_used` built once from the geometry and the first
+!>    search ball of every seeded anchor ([[search_geometry]])
+!> 3. search pass, heaviest chunks first ([[search_order]]): each worker's
+!>    scratch from the built seeder; seed, solve, finalize into its row buffer
+!>
+!> Then row counts prefix-summed into `offset`, buffers scattered into the CSR
+!> row arrays
+!>
+!> - rows below the weight cut never appended, no post-filter
+!> - anchor without an accepted point lost, no row; warned when it had seeds,
+!>   only reported without any seed up to the reach (no surface there)
+!> - LSF failure, exhausted octree budget, singular tangent block: abort through
+!>   [[drop_abort_latch_type]] with the first failing chunk's error in pass
+!>   order (anchor order, heaviest first in the search pass) at any thread
+!>   count; chunks behind it skipped, those ahead still run
+!> - warning when the reach gate removes more than [[reach_warn_share]] of the
+!>   kept rows' area (`a/f_reach` without the gate); surface beyond the closed
+!>   edge is never searched, so more is likely lost
 submodule(moist_cavity_drop) moist_cavity_drop_projection
-   !$ use omp_lib, only: omp_get_thread_num, omp_get_wtime
-   use, intrinsic :: iso_fortran_env, only: int64
+   !$ use omp_lib, only: omp_get_thread_num
    use moist_cavity_drop_threads, only: drop_abort_latch_type
-   use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
-   use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
-   use moist_cavity_drop_projection_worker, only: projection_worker_type
+   use moist_utils_prettyprint, only: prettyprinter
+   use moist_cavity_drop_projection_worker, only: projection_worker_type, local_pass_type, search_geometry, &
+                                                  search_order
+   use moist_cavity_drop_projection_seed, only: projection_seeder_type, seed_build_type
+   use moist_cavity_drop_projection_seed_factory, only: new_projection_seeder
    implicit none(type, external)
 
    !> Area share removed by the reach gate above which the build warns
    real(wp), parameter :: reach_warn_share = 1.0e-3_wp
 
 contains
-
-   !> Wall-clock seconds for the projector's progress report
-   !>
-   !> `omp_get_wtime` when the build has OpenMP, `system_clock` otherwise, so a
-   !> serial build neither references the OpenMP runtime nor loses its timings
-   function drop_wall_time() result(seconds)
-      !> Elapsed wall time in seconds, measured from an unspecified origin
-      real(wp) :: seconds
-
-      !> Clock reading and tick rate of the serial fallback
-      integer(int64) :: ticks, rate
-
-      call system_clock(ticks, rate)
-      seconds = 0.0_wp
-      if (rate > 0_int64) seconds = real(ticks, wp)/real(rate, wp)
-      !$ seconds = omp_get_wtime()
-   end function drop_wall_time
 
    !* ================================================================================= *!
    !*                                     Projection                                    *!
@@ -60,22 +51,25 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(prettyprinter) :: pp
-      type(prettylistprinter) :: plp
       type(drop_abort_latch_type) :: abort
       type(projection_worker_type), allocatable :: workers(:)
+      !> Local pass of every chunk, kept for its search pass
+      type(local_pass_type), allocatable :: local(:)
+      !> Seeder of the level, built between the passes and read by every worker
+      class(projection_seeder_type), allocatable :: seeder
+      type(seed_build_type) :: geometry
       type(error_type), allocatable :: local_error
-      integer, allocatable :: nrows_of(:)
+      integer, allocatable :: nrows_of(:), chunk_order(:)
       logical, allocatable :: lost(:), unseeded(:)
-      integer :: nmax_anchor, nthreads, thread_slot, chunk, nchunk, ichunk, i, i0, i1
+      integer :: nmax_anchor, nthreads, thread_slot, chunk, nchunk, idx, ichunk, i, i0, i1, ipass
       integer :: ithread, irow, ia, dest, k, nout, number_base, n_lost, n_unseeded, n_seeded, n_escalated, n_captured
-      integer :: n_extended, n_full, n_restarted
+      integer :: n_extended, n_full, n_seeds, n_skipped, n_window_skipped
       real(wp) :: pdist_search_max
       !> Total area, the area the reach gate removes from the rows, one row's
       !> area and reach gate
       real(wp) :: area_tot, area_cut, area_row, f_reach
-      integer :: chunks_done, next_progress_pct, est_done
-      real(wp) :: wall_start, wall_end, now_time, progress_last_time, progress_elapsed, progress_eta
-      logical :: trigger_time, trigger_pct
+      logical :: has_seeded
+      character(len=*), parameter :: pass_name(2) = [character(len=16) :: "Local projection", "Branch search"]
       character(len=160) :: report
 
       nmax_anchor = self%anchor%ngrid
@@ -84,90 +78,100 @@ contains
       nchunk = (nmax_anchor + chunk - 1)/chunk
 
       allocate (workers(nthreads))
+      allocate (local(nchunk))
+      allocate (chunk_order(nchunk))
+      do ichunk = 1, nchunk
+         chunk_order(ichunk) = ichunk
+      end do
       allocate (nrows_of(nmax_anchor), source=0)
       allocate (lost(nmax_anchor), source=.false.)
       allocate (unseeded(nmax_anchor), source=.false.)
       call abort%reset()
 
-      if (self%ctx%verbosity(4)) then
-         plp = new_prettylistprinter([12, 8, 12, 12], &
-                                     [character(len=8) :: "Point", "% done", "Elapsed (s)", "Left (s)"], &
-                                     unit=self%ctx%unit)
-         call plp%blank()
-         call plp%header("DROP Projector")
-         call plp%print_header()
-         call plp%separator()
-      end if
+      call new_projection_seeder(seeder, self%param%seed, error, debug=self%ctx%debug, unit=self%ctx%unit)
+      if (allocated(error)) return
 
-      wall_start = drop_wall_time()
+      pp = self%ctx%printer(level=4)
+      call pp%blank()
+      call pp%push("Projection:")
 
-      !$omp parallel num_threads(nthreads) default(shared) private(thread_slot, ichunk, i, i0, i1, &
-      !$omp& local_error, chunks_done, next_progress_pct, est_done, now_time, progress_last_time, &
-      !$omp& progress_elapsed, progress_eta, trigger_time, trigger_pct)
-      thread_slot = 1
-      !$ thread_slot = omp_get_thread_num() + 1
-
-      ! First-touch init inside the region so the worker scratch is core-local
-      call workers(thread_slot)%init(self%param, self%lsf_model, self%mol%xyz, local_error, &
-                                     debug=self%ctx%debug, unit=self%ctx%unit)
-      if (allocated(local_error)) call abort%latch_error(local_error, 0)
-
-      chunks_done = 0
-      next_progress_pct = 10
-      progress_last_time = wall_start
-
-      ! Publish a setup failure on any thread before the first chunk starts
-      !$omp barrier
-
-      !$omp do schedule(dynamic)
-      do ichunk = 1, nchunk
-         if (abort%requested) cycle
-         i0 = (ichunk - 1)*chunk + 1
-         i1 = min(nmax_anchor, ichunk*chunk)
-         call workers(thread_slot)%process_chunk(self%ctx, [(i, i=i0, i1)], self%anchor%xyz(:, i0:i1), &
-                                                 self%anchor%owner(i0:i1), self%anchor%wleb0(i0:i1), &
-                                                 self%anchor%f0(i0:i1), nrows_of(i0:i1), lost(i0:i1), &
-                                                 local_error, unseeded=unseeded(i0:i1))
-         if (allocated(local_error)) then
-            call abort%latch_error(local_error, i0)
-            cycle
-         end if
-
-         ! Progress is reported by thread 1, extrapolating its own count
-         chunks_done = chunks_done + 1
-         if (thread_slot == 1 .and. self%ctx%verbosity(4)) then
-            est_done = min(nmax_anchor, chunks_done*chunk*nthreads)
-            now_time = drop_wall_time()
-            trigger_time = (now_time - progress_last_time) >= 5.0_wp
-            trigger_pct = nmax_anchor > 0 .and. (100*est_done >= next_progress_pct*nmax_anchor)
-            if (trigger_time .or. trigger_pct) then
-               progress_elapsed = now_time - wall_start
-               progress_eta = 0.0_wp
-               if (progress_elapsed > 0.0_wp .and. est_done > 0) then
-                  progress_eta = real(max(0, nmax_anchor - est_done), wp)*progress_elapsed/real(est_done, wp)
-               end if
-               !$omp critical (projection_warning_print)
-               call plp%begin_row()
-               call plp%add(est_done)
-               call plp%add(100.0_wp*real(est_done, wp)/real(max(1, nmax_anchor), wp), fmt="f6.2")
-               call plp%add(progress_elapsed, fmt="f8.2")
-               call plp%add(progress_eta, fmt="f8.2")
-               call plp%end_row()
-               !$omp end critical (projection_warning_print)
-               progress_last_time = now_time
-               do while (next_progress_pct <= 100 .and. 100*est_done >= next_progress_pct*nmax_anchor)
-                  next_progress_pct = next_progress_pct + 10
-               end do
+      has_seeded = .false.
+      do ipass = 1, 2
+         if (ipass == 2) then
+            call search_geometry(local, self%mol%xyz, self%radii, self%param%branch%reach_off, nthreads, geometry)
+            has_seeded = size(geometry%radius) > 0
+            if (has_seeded) then
+               call search_order(local, chunk_order)
+               call self%ctx%timer%start("Seed mesh")
+               call seeder%build(self%lsf_model, geometry, error)
+               call self%ctx%timer%stop("Seed mesh")
+               if (allocated(error)) return
+               call pp%step("Seed mesh", self%ctx%timer%last())
             end if
          end if
+
+         call self%ctx%timer%start(trim(pass_name(ipass)))
+
+         !$omp parallel num_threads(nthreads) default(shared) private(thread_slot, idx, ichunk, i, i0, i1, &
+         !$omp& local_error)
+         thread_slot = 1
+         !$ thread_slot = omp_get_thread_num() + 1
+
+         ! First-touch init inside the region so the worker scratch is core-local
+         if (.not. allocated(workers(thread_slot)%lsf)) then
+            call workers(thread_slot)%init(self%param, self%lsf_model, self%mol%xyz, local_error, &
+                                           debug=self%ctx%debug, unit=self%ctx%unit)
+            if (allocated(local_error)) call abort%latch_error(local_error, 0)
+         end if
+         ! Setup scratch
+         if (ipass == 2 .and. has_seeded .and. .not. abort%is_set()) then
+            call seeder%new_scratch(workers(thread_slot)%scratch)
+         end if
+
+         ! Shared setup failure on any thread before the first chunk starts
+         !$omp barrier
+
+         !$omp do schedule(dynamic, 1)
+         do idx = 1, nchunk
+            ichunk = chunk_order(idx)
+            ! Failures latch by their place in the pass's order
+            if (abort%skips(idx)) cycle
+            i0 = (ichunk - 1)*chunk + 1
+            i1 = min(nmax_anchor, ichunk*chunk)
+            if (ipass == 1) then
+               call workers(thread_slot)%solve_local(self%ctx, [(i, i=i0, i1)], self%anchor%xyz(:, i0:i1), &
+                                                     self%anchor%owner(i0:i1), self%anchor%wleb0(i0:i1), &
+                                                     self%anchor%f0(i0:i1), local(ichunk), local_error)
+            else
+               call workers(thread_slot)%search(self%ctx, local(ichunk), seeder, [(i, i=i0, i1)], &
+                                                self%anchor%xyz(:, i0:i1), self%anchor%owner(i0:i1), &
+                                                self%anchor%wleb0(i0:i1), self%anchor%f0(i0:i1), &
+                                                nrows_of(i0:i1), lost(i0:i1), local_error, &
+                                                unseeded=unseeded(i0:i1))
+            end if
+            if (allocated(local_error)) then
+               call abort%latch_error(local_error, idx)
+               cycle
+            end if
+
+         end do
+         !$omp end do
+         !$omp end parallel
+
+         call self%ctx%timer%stop(trim(pass_name(ipass)))
+         if (.not. abort%is_set()) call pp%step(trim(pass_name(ipass)), self%ctx%timer%last())
+
+         if (abort%is_set()) exit
       end do
-      !$omp end do
-      if (allocated(workers(thread_slot)%lsf)) deallocate (workers(thread_slot)%lsf)
-      !$omp end parallel
+      call pp%pop()
 
-      wall_end = drop_wall_time()
+      ! Worker clones may borrow read-only data of the level set model: release
+      ! them before the model can change
+      do ithread = 1, size(workers)
+         if (allocated(workers(ithread)%lsf)) deallocate (workers(ithread)%lsf)
+      end do
 
-      if (abort%requested) then
+      if (abort%is_set()) then
          if (allocated(abort%error)) then
             call move_alloc(abort%error, error)
          else
@@ -176,15 +180,7 @@ contains
          return
       end if
 
-      if (self%ctx%verbosity(4)) then
-         call plp%separator()
-         call plp%begin_row()
-         call plp%add(nmax_anchor)
-         call plp%add("")
-         call plp%add(wall_end - wall_start, fmt="f8.2")
-         call plp%add(0.0_wp, fmt="f8.2")
-         call plp%end_row()
-      end if
+      if (self%ctx%do_profile) call self%ctx%timer%start("Scatter")
 
       !> Row layout: prefix sum of the per-anchor row counts
       if (allocated(self%offset)) deallocate (self%offset)
@@ -242,16 +238,20 @@ contains
       n_escalated = 0
       n_captured = 0
       n_extended = 0
-      n_restarted = 0
+      n_seeds = 0
+      n_skipped = 0
       n_full = 0
+      n_window_skipped = 0
       pdist_search_max = 0.0_wp
       do ithread = 1, nthreads
          n_seeded = n_seeded + workers(ithread)%n_seeded
          n_escalated = n_escalated + workers(ithread)%n_escalated
          n_captured = n_captured + workers(ithread)%n_captured
          n_extended = n_extended + workers(ithread)%n_extended
-         n_restarted = n_restarted + workers(ithread)%n_restarted
+         n_seeds = n_seeds + workers(ithread)%n_seeds
+         n_skipped = n_skipped + workers(ithread)%n_skipped
          n_full = n_full + workers(ithread)%n_full
+         n_window_skipped = n_window_skipped + workers(ithread)%n_window_skipped
          pdist_search_max = max(pdist_search_max, workers(ithread)%pdist_search_max)
       end do
 
@@ -301,7 +301,6 @@ contains
       end if
 
       if (self%ctx%verbosity(4)) then
-         pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%push("Projection results:")
          call pp%kv("Total points", nout)
@@ -309,16 +308,21 @@ contains
          call pp%kv("Anchors escalated", n_escalated)
          call pp%kv("Extended searches", n_extended)
          call pp%kv("Searched to the reach", n_full)
+         if (self%param%proj_level == 2) call pp%kv("Close windows not seeded", n_window_skipped)
          call pp%kv("Largest search radius", pdist_search_max, "Bohr")
          if (area_tot > 0.0_wp) call pp%kv("Area removed by the reach gate", 100.0_wp*area_cut/area_tot, "%")
+         call pp%kv("Seeds solved", n_seeds)
+         call pp%kv("Seeds solved before, skipped", n_skipped)
          call pp%kv("Duplicate seeds stopped", n_captured)
          call pp%kv("Anchors with branches", count(nrows_of > 1))
          call pp%kv("Branched points", sum(nrows_of, mask=nrows_of > 1))
-         call pp%kv("Anchors solved again without cheap steps", n_restarted)
          call pp%kv("Anchors without surface in reach", n_unseeded)
          call pp%kv("Anchors lost", n_lost)
+         if (seeder%n_unresolved > 0) call pp%kv("Seeder cells unresolved", seeder%n_unresolved)
          call pp%pop()
       end if
+
+      if (self%ctx%do_profile) call self%ctx%timer%stop("Scatter")
 
    end subroutine project_all_points
 
