@@ -114,8 +114,6 @@ module moist_cavity_drop_projection_parameters
       real(wp) :: saddle_eig_tol = 1.0e-8_wp
       !> Retraction iterations
       integer :: retract_max_iter = 50
-      !> Report a saddle as an error when the caller does not ask for `is_saddle`
-      logical :: strict_minimum_required = .true.
    end type drop_polish_parameters_type
 
    !> Per-anchor finalize settings

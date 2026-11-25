@@ -10,8 +10,7 @@ module test_cavity_drop_projector
    use mctc_io_constants, only: pi
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type, &
-                                           drop_polish_parameters_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type
    use moist_math_packed, only: packed_full_contract2
    use moist_math_linalg, only: cross_product, setup_tangent_frame
    use moist_cavity_drop_projection_batch, only: projection_batch_type, &
@@ -297,7 +296,6 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(fixture_type) :: fx
-      type(drop_polish_parameters_type) :: loose
       type(moist_error_type), allocatable :: failed
       real(wp) :: rs, anchor(3), r(3), lambda
       logical :: saddle, kkt, converged
@@ -328,16 +326,10 @@ contains
       call check(error, kkt .and. saddle .and. .not. converged, "far pole is a saddle-type KKT point")
       if (allocated(error)) return
 
-      !> Without a way to hand the saddle back, strict mode must refuse it
+      !> Without a way to hand the saddle back, the check must refuse it
       call check_constrained_optimality(fx%ctx, fx%param%polish, fx%param%phi_alpha, fx%lsf, &
                                         r, anchor, lambda, failed, is_kkt=kkt)
-      call check(error, allocated(failed), "strict mode refuses a saddle that the caller cannot handle")
-      if (allocated(error)) return
-      loose = fx%param%polish
-      loose%strict_minimum_required = .false.
-      call check_constrained_optimality(fx%ctx, loose, fx%param%phi_alpha, fx%lsf, &
-                                        r, anchor, lambda, failed, is_kkt=kkt)
-      call check(error, .not. allocated(failed), "non-strict mode accepts it")
+      call check(error, allocated(failed), "a saddle the caller cannot handle is refused")
       if (allocated(error)) return
 
       !> Off the surface

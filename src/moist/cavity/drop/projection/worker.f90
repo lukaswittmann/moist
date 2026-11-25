@@ -182,9 +182,6 @@ module moist_cavity_drop_projection_worker
       type(branch_weight_type) :: branch_weight
       !> Seeds per anchor in the first round of the extended search, doubled per round
       integer :: nearest_count = default_nearest_count
-      !> Keep searching after the first accepted point of an anchor without a local
-      !> point; off, the nearest point of that round is the anchor's only row
-      logical :: confirm_nearest = .true.
       !> Extended-search batch of the current round and of the last one, swapped
       !> per round
       type(projection_batch_type), allocatable :: passn, passn_last
@@ -886,7 +883,7 @@ contains
       !>   latest run, which holds every point accepted for it
       subroutine solve_queue()
          type(finalize_anchor_type) :: rec
-         integer :: npend, nkeep, ip, e, k1, rn, s, s_last, jn, j_first, j_last, col0, run0, jbest, nskip
+         integer :: npend, nkeep, ip, e, k1, rn, s, s_last, jn, j_first, j_last, col0, run0, nskip
          integer, allocatable :: pend(:), run_new_first(:)
          real(wp) :: limit, gate_j, prev_ball
          logical :: more
@@ -988,22 +985,7 @@ contains
                   more = norm2(self%near_seeds(:, self%queue(e)%next) - anchors(:, k1)) &
                          <= self%queue(e)%radius + self%queue(e)%reach
                end if
-               ! Without confirmation the nearest point of the first successful round stands alone
-               jbest = 0
-               if (.not. self%confirm_nearest .and. self%queue(e)%jloc == 0 .and. self%queue(e)%tail > 0) then
-                  rn = self%queue(e)%tail
-                  do jn = self%passn%run_start(rn), self%passn%run_start(rn) + self%passn%run_len(rn) - 1
-                     if (self%passn%status(jn) /= point_accepted) cycle
-                     if (jbest == 0) then
-                        jbest = jn
-                     else if (self%passn%pdist(jn) < self%passn%pdist(jbest)) then
-                        jbest = jn
-                     end if
-                  end do
-               end if
-               if (jbest > 0) then
-                  call finish_anchor(self%passn, jbest, jbest, k1)
-               else if (more) then
+               if (more) then
                   nkeep = nkeep + 1
                   pend(nkeep) = e
                else if (self%queue(e)%ball < self%queue(e)%radius) then

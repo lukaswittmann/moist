@@ -600,7 +600,8 @@ contains
 
    !> Refine every surface leaf without stationary-point or root-region pruning
    !>
-   !> Keeps the original exhaustive seeding path inside the tests
+   !> Every surface leaf of the ball ([[surface_leaves]]) seeds Newton; minima
+   !> inside the ball only
    !> Shared local refinement is numerical; this is not a completeness proof
    !> Nonisolated stationary sets are excluded by the strict-curvature check
    !>
@@ -678,6 +679,8 @@ contains
       do i = 1, batch%n
          if (batch%status(i) /= point_accepted) cycle
          if (abs(batch%S(i)) > 1.0e-9_wp) cycle
+         ! Only the searched ball: a leaf touching it may converge beyond
+         if (norm2(batch%x(:, i) - anchor) > radius) cycle
          n = n + 1
          candidates(:, n) = batch%x(:, i)
          multipliers(n) = batch%lambda(i)

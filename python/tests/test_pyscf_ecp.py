@@ -19,7 +19,7 @@ Each test fails without an active fill:
   refuse the build
 - at the default ``branch_dpdist_max`` the branch-search window stays near the
   outer surface, the inner sheet being some 4 bohr from every anchor; widening
-  ``branch_dpdist_max`` at ``proj_level=3`` lets the coarse-octree search reach
+  ``branch_dpdist_max`` at ``proj_level=3`` lets the coarse-mesh search reach
   the unfilled inner cavity
 - the sheet's normals point back at the nucleus, so the default horizon switch
   closes it; the search runs with the horizon switch off and a reach band past
@@ -44,7 +44,7 @@ from moist.pyscf import DROP, Isodensity, PySCFHost
 
 #: Run context shared by every cavity in this module
 CONTEXT = Context()
-#: Coarse-octree projection level used to search for an unfilled inner sheet
+#: Coarse-mesh projection level used to search for an unfilled inner sheet
 GLOBAL_SEARCH = 3
 #: Distance window (bohr) opening the level-3 search far enough to reach the nucleus
 INNER_BRANCH_DPDIST_MAX = 3.6

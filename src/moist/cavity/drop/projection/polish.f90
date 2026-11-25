@@ -57,12 +57,8 @@ module moist_cavity_drop_projection_polish
    !> Relative objective gap below which a saddle's two escape signs are near-symmetric
    real(wp), parameter :: saddle_sym_rel = 1.0e-3_wp
 
-   !> Escape direction of a saddle entry no walk has taken
-   integer, parameter :: lead_free = 0
-   !> Escape direction whose walk is confirmed; a positive state is the leading column
-   integer, parameter :: lead_confirmed = -1
-   !> State of both directions of a dropped entry
-   integer, parameter :: lead_dropped = -2
+   !> State of a saddle escape direction: untaken, walk not yet settled, confirmed, or dropped entry
+   integer, parameter :: lead_free = 0, lead_pending = 1, lead_confirmed = 2, lead_dropped = 3
    !> A visit of a cached saddle: captured, waiting for its leader, or walking the opposite sign
    integer, parameter :: visit_capture = 1, visit_wait = 2, visit_opposite = 3
 
@@ -95,7 +91,7 @@ module moist_cavity_drop_projection_polish
       !> once the opposite sign showed no descent
       logical, allocatable :: near_sym(:)
       !> State of the first and the opposite direction (2, :): `lead_free`,
-      !> `lead_confirmed`, `lead_dropped` or the leading column
+      !> `lead_pending`, `lead_confirmed` or `lead_dropped`
       integer, allocatable :: lead(:, :)
    contains
       !> Clear all stored saddles while preserving allocated storage
@@ -249,7 +245,7 @@ contains
                   case default
                      sad_entry(k) = m
                      sad_sign(k) = 2
-                     scache%lead(2, m) = j
+                     scache%lead(2, m) = lead_pending
                      avoid = scache%dir(:, m)
                   end select
                end if
@@ -292,7 +288,7 @@ contains
             ! A first visit opens the saddle's entry and leads its first direction
             if (do_cap .and. .not. sad_iso(k) .and. sad_entry(k) == 0 .and. &
                 dot_product(esc_dir, esc_dir) > 0.0_wp) then
-               call saddle_cache_add(scache, skey, batch%x(:, j), esc_dir, is_sym, j, sad_entry(k))
+               call saddle_cache_add(scache, skey, batch%x(:, j), esc_dir, is_sym, sad_entry(k))
             end if
 
             if (esc_cap) then
@@ -404,7 +400,7 @@ contains
    !> @param[in]    r_star       Candidate point
    !> @param[in]    anchor       Anchor
    !> @param[in]    lambda       Multiplier at `r_star`
-   !> @param[out]   error        Unreliable classification, or saddle under strict mode
+   !> @param[out]   error        Unreliable classification, or saddle without `is_saddle`
    !> @param[out]   is_saddle    Saddle or inflection
    !> @param[out]   is_kkt       Feasible and stationary
    !> @param[out]   is_converged Strict local minimum
@@ -531,8 +527,9 @@ contains
       end if
 
       if (mu_min < -eig_tol) then
-         if (present(is_saddle)) is_saddle = .true.
-         if (cfg%strict_minimum_required .and. .not. present(is_saddle)) then
+         if (present(is_saddle)) then
+            is_saddle = .true.
+         else
             call fatal_error(error, "Saddle point detected but strict minimum required")
          end if
          return
@@ -565,8 +562,9 @@ contains
       end if
 
       if (abs(D3_ddd) > tol_D3) then
-         if (present(is_saddle)) is_saddle = .true.
-         if (cfg%strict_minimum_required .and. .not. present(is_saddle)) then
+         if (present(is_saddle)) then
+            is_saddle = .true.
+         else
             call fatal_error(error, "Inflection point detected but strict minimum required")
          end if
       else
@@ -1124,21 +1122,19 @@ contains
       end if
    end function saddle_cache_visit
 
-   !> Append a newly escaped saddle to anchor `key`'s list, its first direction led by `leader`
+   !> Append a newly escaped saddle to anchor `key`'s list, its first direction pending
    !>
    !> @param[inout] self     Saddle cache
    !> @param[in]    key      Anchor key
    !> @param[in]    x        Saddle coordinates (3)
    !> @param[in]    dir      Unit 3D escape direction of the first walk (3)
    !> @param[in]    near_sym Whether the two initial escape signs had near-equal objectives
-   !> @param[in]    leader   Column of the first walk
    !> @param[out]   idx      Index of the new saddle
-   subroutine saddle_cache_add(self, key, x, dir, near_sym, leader, idx)
+   subroutine saddle_cache_add(self, key, x, dir, near_sym, idx)
       type(saddle_cache_type), intent(inout) :: self
       integer, intent(in) :: key
       real(wp), intent(in) :: x(3), dir(3)
       logical, intent(in) :: near_sym
-      integer, intent(in) :: leader
       integer, intent(out) :: idx
 
       integer, allocatable :: th(:), tn(:), tk(:), tl(:, :)
@@ -1190,7 +1186,7 @@ contains
       self%x(:, idx) = x
       self%dir(:, idx) = dir
       self%near_sym(idx) = near_sym
-      self%lead(:, idx) = [leader, lead_free]
+      self%lead(:, idx) = [lead_pending, lead_free]
       self%head(key) = idx
    end subroutine saddle_cache_add
 
