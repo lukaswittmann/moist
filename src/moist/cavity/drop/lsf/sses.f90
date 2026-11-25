@@ -13,7 +13,8 @@ module moist_cavity_drop_lsf_sses
    use moist_cavity_drop_lsf_sses_kernel, only: sses_jets, sses_moment
    use moist_cavity_drop_lsf_sses_native, only: moment_atom_native
    use moist_cavity_drop_lsf_sses_cache, only: sses_cache_type, sses_cache_build, &
-                                               sses_cache_matches, sses_cached_evaluate, sses_cache_moment
+                                               sses_cache_matches, sses_cached_evaluate, sses_cache_moment, &
+                                               sses_cache_forget
    use moist_math_packed, only: packed_index, packed_index3, packed_index4, &
                                     pack_sym_matrix
    implicit none(type, external)
@@ -39,6 +40,8 @@ module moist_cavity_drop_lsf_sses
       procedure :: prepare
       !> Prepare a point with unbounded atom support
       procedure :: prepare_subset
+      !> Forget the warm start of the moment solve
+      procedure :: reset_history
       !> Number of retained atoms
       procedure :: active_count
       !> User-space atom identity
@@ -218,6 +221,16 @@ contains
       if (size(candidate_indices) < 0) return
       call self%prepare(point, error)
    end subroutine prepare_subset
+
+   !> Forget the converged point of the moment solve: the next evaluation starts
+   !> cold, not warm from the last point this instance evaluated
+   !>
+   !> @param[inout] self Level set
+   subroutine reset_history(self)
+      class(moist_cavity_drop_lsf_sses_type), intent(inout) :: self
+
+      call sses_cache_forget(self%cache)
+   end subroutine reset_history
 
    !> Number of prepared atom slots
    !>

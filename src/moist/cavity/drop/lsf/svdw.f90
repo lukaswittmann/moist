@@ -384,6 +384,8 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: exclusion_radius => lsf_svdw_exclusion_radius
       !> Surface-free radius around every unreached point (fade on)
       procedure, public :: far_exclusion_radius => lsf_svdw_far_exclusion_radius
+      !> Precompute local atom-center bounds over a search region for stationarity exclusion
+      procedure, public :: stationary_region_bounds => lsf_svdw_stationary_region_bounds
       !> Exclude boxes using the positive cone of atomic surface normals
       procedure, public :: stationary_box_excluded => lsf_svdw_stationary_box_excluded
       !> Finalizer
@@ -4228,11 +4230,93 @@ contains
    !> - outward-rounded interval arithmetic includes coordinate rounding
    !> - an inconclusive enclosure keeps the box for subdivision or refinement
    !>
+   !> Whether SvdW parameters and cached center bounds admit the positive-cone
+   !> stationarity certificate
+   !>
+   !> @param[in] self SvdW LSF instance
+   pure function svdw_stationary_valid(self) result(valid)
+      !> LSF instance
+      type(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Positive-mixture stationarity certificate applies
+      logical :: valid
+
+      valid = .false.
+      if (self%ncenters <= 0) return
+      if (.not. self%center_bounds_valid) return
+      if (.not. all(ieee_is_finite([self%param%blend_k, self%param%blend_1b, &
+                                    self%param%blend_2b, self%param%blend_3b]))) return
+      if (self%param%blend_k <= 0.0_wp) return
+      if (min(self%param%blend_1b, self%param%blend_2b, self%param%blend_3b) < 0.0_wp) return
+      if (max(self%param%blend_1b, self%param%blend_2b, self%param%blend_3b) <= 0.0_wp) return
+      valid = .true.
+   end function svdw_stationary_valid
+
+   !> Precompute localized atom-center bounds for stationarity exclusion over `[region_lo, region_hi]`
+   !>
+   !> - queries `self%cand_cells` (the exact screening cell list used by evaluation)
+   !>   when `reach_current()` holds, otherwise falls back to the global atom enclosure
+   !> - returns `can_exclude = .false.` whenever `anchor` lies inside the outward-rounded
+   !>   active-atom enclosure on all three axes (where no box can satisfy a strict-sign
+   !>   cross product), letting callers skip inner-loop checks altogether
+   !>
+   !> @param[in]  self        Positive-mixture SvdW model
+   !> @param[in]  anchor      Distance origin (3)
+   !> @param[in]  region_lo   Lower corner enclosing every tested box (3)
+   !> @param[in]  region_hi   Upper corner enclosing every tested box (3)
+   !> @param[out] atom_lower  Lower corner of active atom centers over the region (3)
+   !> @param[out] atom_upper  Upper corner of active atom centers over the region (3)
+   !> @param[out] can_exclude Whether any box in the region may be excluded
+   pure subroutine lsf_svdw_stationary_region_bounds(self, anchor, region_lo, region_hi, &
+                                                     atom_lower, atom_upper, can_exclude)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Distance origin
+      real(wp), intent(in) :: anchor(3)
+      !> Lower corner of search region
+      real(wp), intent(in) :: region_lo(3)
+      !> Upper corner of search region
+      real(wp), intent(in) :: region_hi(3)
+      !> Lower corner of active atom centers
+      real(wp), intent(out) :: atom_lower(3)
+      !> Upper corner of active atom centers
+      real(wp), intent(out) :: atom_upper(3)
+      !> Whether any box in the region may be excluded
+      logical, intent(out) :: can_exclude
+
+      real(wp) :: vlo(3), vhi(3)
+      integer :: nfound
+
+      atom_lower = 0.0_wp
+      atom_upper = 0.0_wp
+      can_exclude = .false.
+      if (.not. svdw_stationary_valid(self)) return
+      if (.not. all(ieee_is_finite(anchor))) return
+      if (.not. all(ieee_is_finite(region_lo))) return
+      if (.not. all(ieee_is_finite(region_hi))) return
+
+      if (self%reach_current()) then
+         call self%cand_cells%query_box_bounds(region_lo, region_hi, atom_lower, atom_upper, nfound)
+         if (nfound == 0) return
+      else
+         atom_lower = self%center_lower
+         atom_upper = self%center_upper
+      end if
+
+      vlo = nearest(anchor - atom_upper, -1.0_wp)
+      vhi = nearest(anchor - atom_lower, 1.0_wp)
+      if (.not. (all(ieee_is_finite(vlo)) .and. all(ieee_is_finite(vhi)))) return
+      if (all(vlo <= 0.0_wp .and. vhi >= 0.0_wp)) return
+      can_exclude = .true.
+   end subroutine lsf_svdw_stationary_region_bounds
+
    !> @param[in] self       Positive-mixture SvdW model
    !> @param[in] anchor     Distance origin (3)
    !> @param[in] center     Box midpoint (3)
    !> @param[in] half_width Nonnegative cube half-width
-   pure function lsf_svdw_stationary_box_excluded(self, anchor, center, half_width) result(excluded)
+   !> @param[in] atom_lower Optional precomputed lower corner of active atom centers (3)
+   !> @param[in] atom_upper Optional precomputed upper corner of active atom centers (3)
+   pure function lsf_svdw_stationary_box_excluded(self, anchor, center, half_width, &
+                                                  atom_lower, atom_upper) result(excluded)
       !> LSF instance
       class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
       !> Distance origin
@@ -4241,37 +4325,51 @@ contains
       real(wp), intent(in) :: center(3)
       !> Cube half-width
       real(wp), intent(in) :: half_width
+      !> Optional precomputed lower corner of active atom centers
+      real(wp), intent(in), optional :: atom_lower(3)
+      !> Optional precomputed upper corner of active atom centers
+      real(wp), intent(in), optional :: atom_upper(3)
       !> Whole box contains no stationary distance point
       logical :: excluded
-      !> Outward enclosures of x-anchor and anchor-atom
-      real(wp) :: ulo(3), uhi(3), vlo(3), vhi(3)
+      !> Outward enclosures of the box, x-anchor, active atom centers, and anchor-atom
+      real(wp) :: blo(3), bhi(3), ulo(3), uhi(3), alo(3), ahi(3), vlo(3), vhi(3)
       !> Product and cross-product enclosures
       real(wp) :: plo, phi, qlo, qhi, cross_lo, cross_hi
-      !> Cyclic component indices
-      integer :: k, j, l
+      !> Cyclic component indices and matching atom count
+      integer :: k, j, l, nfound
 
       excluded = .false.
-      if (self%ncenters <= 0) return
-      if (.not. self%center_bounds_valid) return
-      if (.not. all(ieee_is_finite([self%param%blend_k, self%param%blend_1b, &
-                                    self%param%blend_2b, self%param%blend_3b]))) return
-      if (self%param%blend_k <= 0.0_wp) return
-      if (min(self%param%blend_1b, self%param%blend_2b, self%param%blend_3b) < 0.0_wp) return
-      if (max(self%param%blend_1b, self%param%blend_2b, self%param%blend_3b) <= 0.0_wp) return
+      if (.not. svdw_stationary_valid(self)) return
       if (.not. all(ieee_is_finite(anchor))) return
       if (.not. all(ieee_is_finite(center))) return
       if (.not. ieee_is_finite(half_width)) return
       if (half_width < 0.0_wp) return
 
-      ulo = nearest(nearest(center - half_width, -1.0_wp) - anchor, -1.0_wp)
-      uhi = nearest(nearest(center + half_width, 1.0_wp) - anchor, 1.0_wp)
+      blo = nearest(center - half_width, -1.0_wp)
+      bhi = nearest(center + half_width, 1.0_wp)
+      if (.not. (all(ieee_is_finite(blo)) .and. all(ieee_is_finite(bhi)))) return
+      ulo = nearest(blo - anchor, -1.0_wp)
+      uhi = nearest(bhi - anchor, 1.0_wp)
       if (.not. all(ieee_is_finite(ulo))) return
       if (.not. all(ieee_is_finite(uhi))) return
       if (all(ulo <= 0.0_wp .and. uhi >= 0.0_wp)) return
-      vlo = nearest(anchor - self%center_upper, -1.0_wp)
-      vhi = nearest(anchor - self%center_lower, 1.0_wp)
+
+      if (present(atom_lower) .and. present(atom_upper)) then
+         alo = atom_lower
+         ahi = atom_upper
+      else if (self%reach_current()) then
+         call self%cand_cells%query_box_bounds(blo, bhi, alo, ahi, nfound)
+         if (nfound == 0) return
+      else
+         alo = self%center_lower
+         ahi = self%center_upper
+      end if
+
+      vlo = nearest(anchor - ahi, -1.0_wp)
+      vhi = nearest(anchor - alo, 1.0_wp)
       if (.not. all(ieee_is_finite(vlo))) return
       if (.not. all(ieee_is_finite(vhi))) return
+      if (all(vlo <= 0.0_wp .and. vhi >= 0.0_wp)) return
       do k = 1, 3
          j = modulo(k, 3) + 1
          l = modulo(k + 1, 3) + 1

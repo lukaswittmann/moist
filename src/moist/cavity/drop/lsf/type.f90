@@ -303,6 +303,8 @@ module moist_cavity_drop_lsf_base
       procedure :: exclusion_radius => lsf_base_exclusion_radius
       !> Surface-free radius around every point no atom reaches, a model constant
       procedure :: far_exclusion_radius => lsf_base_far_exclusion_radius
+      !> Precompute local atom-center bounds for [[stationary_box_excluded]] over a region
+      procedure :: stationary_region_bounds => lsf_base_stationary_region_bounds
       !> Whether a box provably contains no stationary distance point
       procedure :: stationary_box_excluded => lsf_base_stationary_box_excluded
 
@@ -331,6 +333,9 @@ module moist_cavity_drop_lsf_base
       procedure :: clone_worker => lsf_base_clone_worker
       !> Copy the base state into a fresh worker, for `clone_worker` overrides
       procedure, non_overridable :: copy_base_state => lsf_base_copy_base_state
+      !> Forget state carried between evaluations, so the next one does not depend on
+      !> earlier ones (nothing to forget by default)
+      procedure :: reset_history => lsf_base_reset_history
       !> Configure the highest spatial derivative order required
       procedure :: set_max_deriv => lsf_base_set_max_deriv
       !> Abort when an accessor is asked for an order `prepare` did not compute
@@ -959,6 +964,20 @@ contains
       ! Evaluation state: prepared_deriv, prepared_unreached, batch_unreached and
       ! batch_width keep the defaults of the fresh worker
    end subroutine lsf_base_copy_base_state
+
+   !> Forget state carried between evaluations: nothing to forget
+   !>
+   !> - a level set whose result at a point depends on the points it evaluated
+   !>   before (a warm start) overrides it; callers reset at the start of every
+   !>   slice of work a thread may take in any order, so the results do not
+   !>   depend on the thread count
+   !>
+   !> @param[inout] self LSF instance
+   subroutine lsf_base_reset_history(self)
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+
+      ! Evaluations carry no state by default: `self` is deliberately unused
+   end subroutine lsf_base_reset_history
 
    !> Configure the highest spatial derivative order `prepare` provisions
    !>
@@ -2042,13 +2061,53 @@ contains
       if (self%ncenters < 0) r = 0.0_wp
    end function lsf_base_far_exclusion_radius
 
+   !> Precompute local atom-center bounds for stationarity exclusion over a search region
+   !>
+   !> - returns `can_exclude = .false.` when the concrete LSF provides no stationarity
+   !>   certificate or when no box inside `[region_lo, region_hi]` can be excluded for `anchor`
+   !> - callers query this once per anchor search and pass `(atom_lower, atom_upper)` into
+   !>   [[lsf_base_stationary_box_excluded]] only when `can_exclude` is `.true.`
+   !>
+   !> @param[in]  self        LSF instance
+   !> @param[in]  anchor      Distance origin (3)
+   !> @param[in]  region_lo   Lower corner enclosing every tested box (3)
+   !> @param[in]  region_hi   Upper corner enclosing every tested box (3)
+   !> @param[out] atom_lower  Lower corner of active atom centers over the region (3)
+   !> @param[out] atom_upper  Upper corner of active atom centers over the region (3)
+   !> @param[out] can_exclude Whether any box in the region may be excluded
+   pure subroutine lsf_base_stationary_region_bounds(self, anchor, region_lo, region_hi, &
+                                                     atom_lower, atom_upper, can_exclude)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Distance origin
+      real(wp), intent(in) :: anchor(3)
+      !> Lower corner of search region
+      real(wp), intent(in) :: region_lo(3)
+      !> Upper corner of search region
+      real(wp), intent(in) :: region_hi(3)
+      !> Lower corner of active atom centers
+      real(wp), intent(out) :: atom_lower(3)
+      !> Upper corner of active atom centers
+      real(wp), intent(out) :: atom_upper(3)
+      !> Whether stationarity exclusion can fire inside the region
+      logical, intent(out) :: can_exclude
+
+      ! No certificate: `self`, `anchor` and the region are deliberately unused
+      atom_lower = 0.0_wp
+      atom_upper = 0.0_wp
+      can_exclude = .false.
+   end subroutine lsf_base_stationary_region_bounds
+
    !> Keep boxes when no stationarity bound is available
    !>
    !> @param[in] self       LSF instance
    !> @param[in] anchor     Distance origin (3)
    !> @param[in] center     Box midpoint (3)
    !> @param[in] half_width Nonnegative cube half-width
-   pure function lsf_base_stationary_box_excluded(self, anchor, center, half_width) result(excluded)
+   !> @param[in] atom_lower Optional precomputed lower corner of active atom centers (3)
+   !> @param[in] atom_upper Optional precomputed upper corner of active atom centers (3)
+   pure function lsf_base_stationary_box_excluded(self, anchor, center, half_width, &
+                                                  atom_lower, atom_upper) result(excluded)
       !> LSF instance
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       !> Distance origin
@@ -2057,9 +2116,14 @@ contains
       real(wp), intent(in) :: center(3)
       !> Cube half-width
       real(wp), intent(in) :: half_width
+      !> Optional precomputed lower corner of active atom centers
+      real(wp), intent(in), optional :: atom_lower(3)
+      !> Optional precomputed upper corner of active atom centers
+      real(wp), intent(in), optional :: atom_upper(3)
       !> No exclusion without a concrete LSF bound
       logical :: excluded
 
+      ! No certificate: every argument is deliberately unused
       excluded = .false.
    end function lsf_base_stationary_box_excluded
 

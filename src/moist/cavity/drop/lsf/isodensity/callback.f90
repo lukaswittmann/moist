@@ -17,6 +17,7 @@
 !> the host coupling; only the nuclear charges of the core fill arrive in its
 !> build phase
 module moist_cavity_drop_lsf_isodensity_callback
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_funptr, c_null_funptr, c_ptr, c_null_ptr, &
                             c_associated, c_f_procpointer, c_loc
    use mctc_env, only: error_type, fatal_error
@@ -234,10 +235,12 @@ contains
    !> Evaluate and cache callback data at one point
    !>
    !> - never unreached
+   !> - a non-finite host number among the requested orders is a failure, as a
+   !>   nonzero host status
    !>
    !> @param[inout] self   LSF instance
    !> @param[in]    point  Evaluation point in Bohr
-   !> @param[out]   error  Host callback failure at this point
+   !> @param[out]   error  Host callback failure or non-finite host number at this point
    subroutine lsf_prepare(self, point, error)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
@@ -250,6 +253,10 @@ contains
       logical :: want_hess, want_third
       !> Host return code
       integer(c_int) :: host_status
+      !> Every requested host number is finite
+      logical :: finite
+      !> Failure reason for an aborted host evaluation
+      character(len=:), allocatable :: reason
       !> Host density with the ECP core fill, and the fill ball holding the point
       real(wp) :: rho, drho(ndim), d2rho(ndim, ndim), d3rho(ndim, ndim, ndim)
       integer :: inside
@@ -270,7 +277,15 @@ contains
       c_point = real(point, c_double)
       host_status = callback(self%context, c_point, c_rho, c_drho, p_hess, p_third)
       if (host_status /= 0_c_int) then
-         ! Substitute state; numbers are not a result; the caller aborts on `error`
+         reason = "External LSF evaluation failed with status "// &
+                  to_string(int(host_status))
+      else
+         finite = ieee_is_finite(c_rho) .and. all(ieee_is_finite(c_drho))
+         if (finite .and. want_hess) finite = all(ieee_is_finite(c_d2rho))
+         if (finite .and. want_third) finite = all(ieee_is_finite(c_d3rho))
+         if (.not. finite) reason = "External LSF returned a non-finite density or derivative"
+      end if
+      if (allocated(reason)) then
          self%value = 1.0_wp
          self%grad = 0.0_wp
          self%grad(1) = 1.0_wp
@@ -278,8 +293,7 @@ contains
          self%third = 0.0_wp
          self%prepared_deriv = 3
 
-         call fatal_error(error, "External LSF evaluation failed with status "// &
-                          to_string(int(host_status))//" at point ("// &
+         call fatal_error(error, reason//" at point ("// &
                           to_string(point(1), "(es13.6)")//" "// &
                           to_string(point(2), "(es13.6)")//" "// &
                           to_string(point(3), "(es13.6)")// &

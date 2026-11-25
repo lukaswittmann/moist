@@ -86,6 +86,8 @@ module moist_cavity_drop_lsf_screening
       procedure :: build => cell_list_build
       !> Atoms whose reach sphere intersects an axis-aligned box
       procedure :: query_box => cell_list_query_box
+      !> Center bounding box of atoms whose reach sphere intersects an axis-aligned box
+      procedure :: query_box_bounds => cell_list_query_box_bounds
       !> Atoms whose reach sphere intersects a ball
       procedure :: query_sphere => cell_list_query_sphere
       !> Atoms whose reach sphere contains a point
@@ -283,6 +285,100 @@ contains
       call collect(self, min(lo, hi), max(lo, hi), [0.0_wp, 0.0_wp, 0.0_wp], 0.0_wp, &
                    .false., out, nout)
    end subroutine cell_list_query_box
+
+   !> Componentwise center bounds of atoms whose reach sphere intersects `[lo, hi]`
+   !>
+   !> - uses the exact same cell walk and widened `slot_hit` predicate as [[cell_list_query_box]]
+   !> - allocation-free and sort-free; `box_lo`/`box_hi` are zero when `nfound == 0`
+   !> - corners in either order; error stop on a non-finite corner
+   !>
+   !> @param[in]  self   cell list
+   !> @param[in]  lo     box corner
+   !> @param[in]  hi     opposite box corner
+   !> @param[out] box_lo lower corner of matching atom centers
+   !> @param[out] box_hi upper corner of matching atom centers
+   !> @param[out] nfound number of matching atoms
+   pure subroutine cell_list_query_box_bounds(self, lo, hi, box_lo, box_hi, nfound)
+      !> Cell list
+      class(cell_list_type), intent(in) :: self
+      !> Box corner
+      real(wp), intent(in) :: lo(3)
+      !> Opposite box corner
+      real(wp), intent(in) :: hi(3)
+      !> Lower corner of matching atom centers
+      real(wp), intent(out) :: box_lo(3)
+      !> Upper corner of matching atom centers
+      real(wp), intent(out) :: box_hi(3)
+      !> Number of matching atoms
+      integer, intent(out) :: nfound
+
+      real(wp) :: blo(3), bhi(3), tlo(3), thi(3), elo(3), ehi(3), upper(3), margin(3)
+      integer :: ilo(3), ihi(3), ix, iy, iz, ic, s, k
+
+      box_lo = 0.0_wp
+      box_hi = 0.0_wp
+      nfound = 0
+      if (self%natoms <= 0) return
+
+      blo = min(lo, hi)
+      bhi = max(lo, hi)
+      if (.not. (all(ieee_is_finite(blo)) .and. all(ieee_is_finite(bhi)))) then
+         error stop "moist cell list: query region must be finite"
+      end if
+
+      if (self%full_scan) then
+         do s = 1, self%natoms
+            if (slot_hit(self, s, blo, bhi, [0.0_wp, 0.0_wp, 0.0_wp], 0.0_wp, .false.)) then
+               if (nfound == 0) then
+                  box_lo = self%slot_geom(1:3, s)
+                  box_hi = self%slot_geom(1:3, s)
+               else
+                  box_lo = min(box_lo, self%slot_geom(1:3, s))
+                  box_hi = max(box_hi, self%slot_geom(1:3, s))
+               end if
+               nfound = nfound + 1
+            end if
+         end do
+         return
+      end if
+
+      do k = 1, 3
+         margin(k) = self%walk_reach + walk_slack*max(abs(blo(k)), abs(bhi(k)))
+      end do
+      upper = self%origin + real([self%nx, self%ny, self%nz], wp)*self%cell_side
+      elo = min(max(blo - margin, self%origin - self%cell_side), upper + self%cell_side)
+      ehi = min(max(bhi + margin, self%origin - self%cell_side), upper + self%cell_side)
+      tlo = (elo - self%origin)*self%inv_cell
+      thi = (ehi - self%origin)*self%inv_cell
+      if (any(thi < 0.0_wp)) return
+      if (tlo(1) >= real(self%nx, wp) .or. tlo(2) >= real(self%ny, wp) &
+          .or. tlo(3) >= real(self%nz, wp)) return
+
+      ilo = int(max(0.0_wp, tlo))
+      ihi(1) = int(min(real(self%nx - 1, wp), thi(1)))
+      ihi(2) = int(min(real(self%ny - 1, wp), thi(2)))
+      ihi(3) = int(min(real(self%nz - 1, wp), thi(3)))
+
+      do iz = ilo(3), ihi(3)
+         do iy = ilo(2), ihi(2)
+            do ix = ilo(1), ihi(1)
+               ic = ix + iy*self%nx + iz*self%nx*self%ny + 1
+               do s = self%cell_start(ic), self%cell_start(ic + 1) - 1
+                  if (slot_hit(self, s, blo, bhi, [0.0_wp, 0.0_wp, 0.0_wp], 0.0_wp, .false.)) then
+                     if (nfound == 0) then
+                        box_lo = self%slot_geom(1:3, s)
+                        box_hi = self%slot_geom(1:3, s)
+                     else
+                        box_lo = min(box_lo, self%slot_geom(1:3, s))
+                        box_hi = max(box_hi, self%slot_geom(1:3, s))
+                     end if
+                     nfound = nfound + 1
+                  end if
+               end do
+            end do
+         end do
+      end do
+   end subroutine cell_list_query_box_bounds
 
    !> Atoms whose reach sphere intersects the ball `(center, r)`
    !>

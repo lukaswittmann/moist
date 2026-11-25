@@ -7,7 +7,8 @@ module moist_cavity_drop_lsf_sses_cache
    use moist_cavity_drop_lsf_sses_kernel, only: sses_jets
    implicit none(type, external)
    private
-   public :: sses_cache_type, sses_cache_build, sses_cached_evaluate, sses_cache_matches, sses_cache_moment
+   public :: sses_cache_type, sses_cache_build, sses_cached_evaluate, sses_cache_matches, sses_cache_moment, &
+             sses_cache_forget
    !> Value-owned arrays and native state, safe under intrinsic thread-clone assignment
    type :: sses_cache_type
       !> Successful finite evaluation
@@ -175,4 +176,15 @@ contains
       y = cache%state%y
       available = cache%valid .and. cache%state%valid .and. all(point == cache%state%x)
    end function sses_cache_moment
+   !> Forget the converged point, so the next evaluation starts cold instead of
+   !> warm from the last point
+   !>
+   !> @param[in,out] cache Per-thread moment cache
+   pure subroutine sses_cache_forget(cache)
+      !> Per-thread moment cache
+      type(sses_cache_type), intent(inout) :: cache
+      cache%state%valid = .false.
+      cache%state%sensitivity_valid = .false.
+      cache%state%third_valid = .false.
+   end subroutine sses_cache_forget
 end module moist_cavity_drop_lsf_sses_cache
