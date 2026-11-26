@@ -1,4 +1,4 @@
-!> Surface mesh build, refinement: cell splitting, sign-change crossings
+!> Lattice seeder build, refinement: cell splitting, sign-change crossings
 submodule(moist_cavity_drop_projection_seed) moist_cavity_drop_projection_seed_refine
    implicit none(type, external)
 
@@ -230,7 +230,7 @@ contains
 
       integer :: e, a, b
       integer(int64) :: key
-      real(wp) :: va, vb, xa(3), xb(3)
+      real(wp) :: va, vb, xa(3), xb(3), x(3)
 
       crossed = .false.
       do e = 1, 12
@@ -247,7 +247,9 @@ contains
          call table_insert(edges, key, 1)
          xa = node_position(work, work%nodes%ijk(:, a))
          xb = node_position(work, work%nodes%ijk(:, b))
-         call push_crossing(work, segment_crossing(xa, xb, va, vb), hs, 0.5_wp*(xa + xb), (e + 3)/4)
+         ! The crossing goes to the level set, the midpoint to the bins
+         x = work%frame%to_lab(segment_crossing(xa, xb, va, vb))
+         call push_crossing(work, x, hs, 0.5_wp*(xa + xb), (e + 3)/4)
       end do
    end subroutine cell_crossings
 

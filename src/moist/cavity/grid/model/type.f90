@@ -25,6 +25,7 @@ module moist_cavity_grid_model_type
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_channels_fields, only: field_query_type
+   use moist_math_linalg_geometry, only: identity3
    implicit none(type, external)
    private
 
@@ -70,6 +71,8 @@ module moist_cavity_grid_model_type
       procedure(fields_iface), deferred :: list_fields
       !> Print the report of the latest update
       procedure(print_iface), deferred :: print
+      !> Axes of a Cartesian lattice about the atom centroid (identity by default)
+      procedure :: lattice_axes => grid_model_lattice_axes
    end type grid_model_type
 
    !> Deferred procedures of a grid model
@@ -216,5 +219,25 @@ module moist_cavity_grid_model_type
       end subroutine print_iface
 
    end interface
+
+contains
+
+   !> Axes of a Cartesian lattice about the atom centroid, after an update
+   !>
+   !> - for a cavity placing a lattice of its own (the DROP seed lattice), so
+   !>   that it turns with the grids of the spheres
+   !> - the lab axes, the exact identity, unless a model overrides it
+   !>
+   !> @param[in]  self Grid model
+   !> @param[out] axes Lattice axes as columns, a proper rotation
+   pure subroutine grid_model_lattice_axes(self, axes)
+      !> Grid model
+      class(grid_model_type), intent(in) :: self
+      !> Lattice axes
+      real(wp), intent(out) :: axes(3, 3)
+
+      ! The lab axes for every model: `self` is deliberately unused
+      axes = identity3
+   end subroutine grid_model_lattice_axes
 
 end module moist_cavity_grid_model_type

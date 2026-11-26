@@ -113,6 +113,8 @@ module moist_cavity_grid_model_symmetry_type
       procedure :: list_fields => list_symmetry_fields
       !> Print the symmetry report
       procedure :: print => print_symmetry_report
+      !> Grid model: axes of a lattice about the centroid that the group maps onto itself
+      procedure :: lattice_axes => symmetry_lattice_axes
    end type grid_model_symmetry_type
 
 contains
@@ -545,6 +547,25 @@ contains
       lab = .true.
       if (self%computed) lab = self%orient%orientation == orient_lab
    end function symmetry_is_lab
+
+   !> Axes of a cubic lattice about the atom centroid
+   !>
+   !> - the molecular frame, or the orientation closest to it that the group
+   !>   used maps onto itself where the group fits a cube
+   !>   ([[moist_math_symmetry_orient:set_lattice]])
+   !> - the exact identity in the lab orientation or before an update
+   !>
+   !> @param[in]  self Symmetry model
+   !> @param[out] axes Lattice axes as columns
+   pure subroutine symmetry_lattice_axes(self, axes)
+      !> Symmetry model
+      class(grid_model_symmetry_type), intent(in) :: self
+      !> Lattice axes
+      real(wp), intent(out) :: axes(3, 3)
+
+      axes = identity3
+      if (.not. self%is_lab()) axes = self%orient%lattice
+   end subroutine symmetry_lattice_axes
 
    !> Grid components of the cavity's Lebedev size: one per sphere, weight one
    !>

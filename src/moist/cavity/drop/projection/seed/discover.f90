@@ -1,4 +1,4 @@
-!> Surface mesh build, discovery: coarse nodes of the search region
+!> Lattice seeder build, discovery: coarse nodes of the search region
 submodule(moist_cavity_drop_projection_seed) moist_cavity_drop_projection_seed_discover
    implicit none(type, external)
 
@@ -11,7 +11,7 @@ contains
    !> Probe every coarse node within a cell diagonal of the searched anchor balls
    !>
    !> - every coarse cell meeting any anchor's search ball `B(a_k, r_k)` has all
-   !>   eight corners within `r_k + sqrt(3) h_0` of `a_k`
+   !>   eight corners within `r_k + sqrt(3) h_0` of `a_k`, both in the lattice frame
    !> - stamps the union of balls into a compact 3D byte mask when the bounding
    !>   box fits [[max_mask_cells]] and the lattice key range, emitting nodes once
    !>   in deterministic `(z, y, x)` order; falls back to direct insertion otherwise
@@ -53,8 +53,9 @@ contains
             r_k = geometry%reach
          end if
          rho = r_k + pad
-         lo64 = floor((geometry%anchors(:, k) - rho - work%origin)*inv_h0, kind=int64)
-         hi64 = ceiling((geometry%anchors(:, k) + rho - work%origin)*inv_h0, kind=int64)
+         c = work%frame%to_lattice(geometry%anchors(:, k))
+         lo64 = floor((c - rho - work%frame%origin)*inv_h0, kind=int64)
+         hi64 = ceiling((c + rho - work%frame%origin)*inv_h0, kind=int64)
          glo = min(glo, lo64)
          ghi = max(ghi, hi64)
       end do
@@ -80,21 +81,21 @@ contains
             end if
             rho = r_k + pad
             rho2 = rho*rho
-            c = geometry%anchors(:, k)
-            lo = floor((c - rho - work%origin)*inv_h0)
-            hi = ceiling((c + rho - work%origin)*inv_h0)
+            c = work%frame%to_lattice(geometry%anchors(:, k))
+            lo = floor((c - rho - work%frame%origin)*inv_h0)
+            hi = ceiling((c + rho - work%frame%origin)*inv_h0)
             do iz = lo(3), hi(3)
-               dz = work%origin(3) + work%h0*real(iz, wp) - c(3)
+               dz = work%frame%origin(3) + work%h0*real(iz, wp) - c(3)
                dz2 = dz*dz
                if (dz2 > rho2) cycle
                do iy = lo(2), hi(2)
-                  dy = work%origin(2) + work%h0*real(iy, wp) - c(2)
+                  dy = work%frame%origin(2) + work%h0*real(iy, wp) - c(2)
                   dy2 = dy*dy
                   rem = rho2 - dz2 - dy2
                   if (rem < 0.0_wp) cycle
                   span_x = sqrt(rem)
-                  ix_lo = max(lo(1), floor((c(1) - span_x - work%origin(1))*inv_h0))
-                  ix_hi = min(hi(1), ceiling((c(1) + span_x - work%origin(1))*inv_h0))
+                  ix_lo = max(lo(1), floor((c(1) - span_x - work%frame%origin(1))*inv_h0))
+                  ix_hi = min(hi(1), ceiling((c(1) + span_x - work%frame%origin(1))*inv_h0))
                   if (ix_lo <= ix_hi) mask(ix_lo - ox:ix_hi - ox, iy - oy, iz - oz) = 1_int8
                end do
             end do
@@ -133,19 +134,19 @@ contains
             end if
             rho = r_k + pad
             rho2 = rho*rho
-            c = geometry%anchors(:, k)
-            lo64 = floor((c - rho - work%origin)*inv_h0, kind=int64)
-            hi64 = ceiling((c + rho - work%origin)*inv_h0, kind=int64)
+            c = work%frame%to_lattice(geometry%anchors(:, k))
+            lo64 = floor((c - rho - work%frame%origin)*inv_h0, kind=int64)
+            hi64 = ceiling((c + rho - work%frame%origin)*inv_h0, kind=int64)
             do iz64 = lo64(3), hi64(3)
-               x(3) = work%origin(3) + work%h0*real(iz64, wp)
+               x(3) = work%frame%origin(3) + work%h0*real(iz64, wp)
                dz2 = (x(3) - c(3))**2
                if (dz2 > rho2) cycle
                do iy64 = lo64(2), hi64(2)
-                  x(2) = work%origin(2) + work%h0*real(iy64, wp)
+                  x(2) = work%frame%origin(2) + work%h0*real(iy64, wp)
                   dy2 = (x(2) - c(2))**2
                   if (dz2 + dy2 > rho2) cycle
                   do ix64 = lo64(1), hi64(1)
-                     x(1) = work%origin(1) + work%h0*real(ix64, wp)
+                     x(1) = work%frame%origin(1) + work%h0*real(ix64, wp)
                      if (dz2 + dy2 + (x(1) - c(1))**2 > rho2) cycle
                      ! Every later node lies between coarse ones, so this keeps all of them in range
                      if (any(abs(step64*[ix64, iy64, iz64]) >= key_lim)) then

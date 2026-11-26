@@ -1,4 +1,4 @@
-!> Surface mesh build: lattice node positions, values, certificates
+!> Lattice seeder build: lattice node positions, values, certificates
 submodule(moist_cavity_drop_projection_seed) moist_cavity_drop_projection_seed_nodes
    implicit none(type, external)
 
@@ -20,7 +20,9 @@ contains
       step = 2**(work%depth - s)
    end function level_step
 
-   !> Position of a lattice node
+   !> Lattice-frame position of a lattice node
+   !>
+   !> - the lab position when the lattice follows the lab axes
    !>
    !> @param[in] work Build scratch
    !> @param[in] ijk  Finest-unit coordinates
@@ -29,7 +31,7 @@ contains
       integer, intent(in) :: ijk(3)
       real(wp) :: x(3)
 
-      x = work%origin + work%unit*real(ijk, wp)
+      x = work%frame%origin + work%unit*real(ijk, wp)
    end function node_position
 
    !> Values and certificates of the nodes waiting for them
@@ -54,7 +56,7 @@ contains
       if (n1 < n0) return
       allocate (x(3, n1 - n0 + 1))
       do k = n0, n1
-         x(:, k - n0 + 1) = node_position(work, work%nodes%ijk(:, k))
+         x(:, k - n0 + 1) = work%frame%to_lab(node_position(work, work%nodes%ijk(:, k)))
       end do
       call evaluate_slices(work%probe, lsf, x, 0, build_chunk, work%nodes%val(n0:n1), work%nodes%reached(n0:n1), &
                            error)
@@ -108,7 +110,7 @@ contains
    module subroutine range_error(error)
       type(error_type), allocatable, intent(out) :: error
 
-      call fatal_error(error, "Surface mesh seeder: the region does not fit the lattice keys; "// &
+      call fatal_error(error, "Lattice seeder: the region does not fit the lattice keys; "// &
                        "raise the sample size or split the geometry")
    end subroutine range_error
 

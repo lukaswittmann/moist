@@ -255,6 +255,8 @@ contains
       integer, allocatable :: orig(:)
       integer(int64), allocatable :: a(:)
       integer :: is, ip, n
+      !> Result of `label`
+      character(len=:), allocatable :: tag
 
       do is = 1, size(sizes)
          n = sizes(is)
@@ -262,8 +264,9 @@ contains
             orig = int_pattern(n, ip)
             a = int(orig, int64)*shift - 7_int64
             call sort(a)
+            call label(n, ip, tag)
             call check(error, all(a == int(orig(stable_reference_int(orig, .false.)), int64)*shift - 7_int64), &
-                       "sort (64-bit integer) is not the ascending order"//label(n, ip))
+                       "sort (64-bit integer) is not the ascending order"//tag)
             if (allocated(error)) return
          end do
       end do

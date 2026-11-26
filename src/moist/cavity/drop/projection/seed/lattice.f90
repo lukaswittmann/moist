@@ -1,21 +1,24 @@
-!> Lattice helpers of the surface mesh seeder ([[projection_seeder_type]])
+!> Lattice helpers of the lattice seeder ([[projection_seeder_type]])
 !>
 !> - [[key_table_type]], [[lattice_key]]: open-addressing table from a 64-bit
 !>   cell key to an index, and the key of three lattice coordinates
 !> - [[build_probe_type]], [[evaluate_slices]]: level set jets of a build, in
 !>   fixed slices over per-thread clones
 !> - [[segment_crossing]]: crossing of a sign-change segment
+!> - [[lattice_frame_type]]: origin and axes of the lattice, maps between the
+!>   lab and the lattice frame
 module moist_cavity_drop_projection_seed_lattice
    !$ use omp_lib, only: omp_get_thread_num
    use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
+   use moist_math_linalg_geometry, only: identity3
    implicit none(type, external)
    private
 
    public :: key_bits, key_table_type, table_init, table_find, table_insert, lattice_key
-   public :: build_probe_type, evaluate_slices, segment_crossing
+   public :: build_probe_type, evaluate_slices, segment_crossing, lattice_frame_type
 
    !> Bits of each of the three fields of a cell key
    integer, parameter :: key_bits = 21
@@ -49,6 +52,25 @@ module moist_cavity_drop_projection_seed_lattice
       !> Threads of the probe batches
       integer :: nthreads = 1
    end type build_probe_type
+
+   !> Lattice frame: lattice-frame positions `x_l = o + A^T (x - o)`
+   !>
+   !> - lab axes (`A = I`) skip the maps, positions are returned bitwise
+   type :: lattice_frame_type
+      !> Lattice origin `o` (Bohr)
+      real(wp) :: origin(3) = 0.0_wp
+      !> Lattice axes `A` as columns
+      real(wp) :: axes(3, 3) = identity3
+      !> Whether the axes differ from the lab axes
+      logical :: rotated = .false.
+   contains
+      !> Set origin and axes
+      procedure :: init => frame_init
+      !> Lab position of a lattice-frame position
+      procedure :: to_lab => frame_to_lab
+      !> Lattice-frame position of a lab position
+      procedure :: to_lattice => frame_to_lattice
+   end type lattice_frame_type
 
 contains
 
@@ -257,5 +279,50 @@ contains
 
       x = a + (va/(va - vb))*(b - a)
    end function segment_crossing
+
+   !* ================================================================================= *!
+   !*                                   Lattice frame                                   *!
+   !* ================================================================================= *!
+
+   !> Set origin and axes of the frame
+   !>
+   !> @param[inout] self   Frame
+   !> @param[in]    origin Lattice origin `o`
+   !> @param[in]    axes   Lattice axes `A` as columns, a proper rotation
+   pure subroutine frame_init(self, origin, axes)
+      class(lattice_frame_type), intent(inout) :: self
+      real(wp), intent(in) :: origin(3)
+      real(wp), intent(in) :: axes(3, 3)
+
+      self%origin = origin
+      self%axes = axes
+      self%rotated = any(axes /= identity3)
+   end subroutine frame_init
+
+   !> Lab position of a lattice-frame position: `o + A (x_l - o)`
+   !>
+   !> @param[in] self Frame
+   !> @param[in] xl   Lattice-frame position
+   pure function frame_to_lab(self, xl) result(x)
+      class(lattice_frame_type), intent(in) :: self
+      real(wp), intent(in) :: xl(3)
+      real(wp) :: x(3)
+
+      x = xl
+      if (self%rotated) x = self%origin + matmul(self%axes, xl - self%origin)
+   end function frame_to_lab
+
+   !> Lattice-frame position of a lab position: `o + A^T (x - o)`
+   !>
+   !> @param[in] self Frame
+   !> @param[in] x    Lab position
+   pure function frame_to_lattice(self, x) result(xl)
+      class(lattice_frame_type), intent(in) :: self
+      real(wp), intent(in) :: x(3)
+      real(wp) :: xl(3)
+
+      xl = x
+      if (self%rotated) xl = self%origin + matmul(x - self%origin, self%axes)
+   end function frame_to_lattice
 
 end module moist_cavity_drop_projection_seed_lattice

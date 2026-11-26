@@ -21,7 +21,7 @@ module moist_cavity_drop_parameters
    private
 
    !> Length of a `proj_level_label` result
-   integer, parameter :: proj_level_label_len = 32
+   integer, parameter :: proj_level_label_len = 40
 
    !> Parameter container for DROP
    !> Extends the base parameter type with DROP-specific settings for
@@ -79,7 +79,7 @@ module moist_cavity_drop_parameters
       !> 3 = every anchor, filtered lattice seeds
       !> 4 = every anchor, fine lattice seeds
       !> Any other value is refused
-      !> A failed local solve is retried from the level's seeder, a coarse surface mesh at level 1
+      !> A failed local solve is retried from the level's seeder, a coarse seed lattice at level 1
       !> Seeder, spacing and refinement of each level: `seed%init_level`
       integer :: proj_level = 2
 

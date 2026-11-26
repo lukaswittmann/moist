@@ -15,6 +15,8 @@ module test_cavity_drop_projection
    use moist_math_linalg, only: setup_tangent_frame
    use moist_math_packed, only: unpack_sym_matrix
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
+   use moist_utils_format, only: to_string
+   use moist_math_sorter, only: sort_index
    use test_helpers, only: expect_error
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type, &
                                            drop_polish_parameters_type, drop_finalize_parameters_type
@@ -105,25 +107,27 @@ contains
          & new_unittest("finalize_canonical_order_chain", test_finalize_canonical_order_chain), &
          & new_unittest("finalize_sphere_anchor", test_finalize_sphere_anchor), &
          & new_unittest("finalize_branch_weight_fold", test_finalize_branch_fold), &
-         & new_unittest("rmesh_build_thread_independent", test_rmesh_thread_independent), &
-         & new_unittest("rmesh_level3_filter_and_level4_unfiltered", test_rmesh_level_filters), &
-         & new_unittest("rmesh_shell_query_partitions_ball", test_rmesh_shell_query), &
-         & new_unittest("rmesh_sses_build_thread_independent", test_rmesh_sses_thread_independent), &
+         & new_unittest("lattice_build_thread_independent", test_lattice_thread_independent), &
+         & new_unittest("lattice_axes_covariant", test_lattice_axes_covariant), &
+         & new_unittest("lattice_level3_filter_and_level4_unfiltered", test_lattice_level_filters), &
+         & new_unittest("lattice_shell_query_partitions_ball", test_lattice_shell_query), &
+         & new_unittest("lattice_sses_build_thread_independent", test_lattice_sses_thread_independent), &
          & new_unittest("sses_projection_thread_independent", test_sses_projection_thread_independent), &
-         & new_unittest("level2_selective_rmesh_branches", test_level2_selective_rmesh), &
+         & new_unittest("level2_selective_lattice_branches", test_level2_selective_lattice), &
          & new_unittest("level2_seed_filters", test_level2_seed_filters), &
-         & new_unittest("bad_rmesh_sample_size", test_bad_rmesh_sample_size, should_fail=.true.), &
-         & new_unittest("bad_rmesh_refine_levels", test_bad_rmesh_refine_levels, should_fail=.true.), &
-         & new_unittest("bad_rmesh_build_before_init", test_bad_rmesh_build_before_init, should_fail=.true.), &
-         & new_unittest("bad_rmesh_seed_before_build", test_bad_rmesh_seed_before_build, should_fail=.true.), &
-         & new_unittest("bad_rmesh_radii", test_bad_rmesh_radii, should_fail=.true.), &
-         & new_unittest("bad_rmesh_reach", test_bad_rmesh_reach, should_fail=.true.), &
-         & new_unittest("bad_rmesh_lattice_range", test_bad_rmesh_lattice_range, should_fail=.true.), &
-         & new_unittest("bad_rmesh_sample_size_infinite", test_bad_rmesh_sample_size_infinite, should_fail=.true.), &
-         & new_unittest("bad_rmesh_cone_scale", test_bad_rmesh_cone_scale, should_fail=.true.), &
-         & new_unittest("bad_rmesh_cone_scale_infinite", test_bad_rmesh_cone_scale_infinite, should_fail=.true.), &
-         & new_unittest("bad_rmesh_anchors_without_atoms", test_bad_rmesh_anchors_without_atoms, should_fail=.true.), &
-         & new_unittest("rmesh_back_facing_needs_owner", test_rmesh_back_facing_needs_owner), &
+         & new_unittest("bad_lattice_sample_size", test_bad_lattice_sample_size, should_fail=.true.), &
+         & new_unittest("bad_lattice_refine_levels", test_bad_lattice_refine_levels, should_fail=.true.), &
+         & new_unittest("bad_lattice_build_before_init", test_bad_lattice_build_before_init, should_fail=.true.), &
+         & new_unittest("bad_lattice_seed_before_build", test_bad_lattice_seed_before_build, should_fail=.true.), &
+         & new_unittest("bad_lattice_radii", test_bad_lattice_radii, should_fail=.true.), &
+         & new_unittest("bad_lattice_reach", test_bad_lattice_reach, should_fail=.true.), &
+         & new_unittest("bad_lattice_axes", test_bad_lattice_axes, should_fail=.true.), &
+         & new_unittest("bad_lattice_key_range", test_bad_lattice_key_range, should_fail=.true.), &
+         & new_unittest("bad_lattice_sample_size_infinite", test_bad_lattice_sample_size_infinite, should_fail=.true.), &
+         & new_unittest("bad_lattice_cone_scale", test_bad_lattice_cone_scale, should_fail=.true.), &
+         & new_unittest("bad_lattice_cone_scale_infinite", test_bad_lattice_cone_scale_infinite, should_fail=.true.), &
+         & new_unittest("bad_lattice_anchors_without_atoms", test_bad_lattice_anchors_without_atoms, should_fail=.true.), &
+         & new_unittest("lattice_back_facing_needs_owner", test_lattice_back_facing_needs_owner), &
          & new_unittest("bad_batch_target_size", test_bad_batch_target_size, should_fail=.true.), &
          & new_unittest("bad_newton_unreached_anchor", test_bad_newton_unreached_anchor, should_fail=.true.), &
          & new_unittest("worker_skipped_anchor_empty_outputs", test_worker_skipped_anchor) &
@@ -2759,10 +2763,10 @@ contains
    end subroutine test_bad_newton_unreached_anchor
 
    !* ================================================================================= *!
-   !*                              Surface mesh seeder                                  *!
+   !*                                  Lattice seeder                                   *!
    !* ================================================================================= *!
 
-   !> Surface mesh build input of a cluster cavity: every anchor seeded
+   !> Lattice seeder build input of a cluster cavity: every anchor seeded
    !>
    !> @param[in]  cavity   Anchor-phase cavity
    !> @param[in]  nthreads Build threads
@@ -2782,13 +2786,13 @@ contains
       geometry%nthreads = nthreads
    end subroutine cluster_build_input
 
-   !> Built level-4 surface mesh seeder of a cluster cavity
+   !> Built level-4 lattice seeder of a cluster cavity
    !>
    !> @param[in]  cavity   Anchor-phase cavity
    !> @param[in]  nthreads Build threads
    !> @param[out] seeder   Built seeder
    !> @param[out] error    Native failure
-   subroutine build_cluster_rmesh(cavity, nthreads, seeder, error)
+   subroutine build_cluster_lattice(cavity, nthreads, seeder, error)
       !> Anchor-phase cavity
       type(cavity_type_drop), intent(in) :: cavity
       !> Build threads
@@ -2806,16 +2810,16 @@ contains
       param%proj_level = 4
       call param%compute_derived(error)
       if (allocated(error)) return
-      call init_mesh(seeder, error, sample_size=param%seed%seed_size, refine_levels=param%seed%refine_levels)
+      call init_seeder(seeder, error, sample_size=param%seed%seed_size, refine_levels=param%seed%refine_levels)
       if (allocated(error)) return
       call cluster_build_input(cavity, nthreads, geometry)
       call seeder%build(cavity%lsf_model, geometry, error)
-   end subroutine build_cluster_rmesh
+   end subroutine build_cluster_lattice
 
-   !> The built mesh does not depend on the build's thread count
+   !> The built lattice does not depend on the build's thread count
    !>
-   !> @param[out] error Meshes differ
-   subroutine test_rmesh_thread_independent(error)
+   !> @param[out] error Lattices differ
+   subroutine test_lattice_thread_independent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Shared serial context
@@ -2837,15 +2841,15 @@ contains
       call new_context(ctx, verbosity=0, nthreads=1)
       allocate (cavity)
       call build_cluster_anchors(cavity, ctx, mol, 302, 0.8_wp, lsf, native_error)
-      if (.not. allocated(native_error)) call build_cluster_rmesh(cavity, 1, serial, native_error)
-      if (.not. allocated(native_error)) call build_cluster_rmesh(cavity, 3, threaded, native_error)
+      if (.not. allocated(native_error)) call build_cluster_lattice(cavity, 1, serial, native_error)
+      if (.not. allocated(native_error)) call build_cluster_lattice(cavity, 3, threaded, native_error)
       if (allocated(native_error)) then
          call test_failed(error, native_error%message)
          return
       end if
       call check(error, serial%nsample, threaded%nsample, message="Sample counts differ")
       if (allocated(error)) return
-      call check(error, serial%nsample > 0, message="The mesh holds no sample")
+      call check(error, serial%nsample > 0, message="The lattice holds no sample")
       if (allocated(error)) return
       call check(error, all(serial%y == threaded%y) .and. all(serial%normal == threaded%normal) &
                  .and. all(serial%form == threaded%form), message="Samples differ between thread counts")
@@ -2853,15 +2857,173 @@ contains
       call check(error, serial%cover == threaded%cover, message="Covering radii differ")
       deallocate (cavity)
       call ctx%delete()
-   end subroutine test_rmesh_thread_independent
+   end subroutine test_lattice_thread_independent
+
+   !> A lattice along turned axes turns the samples with the molecule
+   !>
+   !> - the molecule, its anchors and the lattice axes turned by `q` about the
+   !>   centroid and moved: the samples turn and move along to rounding
+   !> - control: the turned molecule on the lab axes gives other samples
+   !>
+   !> @param[out] error Samples do not follow the axes
+   subroutine test_lattice_axes_covariant(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Positions and normals of the turned samples, against the samples turned here
+      real(wp), parameter :: tol = 1.0e-9_wp
+      !> Shared serial context
+      type(moist_context_type), target :: ctx
+      !> Anchor-phase cavities of the molecule and of its turned copy
+      type(cavity_type_drop), allocatable :: cavity, turned
+      !> Fixture geometry and its turned copy
+      type(structure_type) :: mol, mol_q
+      !> Level sets of both
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf, lsf_q
+      !> Seeders: lab axes, turned axes, turned molecule on the lab axes
+      type(projection_seeder_type) :: ref, follow, control
+      !> Build inputs
+      type(seed_build_type) :: geometry, geometry_q
+      !> Level-4 settings
+      type(moist_cavity_drop_parameters_type) :: param
+      type(moist_error_type), allocatable :: native_error
+      real(wp) :: q(3, 3), c(3), shift(3), dev
+      !> Finest lattice spacing; edge keys of the samples and their sort order
+      real(wp) :: unit
+      real(wp), allocatable :: key_ref(:), key_follow(:)
+      integer, allocatable :: p_ref(:), p_follow(:)
+      integer :: k
+
+      q = turn(0.7_wp, -1.3_wp, 0.25_wp)
+      shift = [0.4_wp, -0.9_wp, 1.7_wp]
+      call new(mol, [6, 6, 6], reshape([0.0_wp, 0.0_wp, 0.0_wp, &
+                                        5.2_wp, 0.3_wp, 0.0_wp, &
+                                        2.4_wp, 4.6_wp, 0.7_wp], [3, 3]))
+      c = sum(mol%xyz, dim=2)/3.0_wp
+      call new(mol_q, [6, 6, 6], moved(mol%xyz))
+      call new_context(ctx, verbosity=0, nthreads=1)
+      allocate (cavity, turned)
+      call build_cluster_anchors(cavity, ctx, mol, 302, 0.8_wp, lsf, native_error)
+      if (.not. allocated(native_error)) call build_cluster_anchors(turned, ctx, mol_q, 302, 0.8_wp, lsf_q, &
+                                                                    native_error)
+      if (.not. allocated(native_error)) then
+         param = cavity%param
+         param%proj_level = 4
+         call param%compute_derived(native_error)
+      end if
+      if (.not. allocated(native_error)) call build_cluster_lattice(cavity, 1, ref, native_error)
+      if (.not. allocated(native_error)) then
+         call init_seeder(follow, native_error, sample_size=param%seed%seed_size, &
+                        refine_levels=param%seed%refine_levels)
+      end if
+      if (.not. allocated(native_error)) then
+         call init_seeder(control, native_error, sample_size=param%seed%seed_size, &
+                        refine_levels=param%seed%refine_levels)
+      end if
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+      ! The anchors of the molecule, turned, so both builds see the same region
+      call cluster_build_input(cavity, 1, geometry)
+      geometry_q = geometry
+      geometry_q%centers = mol_q%xyz
+      geometry_q%anchors = moved(geometry%anchors)
+      call control%build(turned%lsf_model, geometry_q, native_error)
+      if (.not. allocated(native_error)) then
+         geometry_q%axes = q
+         call follow%build(turned%lsf_model, geometry_q, native_error)
+      end if
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+
+      call check(error, ref%nsample > 0, message="The lattice holds no sample")
+      if (allocated(error)) return
+      call check(error, follow%nsample, ref%nsample, message="Turned axes change the sample count")
+      if (allocated(error)) return
+      ! Samples paired by their edge: a midpoint on a bin face is binned by
+      ! rounding, so the sample order may differ
+      unit = param%seed%seed_size/2.0_wp**param%seed%refine_levels
+      key_ref = edge_keys(ref)
+      key_follow = edge_keys(follow)
+      allocate (p_ref(ref%nsample), p_follow(ref%nsample))
+      call sort_index(key_ref, p_ref)
+      call sort_index(key_follow, p_follow)
+      call check(error, all(key_ref == key_follow), message="Turned axes change the sampled edges")
+      if (allocated(error)) return
+      dev = 0.0_wp
+      do k = 1, ref%nsample
+         dev = max(dev, maxval(abs(follow%y(:, p_follow(k)) - (c + shift + matmul(q, ref%y(:, p_ref(k)) - c)))))
+         dev = max(dev, maxval(abs(follow%normal(:, p_follow(k)) - matmul(q, ref%normal(:, p_ref(k))))))
+      end do
+      call check(error, dev <= tol, message="Samples do not turn with the axes, deviation "// &
+                 to_string(dev, "(es10.3)"))
+      if (allocated(error)) return
+      call check(error, abs(follow%cover - ref%cover) <= tol, message="Covering radius changed")
+      if (allocated(error)) return
+
+      ! Control: on the lab axes the turned molecule meets other edges
+      call check(error, control%nsample /= ref%nsample, &
+                 message="Control: the lab lattice samples as many edges as the turned one")
+      deallocate (cavity, turned)
+      call ctx%delete()
+
+   contains
+
+      !> Points turned by `q` about the centroid `c` and moved by `shift`
+      pure function moved(x) result(y)
+         !> Points (3, n)
+         real(wp), intent(in) :: x(:, :)
+         !> Turned and moved points (3, n)
+         real(wp) :: y(3, size(x, 2))
+         integer :: i
+
+         do i = 1, size(x, 2)
+            y(:, i) = c + shift + matmul(q, x(:, i) - c)
+         end do
+      end function moved
+
+      !> Key of each sample's edge: its midpoint in half finest units from the
+      !> lattice origin, in the lattice frame, packed exactly into a real
+      function edge_keys(seeder) result(key)
+         !> Built seeder
+         type(projection_seeder_type), intent(in) :: seeder
+         !> Keys (nsample)
+         real(wp), allocatable :: key(:)
+         !> Offset making a coordinate non-negative, below 2**17
+         real(wp), parameter :: bias = 65536.0_wp
+         real(wp) :: m(3)
+         integer :: i
+
+         allocate (key(seeder%nsample))
+         do i = 1, seeder%nsample
+            m = real(nint(2.0_wp*(seeder%edge_mid(:, i) - seeder%frame%origin)/unit), wp) + bias
+            key(i) = m(1) + 131072.0_wp*(m(2) + 131072.0_wp*m(3))
+         end do
+      end function edge_keys
+
+      !> Rotation `R_z(a) R_y(b) R_x(g)`
+      pure function turn(a, b, g) result(r)
+         real(wp), intent(in) :: a, b, g
+         real(wp) :: r(3, 3)
+
+         r = matmul(reshape([cos(a), sin(a), 0.0_wp, -sin(a), cos(a), 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [3, 3]), &
+                    matmul(reshape([cos(b), 0.0_wp, -sin(b), 0.0_wp, 1.0_wp, 0.0_wp, sin(b), 0.0_wp, cos(b)], &
+                                   [3, 3]), &
+                           reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, cos(g), sin(g), 0.0_wp, -sin(g), cos(g)], &
+                                   [3, 3])))
+      end function turn
+
+   end subroutine test_lattice_axes_covariant
 
    !> The level-3 seed filters cut the seeds and keep every row of the unfiltered search
    !>
-   !> - two meshes of the level-3 spacing: the level-3 one with its filters, and
+   !> - two seeders of the level-3 spacing: the level-3 one with its filters, and
    !>   one without, as level 4 keeps every sample
    !>
    !> @param[out] error Filter did not reduce seeds or lost a row
-   subroutine test_rmesh_level_filters(error)
+   subroutine test_lattice_level_filters(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Shared serial context
@@ -2872,7 +3034,7 @@ contains
       type(structure_type) :: mol
       !> Reference level set
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      !> Level-3 meshes with and without the filters, and the workers for level 3 and 4
+      !> Level-3 seeders with and without the filters, and the workers for level 3 and 4
       type(projection_seeder_type) :: seeder, unfiltered
       type(seed_build_type) :: geometry
       type(projection_worker_type) :: w3, w4
@@ -2897,13 +3059,13 @@ contains
          call param%compute_derived(native_error)
       end if
       if (.not. allocated(native_error)) then
-         call init_mesh(seeder, native_error, sample_size=param%seed%seed_size, refine_levels=param%seed%refine_levels, &
+         call init_seeder(seeder, native_error, sample_size=param%seed%seed_size, refine_levels=param%seed%refine_levels, &
                           filter_cone=param%seed%filter_cone, filter_grazing=param%seed%filter_grazing, &
                           filter_back_facing=param%seed%filter_back_facing, filter_focal=param%seed%filter_focal, &
                           cone_scale=param%seed%cone_scale)
       end if
       if (.not. allocated(native_error)) then
-         call init_mesh(unfiltered, native_error, sample_size=param%seed%seed_size, &
+         call init_seeder(unfiltered, native_error, sample_size=param%seed%seed_size, &
                               refine_levels=param%seed%refine_levels)
       end if
       if (.not. allocated(native_error)) then
@@ -2958,7 +3120,7 @@ contains
       end do
       deallocate (cavity)
       call ctx%delete()
-   end subroutine test_rmesh_level_filters
+   end subroutine test_lattice_level_filters
 
    !> Every anchor of a cluster cavity through one worker, the raw rows kept
    !>
@@ -3027,7 +3189,7 @@ contains
       end do
    end function rows_covered
 
-   !> Cross cluster of [[test_rmesh_level_filters]] with a soft level set, anchors at 302 points per atom
+   !> Cross cluster of [[test_lattice_level_filters]] with a soft level set, anchors at 302 points per atom
    !>
    !> @param[out]   cavity Anchor-phase cavity
    !> @param[inout] ctx    Borrowed context
@@ -3055,16 +3217,16 @@ contains
 
    !> Level 2 finalizes a close fully open local point and otherwise searches as level 3
    !>
-   !> - the cross cluster at level 2, and at level 3 with level 2's mesh spacing
+   !> - the cross cluster at level 2, and at level 3 with level 2's sample spacing
    !>   and seed filters, so only the routing differs; each worker builds its own
-   !>   mesh from its chunk's search balls
+   !>   lattice from its chunk's search balls
    !> - level 3 searches the anchors level 2 searches and those level 2
    !>   finalizes from a fully open local point within 0.5 Bohr
    !> - an anchor whose nearest point lies beyond 0.5 Bohr keeps the same
    !>   relevant rows at both levels; a nearer one keeps a subset at level 2
    !>
    !> @param[out] error Level 2 routed or searched differently
-   subroutine test_level2_selective_rmesh(error)
+   subroutine test_level2_selective_lattice(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Shared serial context
@@ -3136,11 +3298,11 @@ contains
       end do
       deallocate (cavity)
       call ctx%delete()
-   end subroutine test_level2_selective_rmesh
+   end subroutine test_level2_selective_lattice
 
    !> Level 2's seed filters cut seeds and keep every relevant row
    !>
-   !> - the cross cluster of [[test_level2_selective_rmesh]] at level 2, at
+   !> - the cross cluster of [[test_level2_selective_lattice]] at level 2, at
    !>   level 2 without its back-facing or its grazing filter, with the focal
    !>   filter alone, without any filter, with a wider tangent cone (2.0), and
    !>   with that wider cone alone
@@ -3247,7 +3409,7 @@ contains
    !>   atom bounds for every ball and decides each bin alike
    !>
    !> @param[out] error Shell and inner ball do not partition the ball
-   subroutine test_rmesh_shell_query(error)
+   subroutine test_lattice_shell_query(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
@@ -3266,7 +3428,7 @@ contains
 
       call sphere_lsf(lsf, rs, error)
       if (allocated(error)) return
-      call init_mesh(seeder, failed, sample_size=0.2_wp, refine_levels=1)
+      call init_seeder(seeder, failed, sample_size=0.2_wp, refine_levels=1)
       if (allocated(failed)) then
          call test_failed(error, "init: "//failed%message)
          return
@@ -3370,7 +3532,7 @@ contains
          disjoint = .true.
       end function disjoint
 
-   end subroutine test_rmesh_shell_query
+   end subroutine test_lattice_shell_query
 
    !> SSES geometry of three atoms with anchors on their spheres
    !>
@@ -3404,14 +3566,14 @@ contains
       geometry%reach = 5.67_wp
    end subroutine sses_cluster
 
-   !> An SSES mesh does not depend on the build's thread count
+   !> An SSES lattice does not depend on the build's thread count
    !>
    !> - SSES warm-starts its moment solve from the last point a clone evaluated;
    !>   every build slice starts without that history, so builds at 1 and 3
    !>   threads, and two at 3, give the same samples bit for bit
    !>
-   !> @param[out] error Meshes differ
-   subroutine test_rmesh_sses_thread_independent(error)
+   !> @param[out] error Lattices differ
+   subroutine test_lattice_sses_thread_independent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_lsf_sses_type) :: lsf
@@ -3422,17 +3584,17 @@ contains
       integer :: run
 
       call sses_cluster(lsf, mol, geometry)
-      call init_mesh(serial, failed, sample_size=0.5_wp, refine_levels=0)
+      call init_seeder(serial, failed, sample_size=0.5_wp, refine_levels=0)
       if (.not. allocated(failed)) call serial%build(lsf, geometry, failed)
       if (allocated(failed)) then
          call test_failed(error, "serial build: "//failed%message)
          return
       end if
-      call check(error, serial%nsample > 0, message="The mesh holds no sample")
+      call check(error, serial%nsample > 0, message="The lattice holds no sample")
       if (allocated(error)) return
       do run = 1, 2
          geometry%nthreads = 3
-         call init_mesh(threaded, failed, sample_size=0.5_wp, refine_levels=0)
+         call init_seeder(threaded, failed, sample_size=0.5_wp, refine_levels=0)
          if (.not. allocated(failed)) call threaded%build(lsf, geometry, failed)
          if (allocated(failed)) then
             call test_failed(error, "threaded build: "//failed%message)
@@ -3445,7 +3607,7 @@ contains
                     message="Samples differ between thread counts")
          if (allocated(error)) return
       end do
-   end subroutine test_rmesh_sses_thread_independent
+   end subroutine test_lattice_sses_thread_independent
 
    !> An SSES projection does not depend on the thread count
    !>
@@ -3546,7 +3708,7 @@ contains
       geometry%reach = 5.67_wp
    end subroutine single_atom_input
 
-   !> Initialize a mesh seeder from the default seed settings and the given overrides
+   !> Initialize a lattice seeder from the default seed settings and the given overrides
    !>
    !> @param[inout] seeder             Seeder
    !> @param[out]   error              Refused settings
@@ -3557,7 +3719,7 @@ contains
    !> @param[in]    filter_back_facing Back-facing filter
    !> @param[in]    filter_focal       Focal filter
    !> @param[in]    cone_scale         Tangent-cone scale
-   subroutine init_mesh(seeder, error, sample_size, refine_levels, filter_cone, filter_grazing, &
+   subroutine init_seeder(seeder, error, sample_size, refine_levels, filter_cone, filter_grazing, &
                         filter_back_facing, filter_focal, cone_scale)
       type(projection_seeder_type), intent(inout) :: seeder
       type(moist_error_type), allocatable, intent(out) :: error
@@ -3579,30 +3741,30 @@ contains
       if (present(filter_focal)) seed%filter_focal = filter_focal
       if (present(cone_scale)) seed%cone_scale = cone_scale
       call seeder%init(seed, error)
-   end subroutine init_mesh
+   end subroutine init_seeder
 
    !> A nonpositive sample size is refused
-   subroutine test_bad_rmesh_sample_size(error)
+   subroutine test_bad_lattice_sample_size(error)
       type(error_type), allocatable, intent(out) :: error
       type(projection_seeder_type) :: seeder
       type(moist_error_type), allocatable :: failed
 
-      call init_mesh(seeder, failed, sample_size=0.0_wp)
-      call expect_error(error, failed, "Surface mesh seeder: sample size must be positive")
-   end subroutine test_bad_rmesh_sample_size
+      call init_seeder(seeder, failed, sample_size=0.0_wp)
+      call expect_error(error, failed, "Lattice seeder: sample size must be positive")
+   end subroutine test_bad_lattice_sample_size
 
    !> A negative refinement depth is refused
-   subroutine test_bad_rmesh_refine_levels(error)
+   subroutine test_bad_lattice_refine_levels(error)
       type(error_type), allocatable, intent(out) :: error
       type(projection_seeder_type) :: seeder
       type(moist_error_type), allocatable :: failed
 
-      call init_mesh(seeder, failed, refine_levels=-1)
-      call expect_error(error, failed, "Surface mesh seeder: refine_levels must not be negative")
-   end subroutine test_bad_rmesh_refine_levels
+      call init_seeder(seeder, failed, refine_levels=-1)
+      call expect_error(error, failed, "Lattice seeder: refine_levels must not be negative")
+   end subroutine test_bad_lattice_refine_levels
 
    !> A build before `init` is refused
-   subroutine test_bad_rmesh_build_before_init(error)
+   subroutine test_bad_lattice_build_before_init(error)
       type(error_type), allocatable, intent(out) :: error
       type(projection_seeder_type) :: seeder
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
@@ -3620,11 +3782,11 @@ contains
       end if
       call single_atom_input(geometry)
       call seeder%build(lsf, geometry, failed)
-      call expect_error(error, failed, "Surface mesh seeder: build before init")
-   end subroutine test_bad_rmesh_build_before_init
+      call expect_error(error, failed, "Lattice seeder: build before init")
+   end subroutine test_bad_lattice_build_before_init
 
    !> Seeding before the build is refused
-   subroutine test_bad_rmesh_seed_before_build(error)
+   subroutine test_bad_lattice_seed_before_build(error)
       type(error_type), allocatable, intent(out) :: error
       type(projection_seeder_type) :: seeder
       type(seeder_scratch_type) :: scratch
@@ -3641,16 +3803,16 @@ contains
          setup%stat = 0
          return
       end if
-      call init_mesh(seeder, failed)
+      call init_seeder(seeder, failed)
       if (allocated(failed)) return
       request%anchor = [rs, 0.0_wp, 0.0_wp]
       request%pdist_start = 1.0_wp
       call seeder%seed(scratch, lsf, request, failed)
-      call expect_error(error, failed, "Surface mesh seeder: seed before build")
-   end subroutine test_bad_rmesh_seed_before_build
+      call expect_error(error, failed, "Lattice seeder: seed before build")
+   end subroutine test_bad_lattice_seed_before_build
 
    !> Radii that do not match the centers are refused
-   subroutine test_bad_rmesh_radii(error)
+   subroutine test_bad_lattice_radii(error)
       type(error_type), allocatable, intent(out) :: error
       type(projection_seeder_type) :: seeder
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
@@ -3666,16 +3828,16 @@ contains
          setup%stat = 0
          return
       end if
-      call init_mesh(seeder, failed)
+      call init_seeder(seeder, failed)
       if (allocated(failed)) return
       call single_atom_input(geometry)
       geometry%radii = [3.0_wp, 3.0_wp]
       call seeder%build(lsf, geometry, failed)
-      call expect_error(error, failed, "Surface mesh seeder: one radius per atom center required")
-   end subroutine test_bad_rmesh_radii
+      call expect_error(error, failed, "Lattice seeder: one radius per atom center required")
+   end subroutine test_bad_lattice_radii
 
    !> A nonpositive reach is refused
-   subroutine test_bad_rmesh_reach(error)
+   subroutine test_bad_lattice_reach(error)
       type(error_type), allocatable, intent(out) :: error
       type(projection_seeder_type) :: seeder
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
@@ -3691,16 +3853,16 @@ contains
          setup%stat = 0
          return
       end if
-      call init_mesh(seeder, failed)
+      call init_seeder(seeder, failed)
       if (allocated(failed)) return
       call single_atom_input(geometry)
       geometry%reach = 0.0_wp
       call seeder%build(lsf, geometry, failed)
-      call expect_error(error, failed, "Surface mesh seeder: reach must be positive")
-   end subroutine test_bad_rmesh_reach
+      call expect_error(error, failed, "Lattice seeder: reach must be positive")
+   end subroutine test_bad_lattice_reach
 
-   !> A region beyond the lattice key range is refused
-   subroutine test_bad_rmesh_lattice_range(error)
+   !> Lattice axes that are not a proper rotation are refused
+   subroutine test_bad_lattice_axes(error)
       type(error_type), allocatable, intent(out) :: error
       type(projection_seeder_type) :: seeder
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
@@ -3716,49 +3878,75 @@ contains
          setup%stat = 0
          return
       end if
-      call init_mesh(seeder, failed)
+      call init_seeder(seeder, failed)
+      if (allocated(failed)) return
+      call single_atom_input(geometry)
+      ! A reflection: orthonormal, determinant -1
+      geometry%axes(:, 3) = -geometry%axes(:, 3)
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Lattice seeder: lattice axes must be a proper rotation")
+   end subroutine test_bad_lattice_axes
+
+   !> A region beyond the lattice key range is refused
+   subroutine test_bad_lattice_key_range(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: rs
+      !> Fixture failure, discarded: a clean return fails the inverted test
+      type(error_type), allocatable :: setup
+
+      call sphere_lsf(lsf, rs, setup)
+      if (allocated(setup)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         setup%stat = 0
+         return
+      end if
+      call init_seeder(seeder, failed)
       if (allocated(failed)) return
       geometry%centers = reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.0e8_wp, 0.0_wp, 0.0_wp], [3, 2])
       geometry%radii = [3.0_wp, 3.0_wp]
       geometry%anchors = reshape([3.0_wp, 0.0_wp, 0.0_wp], [3, 1])
       geometry%reach = 5.67_wp
       call seeder%build(lsf, geometry, failed)
-      call expect_error(error, failed, "Surface mesh seeder: the region does not fit the lattice keys; "// &
+      call expect_error(error, failed, "Lattice seeder: the region does not fit the lattice keys; "// &
                         "raise the sample size or split the geometry")
-   end subroutine test_bad_rmesh_lattice_range
+   end subroutine test_bad_lattice_key_range
 
    !> An infinite sample size is refused
-   subroutine test_bad_rmesh_sample_size_infinite(error)
+   subroutine test_bad_lattice_sample_size_infinite(error)
       type(error_type), allocatable, intent(out) :: error
       type(projection_seeder_type) :: seeder
       type(moist_error_type), allocatable :: failed
 
-      call init_mesh(seeder, failed, sample_size=ieee_value(1.0_wp, ieee_positive_inf))
-      call expect_error(error, failed, "Surface mesh seeder: sample size must be finite")
-   end subroutine test_bad_rmesh_sample_size_infinite
+      call init_seeder(seeder, failed, sample_size=ieee_value(1.0_wp, ieee_positive_inf))
+      call expect_error(error, failed, "Lattice seeder: sample size must be finite")
+   end subroutine test_bad_lattice_sample_size_infinite
 
    !> A negative tangent-cone scale is refused
-   subroutine test_bad_rmesh_cone_scale(error)
+   subroutine test_bad_lattice_cone_scale(error)
       type(error_type), allocatable, intent(out) :: error
       type(projection_seeder_type) :: seeder
       type(moist_error_type), allocatable :: failed
 
-      call init_mesh(seeder, failed, cone_scale=-1.5_wp)
-      call expect_error(error, failed, "Surface mesh seeder: cone scale must be positive")
-   end subroutine test_bad_rmesh_cone_scale
+      call init_seeder(seeder, failed, cone_scale=-1.5_wp)
+      call expect_error(error, failed, "Lattice seeder: cone scale must be positive")
+   end subroutine test_bad_lattice_cone_scale
 
    !> An infinite tangent-cone scale is refused
-   subroutine test_bad_rmesh_cone_scale_infinite(error)
+   subroutine test_bad_lattice_cone_scale_infinite(error)
       type(error_type), allocatable, intent(out) :: error
       type(projection_seeder_type) :: seeder
       type(moist_error_type), allocatable :: failed
 
-      call init_mesh(seeder, failed, cone_scale=ieee_value(1.0_wp, ieee_positive_inf))
-      call expect_error(error, failed, "Surface mesh seeder: cone scale must be finite")
-   end subroutine test_bad_rmesh_cone_scale_infinite
+      call init_seeder(seeder, failed, cone_scale=ieee_value(1.0_wp, ieee_positive_inf))
+      call expect_error(error, failed, "Lattice seeder: cone scale must be finite")
+   end subroutine test_bad_lattice_cone_scale_infinite
 
    !> Anchors without an atom center are refused
-   subroutine test_bad_rmesh_anchors_without_atoms(error)
+   subroutine test_bad_lattice_anchors_without_atoms(error)
       type(error_type), allocatable, intent(out) :: error
       type(projection_seeder_type) :: seeder
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
@@ -3774,14 +3962,14 @@ contains
          setup%stat = 0
          return
       end if
-      call init_mesh(seeder, failed)
+      call init_seeder(seeder, failed)
       if (allocated(failed)) return
       call single_atom_input(geometry)
       deallocate (geometry%centers, geometry%radii)
       allocate (geometry%centers(3, 0), geometry%radii(0))
       call seeder%build(lsf, geometry, failed)
-      call expect_error(error, failed, "Surface mesh seeder: anchors without an atom center")
-   end subroutine test_bad_rmesh_anchors_without_atoms
+      call expect_error(error, failed, "Lattice seeder: anchors without an atom center")
+   end subroutine test_bad_lattice_anchors_without_atoms
 
    !> The back-facing filter is skipped for a request without an owner
    !>
@@ -3790,7 +3978,7 @@ contains
    !>   anchor without an accepted local point
    !>
    !> @param[out] error A request without an owner was filtered
-   subroutine test_rmesh_back_facing_needs_owner(error)
+   subroutine test_lattice_back_facing_needs_owner(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
@@ -3805,7 +3993,7 @@ contains
 
       call sphere_lsf(lsf, rs, error)
       if (allocated(error)) return
-      call init_mesh(seeder, failed, filter_back_facing=.true.)
+      call init_seeder(seeder, failed, filter_back_facing=.true.)
       if (allocated(failed)) then
          call test_failed(error, "init: "//failed%message)
          return
@@ -3852,7 +4040,7 @@ contains
          n = scratch%n_points
       end subroutine count_seeds
 
-   end subroutine test_rmesh_back_facing_needs_owner
+   end subroutine test_lattice_back_facing_needs_owner
 
    !* ================================================================================= *!
    !*                              Spherical chart seeder                               *!

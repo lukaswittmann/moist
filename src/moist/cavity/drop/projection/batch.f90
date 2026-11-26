@@ -15,6 +15,7 @@ module moist_cavity_drop_projection_batch
 
    public :: projection_batch_type
    public :: point_pending, point_converged, point_accepted, point_captured, point_failed
+   public :: default_batch_size
 
    !* ================================================================================= *!
    !*                                Column status codes                                *!

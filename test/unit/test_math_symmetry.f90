@@ -25,7 +25,7 @@ module test_math_symmetry
       & frame_level_none, frame_level_eigen, frame_level_plane, frame_level_sphere, frame_level_axial, &
       & frame_level_name, frame_level_codes, sym_threshold_type, new_sym_frame
    use moist_math_symmetry_embed, only: is_oh_element, site_candidates, neighbour_form_type, &
-      & new_neighbour_form, compare_forms
+      & new_neighbour_form, compare_forms, operation_axis, axis_class_invalid
    use moist_math_symmetry_orient, only: sym_orient_type, new_sym_orient, sym_orient_vjp, &
       & sym_orient_jacobian, orient_lab, orient_molecular, orient_codes
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
@@ -63,6 +63,8 @@ contains
                   new_unittest("rotations_modulo_oh", test_rotations_modulo_oh), &
                   new_unittest("rotations_modulo_oh_covariant", test_rotations_modulo_oh_covariant), &
                   new_unittest("lab_and_molecular_modes", test_lab_and_molecular), &
+                  new_unittest("lattice_follows_frame_and_group", test_lattice_axes), &
+                  new_unittest("lattice_covariant", test_lattice_covariant), &
                   new_unittest("explicit_c1_like_off", test_explicit_c1), &
                   new_unittest("orbits", test_orbits), &
                   new_unittest("frame_levels", test_frame_levels), &
@@ -544,6 +546,105 @@ contains
       call check(error, abs(det(orient%rotation(:, :, 1)) - 1.0_wp) < 1.0e-12_wp, &
          & "frame is not a proper rotation")
    end subroutine test_lab_and_molecular
+
+   !> Lattice axes: the identity in the lab, the frame without a group, and
+   !> mapped onto themselves by every operation of a group that fits a cube
+   !>
+   !> - a group fits a cube when every proper part is a rotation by 90, 120
+   !>   or 180 degrees (or none); otherwise the lattice keeps the frame
+   !> - non-vacuity: both kinds among the molecules
+   subroutine test_lattice_axes(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      character(len=12), parameter :: names(10) = [character(len=12) :: "water", "ammonia", &
+         & "methane", "benzene", "bf3", "sf6", "icosahedron", "co2", "hcn", "oh48"]
+      type(sym_orient_type) :: orient
+      type(moist_error_type), allocatable :: merr
+      real(wp), allocatable :: xyz(:, :)
+      integer, allocatable :: z(:)
+      real(wp) :: l(3, 3), axis(3)
+      integer :: im, ig, cls, nfit, nfree
+      logical :: fits
+
+      call molecule("c1", xyz, z)
+      call new_sym_orient(orient, xyz, z, orient_lab, "off", TOL, merr)
+      call check(error, .not. allocated(merr), "lab mode failed")
+      if (allocated(error)) return
+      call check(error, all(orient%lattice == identity3), "lab lattice is not exactly the identity")
+      if (allocated(error)) return
+      call new_sym_orient(orient, xyz, z, orient_molecular, "off", TOL, merr)
+      call check(error, .not. allocated(merr), "molecular mode failed")
+      if (allocated(error)) return
+      call check(error, all(orient%lattice == orient%frame%axes), "molecular lattice is not the frame")
+      if (allocated(error)) return
+
+      nfit = 0
+      nfree = 0
+      do im = 1, size(names)
+         call orient_of(error, names(im), "auto", xyz, z, orient)
+         if (allocated(error)) return
+         l = orient%lattice
+         call check(error, abs(det(l) - 1.0_wp) < 1.0e-12_wp .and. &
+            & maxval(abs(matmul(transpose(l), l) - identity3)) < 1.0e-12_wp, &
+            & trim(names(im))//": lattice axes are not a proper rotation")
+         if (allocated(error)) return
+         fits = .true.
+         do ig = 1, size(orient%ops, 3)
+            call operation_axis(orient%ops(:, :, ig), axis, cls)
+            fits = fits .and. cls /= axis_class_invalid
+         end do
+         if (fits) then
+            nfit = nfit + 1
+            do ig = 1, size(orient%ops, 3)
+               call check(error, is_oh_element(matmul(transpose(l), matmul(orient%ops(:, :, ig), l))), &
+                  & trim(names(im))//" ("//orient%group_used//"): lattice not invariant under operation " &
+                  & //to_string(ig))
+               if (allocated(error)) return
+            end do
+         else
+            nfree = nfree + 1
+            call check(error, all(l == orient%frame%axes), &
+               & trim(names(im))//" ("//orient%group_used//"): a group without a cube must keep the frame")
+            if (allocated(error)) return
+         end if
+      end do
+      call check(error, nfit > 0 .and. nfree > 0, "fixture lacks a group with or without a cube")
+   end subroutine test_lattice_axes
+
+   !> Lattice axes turn with the molecule, modulo Oh, under rotation,
+   !> translation and renumbering
+   !>
+   !> - ammonia ties two orientations about its axis, which the neighbour
+   !>   form of the centroid breaks; c1 has no group, so the lattice is the frame
+   subroutine test_lattice_covariant(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      character(len=12), parameter :: names(4) = [character(len=12) :: "ammonia", "methane", "c1", &
+         & "water"]
+      type(sym_orient_type) :: o1, o2
+      type(moist_error_type), allocatable :: merr
+      real(wp), allocatable :: xyz(:, :), moved(:, :)
+      integer, allocatable :: z(:)
+      real(wp) :: q(3, 3)
+      integer :: im, nat
+
+      q = rotation_matrix(0.7_wp, -1.3_wp, 0.25_wp)
+      do im = 1, size(names)
+         call orient_of(error, names(im), "auto", xyz, z, o1)
+         if (allocated(error)) return
+         nat = size(xyz, 2)
+         moved = transformed(xyz, q, [0.9_wp, -1.4_wp, 0.3_wp])
+         call new_sym_orient(o2, moved(:, nat:1:-1), z(nat:1:-1), orient_molecular, "auto", TOL, merr)
+         call check(error, .not. allocated(merr), trim(names(im))//": moved copy failed")
+         if (allocated(error)) return
+         ! L2 = Q L1 o with o in Oh
+         call check(error, is_oh_element(matmul(transpose(o1%lattice), matmul(transpose(q), o2%lattice))), &
+            & trim(names(im))//": lattice axes do not turn with the molecule")
+         if (allocated(error)) return
+      end do
+   end subroutine test_lattice_covariant
 
    !* ================================================================================= *!
    !*                                 Molecular frame                                   *!

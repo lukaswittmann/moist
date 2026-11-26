@@ -2,7 +2,7 @@
 !> horizon gate, the focal gate at umbilics, optimality classification, saddle escape (sphere, necks,
 !> multi-sphere clusters, the threshold band and inflection points), retraction,
 !> and the single-anchor projection entry at every level, including the coarse
-!> mesh retry of a failed local solve and an anchor without surface in reach
+!> lattice retry of a failed local solve and an anchor without surface in reach
 module test_cavity_drop_projector
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
@@ -1620,7 +1620,7 @@ contains
 
    end subroutine test_project_midpoint
 
-   !> A failed local solve at level 1 is retried from its coarse mesh and
+   !> A failed local solve at level 1 is retried from its coarse lattice and
    !> finds the points of a level-3 search
    !>
    !> - midpoint of a carbon pair, where the vanishing gradient stalls Newton
@@ -1781,7 +1781,7 @@ contains
    end subroutine test_project_nearest_confirmed
 
    !> At the default level a fully open local point seeds its branch window from
-   !> the worker's own surface mesh and finds the branch behind it
+   !> the worker's own seed lattice and finds the branch behind it
    !>
    !> - carbon pair, the anchor on the axis 0.5 Bohr off the midpoint: the local
    !>   point is the near atom's pole, the far atom's pole 1 Bohr farther lies in
@@ -1820,7 +1820,7 @@ contains
       if (allocated(error)) return
       call check(error, seeds > 0, "the window holds seeds")
       if (allocated(error)) return
-      call check(error, worker%seeder%built .and. worker%seeder%nsample > 0, "the worker built its surface mesh")
+      call check(error, worker%seeder%built .and. worker%seeder%nsample > 0, "the worker built its seed lattice")
       if (allocated(error)) return
       call check(error, n, 2, "the branch behind the local point is found")
       if (allocated(error)) return

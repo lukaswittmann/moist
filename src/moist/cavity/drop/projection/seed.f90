@@ -1,4 +1,4 @@
-!> Surface mesh seeder of the batched DROP projection
+!> Lattice seeder of the batched DROP projection
 !>
 !> - `init` from the level's seed-step settings
 !> - `build` once per geometry, between the local and the search pass
@@ -10,12 +10,19 @@
 !> - seeds within `radius + reach` stand for the surface inside `radius`
 !> - same seeds at any thread count: fixed level set slices, clones without
 !>   history
+!> - lattice frame ([[lattice_frame_type]]): cells, edge midpoints and bins
+!>   live in `o + A^T (x - o)`, `o` the centroid and `A` the axes; positions
+!>   handed to the level set, samples and seeds are lab positions; lab axes
+!>   (`A = I`) skip the map, so their seeds are bitwise those of a seeder
+!>   without axes
 !>
 !> Build ([[seeder_build]], `seed/`):
 !>
 !> 1. region: union of the seeded anchors' largest balls (`radius_max`)
-!> 2. lattice on the atom centroid, spacing `h 2^(m - s)`; `h = seed_size`,
-!>    coarsest spacing at most [[discovery_size]], `refine_levels` below `h`
+!> 2. lattice on the atom centroid along `axes` (the cavity's grid model,
+!>    [[grid_model_type:lattice_axes]]), spacing `h 2^(m - s)`;
+!>    `h = seed_size`, coarsest spacing at most [[discovery_size]],
+!>    `refine_levels` below `h`
 !> 3. `discover.f90`: coarse nodes within a cell diagonal of the region
 !> 4. `refine.f90`: cells split while they change sign or lack a surface-free
 !>    certificate (corner `exclusion_radius` balls); below `h` only cells
@@ -35,18 +42,20 @@
 !> - `reach`: covering radius plus longest retraction and pre-step
 module moist_cavity_drop_projection_seed
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-   use, intrinsic :: iso_fortran_env, only: int8, int64, output_unit
+   use, intrinsic :: iso_fortran_env, only: int8, int64
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_projection_parameters, only: drop_seed_parameters_type
    use moist_cavity_drop_projection_seed_lattice, only: key_bits, key_table_type, table_init, table_find, &
                                                        table_insert, lattice_key, segment_crossing, &
-                                                       build_probe_type, evaluate_slices
+                                                       build_probe_type, evaluate_slices, lattice_frame_type
    use moist_utils_mem, only: grow_array
+   use moist_math_linalg_geometry, only: identity3, is_rotation
    use moist_math_linalg, only: setup_tangent_frame
    use moist_math_packed, only: unpack_sym_matrix
    use moist_math_sorter, only: sort_index
+   use moist_utils_prettyprint, only: prettyprinter
    implicit none(type, external)
    private
 
@@ -113,6 +122,8 @@ module moist_cavity_drop_projection_seed
       real(wp) :: reach = 0.0_wp
       !> Threads the build may use; the result must not depend on it
       integer :: nthreads = 1
+      !> Lattice axes as columns, a proper rotation; the lab axes by default
+      real(wp) :: axes(3, 3) = identity3
    end type seed_build_type
 
    !> Lattice nodes of a build: finest-unit coordinates, values, certificates
@@ -137,8 +148,8 @@ module moist_cavity_drop_projection_seed
    type :: build_type
       !> Level set clones of the build, one per thread
       type(build_probe_type) :: probe
-      !> Lattice origin (Bohr)
-      real(wp) :: origin(3) = 0.0_wp
+      !> Lattice origin and axes
+      type(lattice_frame_type) :: frame
       !> Finest lattice spacing, `h 2^-refine_levels` (Bohr)
       real(wp) :: unit = 1.0_wp
       !> Coarse spacing `h_0` (Bohr)
@@ -172,15 +183,10 @@ module moist_cavity_drop_projection_seed
       real(wp), allocatable :: cand_x0(:, :), cand_dist(:)
    end type seeder_scratch_type
 
-   !> Build-first surface mesh seeder; built once, read by every thread
+   !> Build-first lattice seeder; built once, read by every thread
    type :: projection_seeder_type
 
       !* ---------------------------------- Settings ---------------------------------- *!
-
-      !> Build and per-request reports
-      logical :: debug = .false.
-      !> Report unit
-      integer :: unit = output_unit
 
       !> Sample spacing `h`, the finest regular lattice (Bohr)
       real(wp) :: sample_size = 1.0_wp
@@ -200,10 +206,12 @@ module moist_cavity_drop_projection_seed
       !> Whether `init` ran
       logical :: initialized = .false.
 
-      !* -------------------------------- Built mesh --------------------------------- *!
+      !* ------------------------------- Built lattice -------------------------------- *!
 
       !> Whether `build` ran for the current geometry
       logical :: built = .false.
+      !> Lattice origin and axes
+      type(lattice_frame_type) :: frame
       !> Samples
       integer :: nsample = 0
       !> Retracted positions (3, nsample)
@@ -239,12 +247,12 @@ module moist_cavity_drop_projection_seed
       integer :: n_cross = 0
       integer :: n_order1 = 0
       integer :: n_order2 = 0
-      !> Bytes held by the built mesh
-      integer(int64) :: mesh_bytes = 0_int64
+      !> Bytes held by the built lattice
+      integer(int64) :: lattice_bytes = 0_int64
    contains
       !> Validate the settings
       procedure :: init => seeder_init
-      !> Build the mesh for one geometry
+      !> Build the seed lattice for one geometry
       procedure :: build => seeder_build
       !> Seeds of one anchor
       procedure :: seed => seeder_seed
@@ -254,7 +262,7 @@ module moist_cavity_drop_projection_seed
 
    interface
 
-      !> [seed/build.f90] Build the surface mesh for one geometry
+      !> [seed/build.f90] Build the seed lattice for one geometry
       module subroutine seeder_build(self, lsf, geometry, error)
          implicit none(type, external)
          class(projection_seeder_type), intent(inout) :: self
@@ -263,11 +271,11 @@ module moist_cavity_drop_projection_seed
          type(error_type), allocatable, intent(out) :: error
       end subroutine seeder_build
 
-      !> [seed/build.f90] Drop the built mesh
-      module subroutine clear_mesh(self)
+      !> [seed/build.f90] Drop the built lattice
+      module subroutine clear_lattice(self)
          implicit none(type, external)
          type(projection_seeder_type), intent(inout) :: self
-      end subroutine clear_mesh
+      end subroutine clear_lattice
 
       !> [seed/nodes.f90] Lattice step of level `s` in finest units
       pure module function level_step(work, s) result(step)
@@ -277,7 +285,7 @@ module moist_cavity_drop_projection_seed
          integer :: step
       end function level_step
 
-      !> [seed/nodes.f90] Position of a lattice node
+      !> [seed/nodes.f90] Lattice-frame position of a lattice node
       pure module function node_position(work, ijk) result(x)
          implicit none(type, external)
          type(build_type), intent(in) :: work
@@ -350,7 +358,7 @@ module moist_cavity_drop_projection_seed
          integer :: j(3)
       end function bin_coords
 
-      !> [seed/query.f90] Seeds of one anchor from the built mesh, no level set evaluation
+      !> [seed/query.f90] Seeds of one anchor from the built lattice, no level set evaluation
       module subroutine seeder_seed(self, scratch, lsf, request, error)
          implicit none(type, external)
          class(projection_seeder_type), intent(in) :: self
@@ -391,24 +399,24 @@ contains
       self%initialized = .false.
       self%built = .false.
       if (.not. (self%sample_size > 0.0_wp)) then
-         call fatal_error(error, "Surface mesh seeder: sample size must be positive")
+         call fatal_error(error, "Lattice seeder: sample size must be positive")
          return
       end if
       if (.not. ieee_is_finite(self%sample_size)) then
-         call fatal_error(error, "Surface mesh seeder: sample size must be finite")
+         call fatal_error(error, "Lattice seeder: sample size must be finite")
          return
       end if
       if (self%refine_levels < 0) then
-         call fatal_error(error, "Surface mesh seeder: refine_levels must not be negative")
+         call fatal_error(error, "Lattice seeder: refine_levels must not be negative")
          return
       end if
       ! A negative scale acts as its magnitude, a non-finite one switches the cone off
       if (.not. (self%cone_scale > 0.0_wp)) then
-         call fatal_error(error, "Surface mesh seeder: cone scale must be positive")
+         call fatal_error(error, "Lattice seeder: cone scale must be positive")
          return
       end if
       if (.not. ieee_is_finite(self%cone_scale)) then
-         call fatal_error(error, "Surface mesh seeder: cone scale must be finite")
+         call fatal_error(error, "Lattice seeder: cone scale must be finite")
          return
       end if
       self%initialized = .true.
@@ -416,22 +424,22 @@ contains
 
    !> Print the build tallies
    !>
-   !> @param[in] self Seeder
-   subroutine seeder_report(self)
+   !> @param[in]    self Seeder
+   !> @param[inout] pp   Printer, its gate decides whether anything prints
+   subroutine seeder_report(self, pp)
       class(projection_seeder_type), intent(in) :: self
+      type(prettyprinter), intent(inout) :: pp
 
-      !$omp critical (moist_context_io)
-      write (self%unit, "(a)") ""
-      write (self%unit, "(2x,a)") "== Surface mesh seeder build"
-      write (self%unit, "(4x,a,f13.5)") "sample spacing (Bohr)   ", self%sample_size
-      write (self%unit, "(4x,a,i13)") "node probes (order 0)   ", self%n_probes
-      write (self%unit, "(4x,a,i13)") "samples                 ", self%nsample
-      write (self%unit, "(4x,a,i13)") "unresolved cells        ", self%n_unresolved
-      write (self%unit, "(4x,a,i13)") "retraction order 1      ", self%n_order1
-      write (self%unit, "(4x,a,i13)") "retraction order 2      ", self%n_order2
-      write (self%unit, "(4x,a,f13.5)") "covering radius (Bohr)  ", self%cover
-      write (self%unit, "(4x,a,i13)") "mesh bytes              ", self%mesh_bytes
-      !$omp end critical (moist_context_io)
+      call pp%push("Lattice seeder:")
+      call pp%kv("Sample spacing", self%sample_size, "Bohr")
+      call pp%kv("Node probes (order 0)", self%n_probes)
+      call pp%kv("Samples", self%nsample)
+      call pp%kv("Unresolved cells", self%n_unresolved)
+      call pp%kv("Retractions to order 1", self%n_order1)
+      call pp%kv("Retractions to order 2", self%n_order2)
+      call pp%kv("Covering radius", self%cover, "Bohr")
+      call pp%kv("Lattice memory", 1.0e-6_wp*real(self%lattice_bytes, wp), "MB")
+      call pp%pop()
    end subroutine seeder_report
 
 end module moist_cavity_drop_projection_seed

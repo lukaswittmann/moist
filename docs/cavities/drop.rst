@@ -276,8 +276,8 @@ Surface Projection
 
    .. dropdown:: How the branch search works
 
-      .. figure:: /_static/figures/drop/rmesh.svg
-         :name: fig-drop-rmesh
+      .. figure:: /_static/figures/drop/seed-lattice.svg
+         :name: fig-drop-seed-lattice
          :alt: Seed lattice on a smooth model cavity with concave regions: anchors on the reference spheres, adaptive lattice cells, surface samples, and the seeds of one anchor with two points
          :width: 100%
 
@@ -286,7 +286,7 @@ Surface Projection
          **(a)** Lattice cells are split only inside the search balls and only where the surface may pass; every sign-change edge of an unsplit cell gives one sample (blue) on :math:`S=0`.
          **(b)** Zoom into a concave notch (box in a): each sample kept by the seed filters is moved by the osculating pre-step (green, at most one spacing), and Newton converges from these seeds to both projected points (stars), one on each wall.
 
-      - **Seed lattice**: built once per geometry over the search balls of the anchors to be searched. Lattice cells are split while they hold a sign change or are not certified surface-free; every sign-change edge gives one sample, retracted onto the surface. SSES provides no surface-free bound, so its lattice is refined everywhere and costs more.
+      - **Seed lattice**: built once per geometry over the search balls of the anchors to be searched. Lattice cells are split while they hold a sign change or are not surface-free; every sign-change edge gives one sample, retracted onto the surface. With a symmetry model (:ref:`cavity-symmetry`) the lattice is turned with the molecule: along the molecular frame, or along the closest orientation the symmetry group maps onto itself, so the seeds then share the symmetry of the molecule.
       - **Seed filters** drop samples that cannot lead to a point with weight:
         
         - ``cone`` (the anchor lies outside the sample's tangent cone),
@@ -300,7 +300,7 @@ Surface Projection
 
       The search counters are printed at verbosity 4.
 
-``projection.batch_size`` (integer, default ``256``)
+``projection.batch_size`` (integer, default ``8``)
    Anchors per work chunk; each chunk is projected by one thread in batched Newton calls.
 
 ``projection.newton.max_step`` (real, default ``1.0``)

@@ -1,4 +1,4 @@
-!> Surface mesh build, samples: retraction onto the surface, bins
+!> Lattice seeder build, samples: retraction onto the surface, bins
 submodule(moist_cavity_drop_projection_seed) moist_cavity_drop_projection_seed_samples
    implicit none(type, external)
 

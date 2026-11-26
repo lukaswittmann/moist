@@ -5,10 +5,11 @@
 !>
 !> 1. local pass: local Newton and next step per anchor
 !>    ([[projection_worker_type]]); the chunk's [[local_pass_type]] kept
-!> 2. surface mesh seeder built once from the geometry and the largest search
-!>    ball of every seeded anchor ([[search_geometry]])
+!> 2. lattice seeder built once from the geometry and the largest search
+!>    ball of every seeded anchor ([[search_geometry]]), its lattice along the
+!>    grid model's lattice axes (molecular frame or point group)
 !> 3. search pass, heaviest chunks first ([[search_order]]): each worker seeds
-!>    from the built mesh, solves and finalizes into its row buffer
+!>    from the built lattice, solves and finalizes into its row buffer
 !>
 !> Then row counts prefix-summed into `offset`, buffers scattered into the CSR
 !> row arrays
@@ -87,8 +88,6 @@ contains
       allocate (unseeded(nmax_anchor), source=.false.)
       call abort%reset()
 
-      seeder%debug = self%ctx%debug
-      seeder%unit = self%ctx%unit
       call seeder%init(self%param%seed, error)
       if (allocated(error)) return
 
@@ -100,6 +99,8 @@ contains
       do ipass = 1, 2
          if (ipass == 2) then
             call search_geometry(local, self%mol%xyz, self%radii, self%param%branch%reach_off, nthreads, geometry)
+            ! The seed lattice turns with the sphere grids (lab axes without a grid model)
+            if (allocated(self%grid_model)) call self%grid_model%lattice_axes(geometry%axes)
             has_seeded = size(geometry%radius_max) > 0
             if (has_seeded) then
                call search_order(local, chunk_order)
@@ -108,6 +109,7 @@ contains
                call self%ctx%timer%stop("Seed lattice")
                if (allocated(error)) return
                call pp%step("Seed lattice", self%ctx%timer%last())
+               if (self%ctx%verbosity(4)) call seeder%report(pp)
             end if
          end if
 
@@ -120,8 +122,7 @@ contains
 
          ! First-touch init inside the region so the worker scratch is core-local
          if (.not. allocated(workers(thread_slot)%lsf)) then
-            call workers(thread_slot)%init(self%param, self%lsf_model, self%mol%xyz, local_error, &
-                                           debug=self%ctx%debug, unit=self%ctx%unit)
+            call workers(thread_slot)%init(self%param, self%lsf_model, self%mol%xyz, local_error)
             if (allocated(local_error)) call abort%latch_error(local_error, 0)
          end if
          ! Shared setup failure on any thread before the first chunk starts

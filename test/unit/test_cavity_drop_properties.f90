@@ -32,7 +32,7 @@ module test_cavity_drop_properties
 
    !> Projection tolerance
    real(wp), parameter :: PROJ_TOL = 1.0e-12_wp
-   !> Projection level, 1 = local Newton with coarse mesh retry
+   !> Projection level, 1 = local Newton with coarse lattice retry
    integer, parameter :: PROJ_LEVEL = 1
    !> Sphere radii of the isolated-atom fixtures, bohr
    real(wp), parameter :: SPHERE_RADII(3) = [2.0_wp, 3.5_wp, 5.0_wp]

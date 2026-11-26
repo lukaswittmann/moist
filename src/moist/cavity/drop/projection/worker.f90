@@ -51,7 +51,7 @@
 !> - zero window: finalized at every level
 !> - level 2 shortcut (`level2_window_pdist`) counted in `n_window_skipped`
 !> - other levels refused
-!> - surface mesh seeder with the level's settings (`seed%init_level`): seeds
+!> - lattice seeder with the level's settings (`seed%init_level`): seeds
 !>   pass all four filters at level 2 (back-facing one only when the horizon
 !>   switch closes such normals), the tangent cone alone at level 3, none at
 !>   levels 1 and 4
@@ -342,16 +342,12 @@ contains
    !> @param[in]    lsf_model Level set, already updated for the geometry; cloned
    !> @param[in]    centers   Atom centers (3, nat)
    !> @param[out]   error     Invalid level or seeder configuration
-   !> @param[in]    debug     Per-anchor seeder traces
-   !> @param[in]    unit      Output unit of the seeder traces, standard output when absent
-   subroutine worker_init(self, param, lsf_model, centers, error, debug, unit)
+   subroutine worker_init(self, param, lsf_model, centers, error)
       class(projection_worker_type), intent(inout) :: self
       type(moist_cavity_drop_parameters_type), intent(in) :: param
       class(moist_cavity_drop_lsf_type), intent(in), target :: lsf_model
       real(wp), intent(in) :: centers(:, :)
       type(error_type), allocatable, intent(out) :: error
-      logical, intent(in), optional :: debug
-      integer, intent(in), optional :: unit
 
       if (.not. is_valid_proj_level(param%proj_level)) then
          call fatal_error(error, "DROP projection: level must be 1, 2, 3 or 4")
@@ -394,8 +390,6 @@ contains
       end if
       call self%branch_weight%init(param%branch%dpdist_max, param%phi_alpha, param%branch%sep_cut)
 
-      if (present(debug)) self%seeder%debug = debug
-      if (present(unit)) self%seeder%unit = unit
       call self%seeder%init(param%seed, error)
       if (allocated(error)) return
 

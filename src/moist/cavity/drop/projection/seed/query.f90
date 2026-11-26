@@ -1,4 +1,4 @@
-!> Surface mesh seeds of one anchor: ball query, filters, pre-step
+!> Lattice seeder, seeds of one anchor: ball query, filters, pre-step
 submodule(moist_cavity_drop_projection_seed) moist_cavity_drop_projection_seed_query
    implicit none(type, external)
 
@@ -8,7 +8,7 @@ contains
    !*                                      Seeding                                      *!
    !* ================================================================================= *!
 
-   !> Seeds of one anchor from the built mesh, no level set evaluation
+   !> Seeds of one anchor from the built lattice, no level set evaluation
    !>
    !> - the ball is the request's `pdist_start`; when `pdist_inner >= 0`, only the
    !>   outer shell `(pdist_inner, pdist_start]` is emitted and
@@ -36,21 +36,21 @@ contains
       integer :: i, n, nkeep
       logical :: keep, do_hor
 
-      ! The mesh answers without evaluation; `lsf` only certifies bins
+      ! The lattice answers without evaluation; `lsf` only certifies bins
       scratch%n_points = 0
       scratch%reach = 0.0_wp
       scratch%shell_filtered = .false.
       ! `points` is allocated even when no seed follows
       if (.not. allocated(scratch%points)) allocate (scratch%points(3, 32))
       if (.not. self%built) then
-         call fatal_error(error, "Surface mesh seeder: seed before build")
+         call fatal_error(error, "Lattice seeder: seed before build")
          return
       end if
       scratch%shell_filtered = request%pdist_inner >= 0.0_wp
       if (self%nsample == 0) return
       scratch%reach = self%cover + self%spacing_max
 
-      if (.not. (request%pdist_start > 0.0_wp)) error stop "moist DROP surface mesh seeder: request without a radius"
+      if (.not. (request%pdist_start > 0.0_wp)) error stop "moist DROP lattice seeder: request without a radius"
       ! Samples of the cells meeting the ball (or outer shell)
       call ball_query(self, scratch, request%anchor, request%pdist_start, request%pdist_inner, lsf)
       n = scratch%ncand
@@ -91,19 +91,22 @@ contains
    !> - samples are binned by `edge_mid`, so every point of a bin's 4-cell boxes
    !>   lies within `0.5 bin_size + spacing_max` of the bin center (independent of
    !>   the retraction distance `dmax`)
+   !> - bins and boxes in the lattice frame; the stationarity certificate sees
+   !>   lab boxes, the axis-aligned hulls of the turned ones (larger, so it
+   !>   excludes less, never more)
    !> - a bin is skipped when its inflated box misses the outer ball, lies
    !>   strictly inside `inner`, or is certified stationary-free by `lsf`
    !>
    !> @param[in]    self    Seeder
    !> @param[inout] scratch Scratch; kept candidates written
-   !> @param[in]    x       Point
+   !> @param[in]    x_lab   Point (lab)
    !> @param[in]    radius  Outer ball radius (Bohr)
    !> @param[in]    inner   Inner excluded ball radius (Bohr), negative for full ball
    !> @param[in]    lsf     Level set whose stationarity certificate prunes bins
-   subroutine ball_query(self, scratch, x, radius, inner, lsf)
+   subroutine ball_query(self, scratch, x_lab, radius, inner, lsf)
       type(projection_seeder_type), intent(in) :: self
       type(seeder_scratch_type), intent(inout) :: scratch
-      real(wp), intent(in) :: x(3)
+      real(wp), intent(in) :: x_lab(3)
       real(wp), intent(in) :: radius
       real(wp), intent(in) :: inner
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
@@ -111,12 +114,15 @@ contains
       integer :: lo(3), hi(3), ix, iy, iz, b, k
       real(wp) :: limit, half_box, half_box_pad, half_bin_pad, r2, r2_hi, r_inner2, r_inner2_lo
       real(wp) :: center(3), reg_lo(3), reg_hi(3), atom_lo(3), atom_hi(3)
+      !> Point in the lattice frame, lab hull widths of a unit box, a box's lab center and half width
+      real(wp) :: x(3), stretch(3), center_lab(3), half_lab
       real(wp) :: adz, ady, adx, dz_min, dy_min, dx_min, dz_min2, dy_min2, d_min2
       real(wp) :: dz_max, dy_max, dx_max, dz_max2, dy_max2, d_max2, d2
       logical :: can_exclude, use_inner, cull_inner
 
       scratch%ncand = 0
       if (self%nsample == 0) return
+      x = self%frame%to_lattice(x_lab)
       limit = nearest(radius + self%spacing_max, 1.0_wp)
       lo = max(bin_coords(self, x - limit), -key_bias + 1)
       hi = min(bin_coords(self, x + limit), key_bias - 1)
@@ -135,7 +141,17 @@ contains
       end if
       reg_lo = nearest(nearest(self%bin_origin + self%bin_size*real(lo, wp), -1.0_wp) - self%spacing_max, -1.0_wp)
       reg_hi = nearest(nearest(self%bin_origin + self%bin_size*real(hi + 1, wp), 1.0_wp) + self%spacing_max, 1.0_wp)
-      call lsf%stationary_region_bounds(x, reg_lo, reg_hi, atom_lo, atom_hi, can_exclude)
+      half_lab = half_box
+      if (self%frame%rotated) then
+         ! Lab hull of the region, widened by that of a tested box beyond its own
+         stretch = sum(abs(self%frame%axes), dim=2)
+         half_lab = maxval(stretch)*half_box
+         center_lab = self%frame%to_lab(0.5_wp*(reg_lo + reg_hi))
+         reg_hi = matmul(abs(self%frame%axes), 0.5_wp*(reg_hi - reg_lo)) + half_lab
+         reg_lo = nearest(center_lab - reg_hi, -1.0_wp)
+         reg_hi = nearest(center_lab + reg_hi, 1.0_wp)
+      end if
+      call lsf%stationary_region_bounds(x_lab, reg_lo, reg_hi, atom_lo, atom_hi, can_exclude)
       do iz = lo(3), hi(3)
          center(3) = self%bin_origin(3) + self%bin_size*(real(iz, wp) + 0.5_wp)
          adz = abs(x(3) - center(3))
@@ -166,7 +182,8 @@ contains
                b = table_find(self%bins, lattice_key([ix, iy, iz], key_bias))
                if (b == 0) cycle
                if (can_exclude) then
-                  if (lsf%stationary_box_excluded(x, center, half_box, atom_lower=atom_lo, atom_upper=atom_hi)) cycle
+                  if (lsf%stationary_box_excluded(x_lab, self%frame%to_lab(center), half_lab, atom_lower=atom_lo, &
+                                                  atom_upper=atom_hi)) cycle
                end if
                do k = self%bin_first(b), self%bin_first(b + 1) - 1
                   d2 = edge_box_distance_sq(self, k, x)

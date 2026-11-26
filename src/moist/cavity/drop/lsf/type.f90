@@ -67,7 +67,7 @@
 !>
 !>   - [[exclusion_radius]]`(lsf0)`: minimum distance from the point to any *surface*, given
 !>     the value there
-!>     - consumer: the surface mesh seeder, "can I discard this region?"
+!>     - consumer: the lattice seeder, "can I discard this region?"
 !>     - safe answer **zero** (prune nothing); an over-estimate silently loses branches
 !>     - companion [[far_exclusion_radius]]`()`: same promise for every point no atom reaches
 !>       (an unreached batch column), a model constant, zero by default
@@ -2016,7 +2016,7 @@ contains
    !>   in less than that distance
    !> - concrete LSFs override with their own `L` (SvdW has the exact `L = 1`)
    !>
-   !> What lets the surface mesh seeder skip cells within the search region:
+   !> What lets the lattice seeder skip cells within the search region:
    !> minima live on the surface, so a region proven free of surface holds no
    !> minimum
    !>

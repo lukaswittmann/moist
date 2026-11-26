@@ -3233,7 +3233,7 @@ contains
 
    !> Every projector reports a fill refusal as an error, wherever it meets it
    !>
-   !> The local Newton and the mesh searches of every level reach the fill
+   !> The local Newton and the lattice searches of every level reach the fill
    subroutine test_core_fill_seed_abort(error)
       type(error_type), allocatable, intent(out) :: error
 

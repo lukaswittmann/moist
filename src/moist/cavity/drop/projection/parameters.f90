@@ -19,10 +19,10 @@ module moist_cavity_drop_projection_parameters
    public :: drop_seed_parameters_type, drop_branch_parameters_type
    public :: drop_solve_parameters_type, drop_polish_parameters_type, drop_finalize_parameters_type
 
-   !> Seed step: the surface mesh seeder's settings, derived from `proj_level`
+   !> Seed step: the lattice seeder's settings, derived from `proj_level`
    !> ([[seed_init_level]]; levels 2, 3, 4; failed local solves of 1)
    type :: drop_seed_parameters_type
-      !> Sample spacing of the mesh (Bohr)
+      !> Sample spacing of the lattice (Bohr)
       real(wp) :: seed_size = 1.0_wp
       !> Lattice levels below the sample spacing for a cell without sign change;
       !> 0 leaves such a cell unrefined

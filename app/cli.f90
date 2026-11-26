@@ -828,7 +828,7 @@ contains
                              default_val=defaults%batch_size, &
                              action=not_less_than(1), &
                              dest="drop_batch_size", metavar="INT", &
-                             help="Projection batch size (points per batched Newton solve)", &
+                             help="Anchors per projection batch", &
                              group_idx=grp_technical)
          call p%add_argument("--wleb-switch", data_type="integer", &
                              default_val=defaults%wleb_prune_level, &

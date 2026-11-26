@@ -142,6 +142,8 @@ module moist_math_symmetry_orient
       !>
       !> - they then turn with the frame, not with the atoms
       logical :: ops_on_frame = .false.
+      !> Axes of a cubic lattice about the atom centroid, as columns (3, 3)
+      real(wp) :: lattice(3, 3) = identity3
    end type sym_orient_type
 
    !> Candidate group: indices into an operation list
@@ -234,6 +236,7 @@ contains
          call time_phase(timer, "Molecular frame", .false.)
       end if
       call set_trivial(self, nat)
+      call set_lattice(self, xyz, species)
       if (off) return
       if (nat < 2) then
          ! One atom has every point group and no operation to respect
@@ -248,7 +251,57 @@ contains
       end if
 
       call symmetric_orient(self, xyz, species, auto, tolerance, error, timer)
+      if (allocated(error)) return
+      call set_lattice(self, xyz, species)
    end subroutine new_sym_orient
+
+   !> Axes of a cubic lattice about the atom centroid
+   !>
+   !> - lab orientation: the identity; otherwise the molecular frame F
+   !> - with operations: the lattice is a sphere whose site group is the whole
+   !>   group, at the centroid (their fixed point); the admissible orientation
+   !>   closest to F ([[site_candidates]]), ties broken by the neighbour form of
+   !>   the centroid, so the operations map the lattice onto itself
+   !> - F when the group fits no cube (C5, C6, S3 or higher axes)
+   !>
+   !> @param[in,out] self    Orientations, frame and operations set
+   !> @param[in]     xyz     Coordinates (3, nat), bohr
+   !> @param[in]     species Species ids (nat)
+   subroutine set_lattice(self, xyz, species)
+      !> Orientations
+      type(sym_orient_type), intent(inout) :: self
+      !> Coordinates
+      real(wp), intent(in) :: xyz(:, :)
+      !> Species ids
+      integer, intent(in) :: species(:)
+
+      !> Admissible orientations tied closest to the frame, and their maps
+      real(wp), allocatable :: rot(:, :, :), dw(:, :, :)
+      !> Atoms and their centroid, the origin of the forms
+      real(wp), allocatable :: points(:, :)
+      !> Whether each tied orientation has the smallest form
+      logical, allocatable :: smallest(:)
+      real(wp) :: value
+      integer :: nat
+      logical :: found
+
+      self%lattice = self%frame%axes
+      if (self%orientation /= orient_molecular) return
+      if (.not. allocated(self%ops)) return
+      if (size(self%ops, 3) <= 1) return
+      call site_candidates(self%ops, self%frame%axes, found, value, rot, dw)
+      if (.not. found .or. size(rot, 3) == 0) return
+      if (size(rot, 3) == 1) then
+         self%lattice = rot(:, :, 1)
+         return
+      end if
+      nat = size(xyz, 2)
+      allocate (points(3, nat + 1))
+      points(:, 1:nat) = xyz
+      points(:, nat + 1) = sum(xyz, dim=2)/real(nat, wp)
+      smallest = smallest_forms(points, [species, 0], nat + 1, rot)
+      self%lattice = rot(:, :, findloc(smallest, .true., dim=1))
+   end subroutine set_lattice
 
    !> Whether a frame ties exactly with one the species tell apart from it
    !>
