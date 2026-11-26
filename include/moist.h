@@ -313,6 +313,7 @@ typedef struct {
     double blend_1b;
     double blend_2b;
     double blend_3b;
+    double scale;  /* Constant level-set multiplier, positive */
     /* --- end of 1.0 layout --- */
 } moist_svdw_options;
 
@@ -326,6 +327,7 @@ typedef struct {
     double a2;
     double c;
     int m;
+    double scale;  /* Constant level-set multiplier, positive */
     /* --- end of 1.0 layout --- */
 } moist_cfc_options;
 

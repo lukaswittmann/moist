@@ -167,6 +167,8 @@ module moist_api
       real(c_double) :: blend_2b = 0.0_c_double
       !> Three-body blending weight
       real(c_double) :: blend_3b = 3.0_c_double
+      !> Constant level-set multiplier
+      real(c_double) :: scale = 1.0_c_double
    end type api_svdw_options_v1_0
 
    !> Minimum valid caller size, independent of future library extensions
@@ -184,6 +186,8 @@ module moist_api
       real(c_double) :: c = 5.0_c_double
       !> Pair-term polynomial power
       integer(c_int) :: m = 4_c_int
+      !> Constant level-set multiplier
+      real(c_double) :: scale = 0.25_c_double
    end type api_cfc_options_v1_0
 
    !> Minimum valid caller size, independent of future library extensions
@@ -518,6 +522,7 @@ contains
       value%a2 = native%a2
       value%c = native%c
       value%m = native%m
+      value%scale = native%scale
    end function default_cfc_options
 
    !> Obtain svdw defaults from the native parameter type
@@ -530,6 +535,7 @@ contains
       value%blend_1b = native%blend_1b
       value%blend_2b = native%blend_2b
       value%blend_3b = native%blend_3b
+      value%scale = native%scale
    end function default_svdw_options
 
    !> Obtain iswig defaults from the native parameter type
@@ -1147,6 +1153,7 @@ contains
       defaults%blend_1b = values%blend_1b
       defaults%blend_2b = values%blend_2b
       defaults%blend_3b = values%blend_3b
+      defaults%scale = values%scale
       call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, svdw_options_min_size, error%ptr)
       call prefix_api_error(error%ptr, "init_svdw_options")
    end subroutine init_svdw_options_api
@@ -1192,6 +1199,7 @@ contains
       defaults%a2 = values%a2
       defaults%c = values%c
       defaults%m = values%m
+      defaults%scale = values%scale
       call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, cfc_options_min_size, error%ptr)
       call prefix_api_error(error%ptr, "init_cfc_options")
    end subroutine init_cfc_options_api
@@ -1439,6 +1447,10 @@ contains
       call read_svdw_options(options, o, error%ptr)
       call prefix_api_error(error%ptr, "new_svdw_lsf")
       if (allocated(error%ptr)) return
+      if (.not. (ieee_is_finite(o%scale) .and. o%scale > 0.0_c_double)) then
+         call api_error(error%ptr, "new_svdw_lsf", "SvdW scale must be finite and positive")
+         return
+      end if
       allocate (lsf, stat=stat)
       if (stat == 0) allocate (moist_cavity_drop_lsf_svdw_type :: lsf%ptr, stat=stat)
       if (stat /= 0) then
@@ -1450,7 +1462,8 @@ contains
       type is (moist_cavity_drop_lsf_svdw_type)
          call item%new(param=moist_cavity_drop_lsf_svdw_param_type( &
             & blend_k=real(o%blend_k, wp), blend_1b=real(o%blend_1b, wp), &
-            & blend_2b=real(o%blend_2b, wp), blend_3b=real(o%blend_3b, wp)))
+            & blend_2b=real(o%blend_2b, wp), blend_3b=real(o%blend_3b, wp), &
+            & scale=real(o%scale, wp)))
       end select
       handle = c_loc(lsf)
    end function new_svdw_lsf_api
@@ -1480,6 +1493,10 @@ contains
                         "CFC pair power m must be 4 (the generated kernel bakes it in)")
          return
       end if
+      if (.not. (ieee_is_finite(o%scale) .and. o%scale > 0.0_c_double)) then
+         call api_error(error%ptr, "new_cfc_lsf", "CFC scale must be finite and positive")
+         return
+      end if
       allocate (lsf, stat=stat)
       if (stat == 0) allocate (moist_cavity_drop_lsf_cfc_type :: lsf%ptr, stat=stat)
       if (stat /= 0) then
@@ -1490,7 +1507,8 @@ contains
       select type (item => lsf%ptr)
       type is (moist_cavity_drop_lsf_cfc_type)
          call item%new(param=moist_cavity_drop_lsf_cfc_param_type(a1=real(o%a1, wp), a2=real(o%a2, wp), &
-                                                                  c=real(o%c, wp), m=int(o%m)))
+                                                                  c=real(o%c, wp), m=int(o%m), &
+                                                                  scale=real(o%scale, wp)))
       end select
       handle = c_loc(lsf)
    end function new_cfc_lsf_api

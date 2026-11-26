@@ -147,8 +147,11 @@ Properties and limitations
 Field scaling for DROP
 ----------------------
 
-The positive numerical multiplier ``scale`` (default 1, CLI ``--lsf-scale``) sets :math:`S=\mathrm{scale}\,F` and scales all derivatives equally.
+The positive numerical multiplier ``scale`` (default ``0.088``) sets :math:`S=\mathrm{scale}\,F` and scales all derivatives equally; see :ref:`drop-lsf-scale`.
 It preserves the zero surface, normals and curvatures, but affects DROP's numerical switches and projection tolerances.
+
+On a convex patch :math:`\|\nabla F\|\approx 2(r_i+p)`; the default is :math:`1/(2(\bar r+p))` at a mean radius :math:`\bar r = 3` bohr and the default probe, which puts the median of :math:`\|\nabla S\|` near one.
+The single-atom override :math:`F=\|\mathbf x-\mathbf c_1\|^2-r_1^2` has :math:`\|\nabla F\|=2r_1` instead, about half of that.
 
 DROP's critical-gradient switch transitions from zero to full weight between :math:`\|\nabla S\|=0.1` and :math:`0.6`.
 Increasing the scale reduces suppression of regions with small raw gradients; genuinely critical points remain suppressed.

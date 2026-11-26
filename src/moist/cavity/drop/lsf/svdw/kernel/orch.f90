@@ -130,7 +130,7 @@ contains
       end do
    end subroutine svdw_powersums_tangent
 
-   pure module subroutine svdw_lsf_spatial(d, radii, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_spatial(d, radii, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                     f0, f1_r, f2_rr, f3_rrr, f4_rrrr)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -144,6 +144,8 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> Level-set value
@@ -163,11 +165,11 @@ contains
 
       call svdw_powersums(d, radii, blend_k, s_2 /= 0.0_wp, max_deriv, &
                           ps0, ps1, ps2, ps3, ps4)
-      call svdw_spatial_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, ps4, &
+      call svdw_spatial_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, ps4, &
                              max_deriv, f0, f1_r, f2_rr, f3_rrr, f4_rrrr)
    end subroutine svdw_lsf_spatial
 
-   pure module subroutine svdw_lsf_nuclear(d, radii, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_nuclear(d, radii, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                     f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -181,6 +183,8 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> dS/dR_A
@@ -210,14 +214,14 @@ contains
          call svdw_atom_eval(d(:, ia), radii(ia), blend_k, max_deriv + 1, &
                              at0, at1, at2, at3, at4, x, ix, u, ref_fade_start, &
                              ref_fade_width)
-         call svdw_nuclear_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, &
+         call svdw_nuclear_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, &
                                 at0, at1, at2, at3, at4, max_deriv, &
                                 f1_rA(:, ia), f2_r_rA(:, :, ia), &
                                 f3_rr_rA(:, :, :, ia), f4_rrr_rA(:, :, :, :, ia))
       end do
    end subroutine svdw_lsf_nuclear
 
-   pure module subroutine svdw_lsf_radius(d, radii, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_radius(d, radii, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                    f1_rad, f2_r_rad, f3_rr_rad, f4_rrr_rad)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -231,6 +235,8 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> dS/dR_a
@@ -259,14 +265,14 @@ contains
          call svdw_atom_rad_eval(d(:, ia), radii(ia), blend_k, max_deriv, &
                                  atd0, atd1, atd2, atd3, x, ix, u, ref_fade_start, &
                                  ref_fade_width)
-         call svdw_radius_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, &
+         call svdw_radius_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, &
                                atd0, atd1, atd2, atd3, max_deriv, &
                                f1_rad(ia), f2_r_rad(:, ia), &
                                f3_rr_rad(:, :, ia), f4_rrr_rad(:, :, :, ia))
       end do
    end subroutine svdw_lsf_radius
 
-   pure module subroutine svdw_lsf_pair(d, radii, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_pair(d, radii, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                  f2_rArB, f3_r_rArB, f4_rr_rArB)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -280,6 +286,8 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> d^2S/(dR_A dR_B)
@@ -316,12 +324,12 @@ contains
       do ib = 1, size(radii)
          do ia = 1, size(radii)
             if (ia == ib) then
-               call svdw_pair_diag_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, &
+               call svdw_pair_diag_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, &
                                         ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
                                         ca3(:, :, :, :, ia), ca4(:, :, :, :, :, ia), &
                                         max_deriv, b2, b3, b4)
             else
-               call svdw_pair_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, &
+               call svdw_pair_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, &
                                    ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
                                    ca3(:, :, :, :, ia), &
                                    ca0(:, ib), ca1(:, :, ib), ca2(:, :, :, ib), &
@@ -344,7 +352,7 @@ contains
       end do
    end subroutine svdw_lsf_pair
 
-   pure module subroutine svdw_lsf_tangent(d, radii, v, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_tangent(d, radii, v, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                     tangent_f0, tangent_f1_r, tangent_f2_rr, &
                                     tangent_f3_rrr, vrad)
       !> Displacements r - R_A
@@ -361,6 +369,8 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> Contracted value derivative
@@ -385,12 +395,12 @@ contains
                           ps0, ps1, ps2, ps3, ps4)
       call svdw_powersums_tangent(d, radii, v, blend_k, max_deriv, ws0, ws1, ws2, &
                                   ws3, vrad)
-      call svdw_tangent_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, &
+      call svdw_tangent_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, &
                              ws0, ws1, ws2, ws3, max_deriv, &
                              tangent_f0, tangent_f1_r, tangent_f2_rr, tangent_f3_rrr)
    end subroutine svdw_lsf_tangent
 
-   pure module subroutine svdw_lsf_hvp(d, radii, v, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_hvp(d, radii, v, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                 hvp_f1_rA, hvp_f2_r_rA, hvp_f3_rr_rA, vrad)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -406,6 +416,8 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> Contracted nuclear Hessian
@@ -457,7 +469,7 @@ contains
             if (max_deriv + 1 >= 2) aw2 = aw2 + awr2
             if (max_deriv + 1 >= 3) aw3 = aw3 + awr3
          end if
-         call svdw_hvp_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ws0, ws1, ws2, &
+         call svdw_hvp_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ws0, ws1, ws2, &
                             at0, at1, at2, at3, aw0, aw1, aw2, aw3, max_deriv, &
                             hvp_f1_rA(:, ia), hvp_f2_r_rA(:, :, ia), &
                             hvp_f3_rr_rA(:, :, :, ia))
@@ -465,7 +477,7 @@ contains
    end subroutine svdw_lsf_hvp
 
    pure module subroutine svdw_lsf_radius_hvp(d, radii, v, vrad, blend_k, s_1, s_2, s_3, &
-                                       max_deriv, hvp_f1_rad, hvp_f2_r_rad, &
+                                       lsf_scale, max_deriv, hvp_f1_rad, hvp_f2_r_rad, &
                                        hvp_f3_rr_rad)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -483,6 +495,8 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> Contracted radius Hessian row
@@ -517,7 +531,7 @@ contains
          call svdw_atom_tangent_rad_eval(d(:, ia), radii(ia), blend_k, v(:, ia), &
                                          vrad(ia), max_deriv, awd0, awd1, awd2, x, ix, &
                                          u, ref_fade_start, ref_fade_width)
-         call svdw_radius_hvp_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, &
+         call svdw_radius_hvp_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, &
                                    ws0, ws1, ws2, atd0, atd1, atd2, awd0, awd1, awd2, &
                                    max_deriv, hvp_f1_rad(ia), &
                                    hvp_f2_r_rad(:, ia), hvp_f3_rr_rad(:, :, ia))
@@ -554,9 +568,10 @@ contains
       !> Active-atom index
       integer :: ia
 
-      call svdw_lsf_spatial(d, radii, blend_k, s_1, s_2, s_3, 1, &
+      ! Unscaled inputs (lsf_scale = 1): S/||grad S|| does not depend on the multiplier
+      call svdw_lsf_spatial(d, radii, blend_k, s_1, s_2, s_3, 1.0_wp, 1, &
                             f0, f1_r, f2_rr, f3_rrr, f4_rrrr)
-      call svdw_lsf_nuclear(d, radii, blend_k, s_1, s_2, s_3, 1, &
+      call svdw_lsf_nuclear(d, radii, blend_k, s_1, s_2, s_3, 1.0_wp, 1, &
                             f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA)
       do ia = 1, size(radii)
          call svdw_normalized_eval(f0, f1_r, f1_rA(:, ia), f2_r_rA(:, :, ia), &

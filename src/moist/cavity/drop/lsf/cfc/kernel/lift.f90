@@ -7,8 +7,11 @@ submodule(moist_cavity_drop_lsf_cfc_kernel) moist_cavity_drop_lsf_cfc_kernel_lif
 
 contains
 
-   pure module subroutine cfc_spatial_eval(pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr, max_deriv, f0, f1_r, &
-                                    f2_rr, f3_rrr, f4_rrrr)
+   pure module subroutine cfc_spatial_eval(lsf_scale, pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr, max_deriv, &
+                                    f0, f1_r, f2_rr, f3_rrr, f4_rrrr)
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated order-0 spatial derivative of PD
       real(wp), intent(in) :: pd0
       !> Accumulated order-1 spatial derivative of PD
@@ -49,14 +52,14 @@ contains
       select case (max_deriv)
       case (0)
          block
-            f0 = -log(pd0)
+            f0 = lsf_scale*(-log(pd0))
          end block
       case (1)
          block
-            f0 = -log(pd0)
-            f1_r(1) = -inv_pd*pd1_r(1)
-            f1_r(2) = -inv_pd*pd1_r(2)
-            f1_r(3) = -inv_pd*pd1_r(3)
+            f0 = lsf_scale*(-log(pd0))
+            f1_r(1) = lsf_scale*(-inv_pd*pd1_r(1))
+            f1_r(2) = lsf_scale*(-inv_pd*pd1_r(2))
+            f1_r(3) = lsf_scale*(-inv_pd*pd1_r(3))
          end block
       case (2)
          block
@@ -65,22 +68,22 @@ contains
 
             x0 = (inv_pd*inv_pd)
             x1 = pd1_r(1)*x0
-            f0 = -log(pd0)
-            f1_r(1) = -inv_pd*pd1_r(1)
-            f1_r(2) = -inv_pd*pd1_r(2)
-            f1_r(3) = -inv_pd*pd1_r(3)
-            f2_rr(1, 1) = -inv_pd*pd2_rr(1, 1) + (pd1_r(1)*pd1_r(1))*x0
-            t_f2_rr_01 = -inv_pd*pd2_rr(1, 2) + pd1_r(2)*x1
+            f0 = lsf_scale*(-log(pd0))
+            f1_r(1) = lsf_scale*(-inv_pd*pd1_r(1))
+            f1_r(2) = lsf_scale*(-inv_pd*pd1_r(2))
+            f1_r(3) = lsf_scale*(-inv_pd*pd1_r(3))
+            f2_rr(1, 1) = lsf_scale*(-inv_pd*pd2_rr(1, 1) + (pd1_r(1)*pd1_r(1))*x0)
+            t_f2_rr_01 = lsf_scale*(-inv_pd*pd2_rr(1, 2) + pd1_r(2)*x1)
             f2_rr(1, 2) = t_f2_rr_01
             f2_rr(2, 1) = t_f2_rr_01
-            t_f2_rr_02 = -inv_pd*pd2_rr(1, 3) + pd1_r(3)*x1
+            t_f2_rr_02 = lsf_scale*(-inv_pd*pd2_rr(1, 3) + pd1_r(3)*x1)
             f2_rr(1, 3) = t_f2_rr_02
             f2_rr(3, 1) = t_f2_rr_02
-            f2_rr(2, 2) = -inv_pd*pd2_rr(2, 2) + (pd1_r(2)*pd1_r(2))*x0
-            t_f2_rr_12 = -inv_pd*pd2_rr(2, 3) + pd1_r(2)*pd1_r(3)*x0
+            f2_rr(2, 2) = lsf_scale*(-inv_pd*pd2_rr(2, 2) + (pd1_r(2)*pd1_r(2))*x0)
+            t_f2_rr_12 = lsf_scale*(-inv_pd*pd2_rr(2, 3) + pd1_r(2)*pd1_r(3)*x0)
             f2_rr(2, 3) = t_f2_rr_12
             f2_rr(3, 2) = t_f2_rr_12
-            f2_rr(3, 3) = -inv_pd*pd2_rr(3, 3) + (pd1_r(3)*pd1_r(3))*x0
+            f2_rr(3, 3) = lsf_scale*(-inv_pd*pd2_rr(3, 3) + (pd1_r(3)*pd1_r(3))*x0)
          end block
       case (3)
          block
@@ -107,36 +110,39 @@ contains
             x15 = pd2_rr(3, 3)*x0
             x16 = 2.0_wp*pd1_r(2)
             x17 = pd2_rr(2, 2)*x0 - x3*x7
-            f0 = -log(pd0)
-            f1_r(1) = -inv_pd*pd1_r(1)
-            f1_r(2) = -inv_pd*pd1_r(2)
-            f1_r(3) = -inv_pd*pd1_r(3)
-            f2_rr(1, 1) = -inv_pd*pd2_rr(1, 1) + x0*x1
-            t_f2_rr_01 = -inv_pd*pd2_rr(1, 2) + pd1_r(2)*x2
+            f0 = lsf_scale*(-log(pd0))
+            f1_r(1) = lsf_scale*(-inv_pd*pd1_r(1))
+            f1_r(2) = lsf_scale*(-inv_pd*pd1_r(2))
+            f1_r(3) = lsf_scale*(-inv_pd*pd1_r(3))
+            f2_rr(1, 1) = lsf_scale*(-inv_pd*pd2_rr(1, 1) + x0*x1)
+            t_f2_rr_01 = lsf_scale*(-inv_pd*pd2_rr(1, 2) + pd1_r(2)*x2)
             f2_rr(1, 2) = t_f2_rr_01
             f2_rr(2, 1) = t_f2_rr_01
-            t_f2_rr_02 = -inv_pd*pd2_rr(1, 3) + pd1_r(3)*x2
+            t_f2_rr_02 = lsf_scale*(-inv_pd*pd2_rr(1, 3) + pd1_r(3)*x2)
             f2_rr(1, 3) = t_f2_rr_02
             f2_rr(3, 1) = t_f2_rr_02
-            f2_rr(2, 2) = -inv_pd*pd2_rr(2, 2) + x0*x3
-            t_f2_rr_12 = -inv_pd*pd2_rr(2, 3) + x0*x4
+            f2_rr(2, 2) = lsf_scale*(-inv_pd*pd2_rr(2, 2) + x0*x3)
+            t_f2_rr_12 = lsf_scale*(-inv_pd*pd2_rr(2, 3) + x0*x4)
             f2_rr(2, 3) = t_f2_rr_12
             f2_rr(3, 2) = t_f2_rr_12
-            f2_rr(3, 3) = -inv_pd*pd2_rr(3, 3) + x0*x5
-            f3_rrr(1, 1, 1) = -inv_pd*pd3_rrr(1, 1, 1) + pd1_r(1)*x8 + pd2_rr(1, 1)*x0*x6
-            t_f3_rrr_001 = -inv_pd*pd3_rrr(1, 1, 2) + pd1_r(2)*x8 + x6*x9
+            f2_rr(3, 3) = lsf_scale*(-inv_pd*pd2_rr(3, 3) + x0*x5)
+            f3_rrr(1, 1, 1) = &
+               lsf_scale*(-inv_pd*pd3_rrr(1, 1, 1) + pd1_r(1)*x8 + pd2_rr(1, 1)*x0*x6)
+            t_f3_rrr_001 = lsf_scale*(-inv_pd*pd3_rrr(1, 1, 2) + pd1_r(2)*x8 + x6*x9)
             f3_rrr(1, 1, 2) = t_f3_rrr_001
             f3_rrr(1, 2, 1) = t_f3_rrr_001
             f3_rrr(2, 1, 1) = t_f3_rrr_001
-            t_f3_rrr_002 = -inv_pd*pd3_rrr(1, 1, 3) + pd1_r(3)*x8 + x10*x6
+            t_f3_rrr_002 = lsf_scale*(-inv_pd*pd3_rrr(1, 1, 3) + pd1_r(3)*x8 + x10*x6)
             f3_rrr(1, 1, 3) = t_f3_rrr_002
             f3_rrr(1, 3, 1) = t_f3_rrr_002
             f3_rrr(3, 1, 1) = t_f3_rrr_002
-            t_f3_rrr_011 = -inv_pd*pd3_rrr(1, 2, 2) + pd1_r(1)*x11 + pd1_r(2)*x13 + pd1_r(2)*x9
+            t_f3_rrr_011 = &
+               lsf_scale*(-inv_pd*pd3_rrr(1, 2, 2) + pd1_r(1)*x11 + pd1_r(2)*x13 + pd1_r(2)*x9)
             f3_rrr(1, 2, 2) = t_f3_rrr_011
             f3_rrr(2, 1, 2) = t_f3_rrr_011
             f3_rrr(2, 2, 1) = t_f3_rrr_011
-            t_f3_rrr_012 = -inv_pd*pd3_rrr(1, 2, 3) + pd1_r(1)*x14 + pd1_r(2)*x10 + pd1_r(3)*x13
+            t_f3_rrr_012 = &
+               lsf_scale*(-inv_pd*pd3_rrr(1, 2, 3) + pd1_r(1)*x14 + pd1_r(2)*x10 + pd1_r(3)*x13)
             f3_rrr(1, 2, 3) = t_f3_rrr_012
             f3_rrr(1, 3, 2) = t_f3_rrr_012
             f3_rrr(2, 1, 3) = t_f3_rrr_012
@@ -144,24 +150,25 @@ contains
             f3_rrr(3, 1, 2) = t_f3_rrr_012
             f3_rrr(3, 2, 1) = t_f3_rrr_012
             t_f3_rrr_022 = &
-               -inv_pd*pd3_rrr(1, 3, 3) + pd1_r(1)*x15 + pd1_r(3)*x10 + pd1_r(3)*(-pd1_r(3)*x12 + &
-               pd2_rr(1, 3)*x0)
+               lsf_scale*(-inv_pd*pd3_rrr(1, 3, 3) + pd1_r(1)*x15 + pd1_r(3)*x10 + &
+               pd1_r(3)*(-pd1_r(3)*x12 + pd2_rr(1, 3)*x0))
             f3_rrr(1, 3, 3) = t_f3_rrr_022
             f3_rrr(3, 1, 3) = t_f3_rrr_022
             f3_rrr(3, 3, 1) = t_f3_rrr_022
-            f3_rrr(2, 2, 2) = -inv_pd*pd3_rrr(2, 2, 2) + pd1_r(2)*x17 + x11*x16
-            t_f3_rrr_112 = -inv_pd*pd3_rrr(2, 2, 3) + pd1_r(3)*x17 + x14*x16
+            f3_rrr(2, 2, 2) = lsf_scale*(-inv_pd*pd3_rrr(2, 2, 2) + pd1_r(2)*x17 + x11*x16)
+            t_f3_rrr_112 = lsf_scale*(-inv_pd*pd3_rrr(2, 2, 3) + pd1_r(3)*x17 + x14*x16)
             f3_rrr(2, 2, 3) = t_f3_rrr_112
             f3_rrr(2, 3, 2) = t_f3_rrr_112
             f3_rrr(3, 2, 2) = t_f3_rrr_112
             t_f3_rrr_122 = &
-               -inv_pd*pd3_rrr(2, 3, 3) + pd1_r(2)*x15 + pd1_r(3)*x14 + pd1_r(3)*(pd2_rr(2, 3)*x0 &
-               - x4*x7)
+               lsf_scale*(-inv_pd*pd3_rrr(2, 3, 3) + pd1_r(2)*x15 + pd1_r(3)*x14 + &
+               pd1_r(3)*(pd2_rr(2, 3)*x0 - x4*x7))
             f3_rrr(2, 3, 3) = t_f3_rrr_122
             f3_rrr(3, 2, 3) = t_f3_rrr_122
             f3_rrr(3, 3, 2) = t_f3_rrr_122
             f3_rrr(3, 3, 3) = &
-               -inv_pd*pd3_rrr(3, 3, 3) + 2.0_wp*pd1_r(3)*x15 + pd1_r(3)*(pd2_rr(3, 3)*x0 - x5*x7)
+               lsf_scale*(-inv_pd*pd3_rrr(3, 3, 3) + 2.0_wp*pd1_r(3)*x15 + pd1_r(3)*(pd2_rr(3, &
+               3)*x0 - x5*x7))
          end block
       case default
          block
@@ -237,73 +244,81 @@ contains
             x58 = pd1_r(2)*x57 - pd2_rr(2, 2)*x56 + x40
             x59 = 2.0_wp*pd2_rr(2, 3)*x0 - x27*x4
             x60 = 6.0_wp*x5
-            f0 = -log(pd0)
-            f1_r(1) = -inv_pd*pd1_r(1)
-            f1_r(2) = -inv_pd*pd1_r(2)
-            f1_r(3) = -inv_pd*pd1_r(3)
-            f2_rr(1, 1) = -inv_pd*pd2_rr(1, 1) + x0*x1
-            t_f2_rr_01 = -inv_pd*pd2_rr(1, 2) + pd1_r(2)*x2
+            f0 = lsf_scale*(-log(pd0))
+            f1_r(1) = lsf_scale*(-inv_pd*pd1_r(1))
+            f1_r(2) = lsf_scale*(-inv_pd*pd1_r(2))
+            f1_r(3) = lsf_scale*(-inv_pd*pd1_r(3))
+            f2_rr(1, 1) = lsf_scale*(-inv_pd*pd2_rr(1, 1) + x0*x1)
+            t_f2_rr_01 = lsf_scale*(-inv_pd*pd2_rr(1, 2) + pd1_r(2)*x2)
             f2_rr(1, 2) = t_f2_rr_01
             f2_rr(2, 1) = t_f2_rr_01
-            t_f2_rr_02 = -inv_pd*pd2_rr(1, 3) + pd1_r(3)*x2
+            t_f2_rr_02 = lsf_scale*(-inv_pd*pd2_rr(1, 3) + pd1_r(3)*x2)
             f2_rr(1, 3) = t_f2_rr_02
             f2_rr(3, 1) = t_f2_rr_02
-            f2_rr(2, 2) = -inv_pd*pd2_rr(2, 2) + x0*x3
-            t_f2_rr_12 = -inv_pd*pd2_rr(2, 3) + x0*x4
+            f2_rr(2, 2) = lsf_scale*(-inv_pd*pd2_rr(2, 2) + x0*x3)
+            t_f2_rr_12 = lsf_scale*(-inv_pd*pd2_rr(2, 3) + x0*x4)
             f2_rr(2, 3) = t_f2_rr_12
             f2_rr(3, 2) = t_f2_rr_12
-            f2_rr(3, 3) = -inv_pd*pd2_rr(3, 3) + x0*x5
-            f3_rrr(1, 1, 1) = -inv_pd*pd3_rrr(1, 1, 1) + pd1_r(1)*x9 + pd2_rr(1, 1)*x0*x6
-            t_f3_rrr_001 = -inv_pd*pd3_rrr(1, 1, 2) + 2.0_wp*pd1_r(1)*x10 + pd1_r(2)*x9
+            f2_rr(3, 3) = lsf_scale*(-inv_pd*pd2_rr(3, 3) + x0*x5)
+            f3_rrr(1, 1, 1) = &
+               lsf_scale*(-inv_pd*pd3_rrr(1, 1, 1) + pd1_r(1)*x9 + pd2_rr(1, 1)*x0*x6)
+            t_f3_rrr_001 = lsf_scale*(-inv_pd*pd3_rrr(1, 1, 2) + 2.0_wp*pd1_r(1)*x10 + pd1_r(2)*x9)
             f3_rrr(1, 1, 2) = t_f3_rrr_001
             f3_rrr(1, 2, 1) = t_f3_rrr_001
             f3_rrr(2, 1, 1) = t_f3_rrr_001
-            t_f3_rrr_002 = -inv_pd*pd3_rrr(1, 1, 3) + 2.0_wp*pd1_r(1)*x11 + pd1_r(3)*x9
+            t_f3_rrr_002 = lsf_scale*(-inv_pd*pd3_rrr(1, 1, 3) + 2.0_wp*pd1_r(1)*x11 + pd1_r(3)*x9)
             f3_rrr(1, 1, 3) = t_f3_rrr_002
             f3_rrr(1, 3, 1) = t_f3_rrr_002
             f3_rrr(3, 1, 1) = t_f3_rrr_002
-            t_f3_rrr_011 = -inv_pd*pd3_rrr(1, 2, 2) + pd1_r(1)*x12 + pd1_r(2)*x10 + pd1_r(2)*x14
+            t_f3_rrr_011 = &
+               lsf_scale*(-inv_pd*pd3_rrr(1, 2, 2) + pd1_r(1)*x12 + pd1_r(2)*x10 + pd1_r(2)*x14)
             f3_rrr(1, 2, 2) = t_f3_rrr_011
             f3_rrr(2, 1, 2) = t_f3_rrr_011
             f3_rrr(2, 2, 1) = t_f3_rrr_011
-            t_f3_rrr_012 = -inv_pd*pd3_rrr(1, 2, 3) + pd1_r(1)*x15 + pd1_r(2)*x11 + pd1_r(3)*x14
+            t_f3_rrr_012 = &
+               lsf_scale*(-inv_pd*pd3_rrr(1, 2, 3) + pd1_r(1)*x15 + pd1_r(2)*x11 + pd1_r(3)*x14)
             f3_rrr(1, 2, 3) = t_f3_rrr_012
             f3_rrr(1, 3, 2) = t_f3_rrr_012
             f3_rrr(2, 1, 3) = t_f3_rrr_012
             f3_rrr(2, 3, 1) = t_f3_rrr_012
             f3_rrr(3, 1, 2) = t_f3_rrr_012
             f3_rrr(3, 2, 1) = t_f3_rrr_012
-            t_f3_rrr_022 = -inv_pd*pd3_rrr(1, 3, 3) + pd1_r(1)*x16 + pd1_r(3)*x11 + pd1_r(3)*x17
+            t_f3_rrr_022 = &
+               lsf_scale*(-inv_pd*pd3_rrr(1, 3, 3) + pd1_r(1)*x16 + pd1_r(3)*x11 + pd1_r(3)*x17)
             f3_rrr(1, 3, 3) = t_f3_rrr_022
             f3_rrr(3, 1, 3) = t_f3_rrr_022
             f3_rrr(3, 3, 1) = t_f3_rrr_022
-            f3_rrr(2, 2, 2) = -inv_pd*pd3_rrr(2, 2, 2) + pd1_r(2)*x19 + x12*x18
-            t_f3_rrr_112 = -inv_pd*pd3_rrr(2, 2, 3) + 2.0_wp*pd1_r(2)*x15 + pd1_r(3)*x19
+            f3_rrr(2, 2, 2) = lsf_scale*(-inv_pd*pd3_rrr(2, 2, 2) + pd1_r(2)*x19 + x12*x18)
+            t_f3_rrr_112 = lsf_scale*(-inv_pd*pd3_rrr(2, 2, 3) + 2.0_wp*pd1_r(2)*x15 + pd1_r(3)*x19)
             f3_rrr(2, 2, 3) = t_f3_rrr_112
             f3_rrr(2, 3, 2) = t_f3_rrr_112
             f3_rrr(3, 2, 2) = t_f3_rrr_112
-            t_f3_rrr_122 = -inv_pd*pd3_rrr(2, 3, 3) + pd1_r(2)*x16 + pd1_r(3)*x15 + pd1_r(3)*x20
+            t_f3_rrr_122 = &
+               lsf_scale*(-inv_pd*pd3_rrr(2, 3, 3) + pd1_r(2)*x16 + pd1_r(3)*x15 + pd1_r(3)*x20)
             f3_rrr(2, 3, 3) = t_f3_rrr_122
             f3_rrr(3, 2, 3) = t_f3_rrr_122
             f3_rrr(3, 3, 2) = t_f3_rrr_122
-            f3_rrr(3, 3, 3) = -inv_pd*pd3_rrr(3, 3, 3) + pd1_r(3)*x22 + x16*x21
+            f3_rrr(3, 3, 3) = lsf_scale*(-inv_pd*pd3_rrr(3, 3, 3) + pd1_r(3)*x22 + x16*x21)
             f4_rrrr(1, 1, 1, 1) = &
-               -inv_pd*pd4_rrrr(1, 1, 1, 1) + pd1_r(1)*x31 + pd2_rr(1, 1)*x26 + x23*x24
+               lsf_scale*(-inv_pd*pd4_rrrr(1, 1, 1, 1) + pd1_r(1)*x31 + pd2_rr(1, 1)*x26 + &
+               x23*x24)
             t_f4_rrrr_0001 = &
-               -inv_pd*pd4_rrrr(1, 1, 1, 2) + pd1_r(2)*x31 + pd2_rr(1, 2)*x26 + x24*x32
+               lsf_scale*(-inv_pd*pd4_rrrr(1, 1, 1, 2) + pd1_r(2)*x31 + pd2_rr(1, 2)*x26 + &
+               x24*x32)
             f4_rrrr(1, 1, 1, 2) = t_f4_rrrr_0001
             f4_rrrr(1, 1, 2, 1) = t_f4_rrrr_0001
             f4_rrrr(1, 2, 1, 1) = t_f4_rrrr_0001
             f4_rrrr(2, 1, 1, 1) = t_f4_rrrr_0001
             t_f4_rrrr_0002 = &
-               -inv_pd*pd4_rrrr(1, 1, 1, 3) + pd1_r(3)*x31 + pd2_rr(1, 3)*x26 + x24*x33
+               lsf_scale*(-inv_pd*pd4_rrrr(1, 1, 1, 3) + pd1_r(3)*x31 + pd2_rr(1, 3)*x26 + &
+               x24*x33)
             f4_rrrr(1, 1, 1, 3) = t_f4_rrrr_0002
             f4_rrrr(1, 1, 3, 1) = t_f4_rrrr_0002
             f4_rrrr(1, 3, 1, 1) = t_f4_rrrr_0002
             f4_rrrr(3, 1, 1, 1) = t_f4_rrrr_0002
             t_f4_rrrr_0011 = &
-               -inv_pd*pd4_rrrr(1, 1, 2, 2) + pd1_r(2)*x32 + pd1_r(2)*x36 + pd2_rr(1, 2)*x35 + &
-               pd2_rr(2, 2)*x9 + x34*x6
+               lsf_scale*(-inv_pd*pd4_rrrr(1, 1, 2, 2) + pd1_r(2)*x32 + pd1_r(2)*x36 + pd2_rr(1, &
+               2)*x35 + pd2_rr(2, 2)*x9 + x34*x6)
             f4_rrrr(1, 1, 2, 2) = t_f4_rrrr_0011
             f4_rrrr(1, 2, 1, 2) = t_f4_rrrr_0011
             f4_rrrr(1, 2, 2, 1) = t_f4_rrrr_0011
@@ -311,8 +326,8 @@ contains
             f4_rrrr(2, 1, 2, 1) = t_f4_rrrr_0011
             f4_rrrr(2, 2, 1, 1) = t_f4_rrrr_0011
             t_f4_rrrr_0012 = &
-               -inv_pd*pd4_rrrr(1, 1, 2, 3) + pd1_r(2)*x33 + pd1_r(3)*x36 + pd2_rr(1, 3)*x35 + &
-               pd2_rr(2, 3)*x9 + x37*x6
+               lsf_scale*(-inv_pd*pd4_rrrr(1, 1, 2, 3) + pd1_r(2)*x33 + pd1_r(3)*x36 + pd2_rr(1, &
+               3)*x35 + pd2_rr(2, 3)*x9 + x37*x6)
             f4_rrrr(1, 1, 2, 3) = t_f4_rrrr_0012
             f4_rrrr(1, 1, 3, 2) = t_f4_rrrr_0012
             f4_rrrr(1, 2, 1, 3) = t_f4_rrrr_0012
@@ -326,8 +341,8 @@ contains
             f4_rrrr(3, 1, 2, 1) = t_f4_rrrr_0012
             f4_rrrr(3, 2, 1, 1) = t_f4_rrrr_0012
             t_f4_rrrr_0022 = &
-               -inv_pd*pd4_rrrr(1, 1, 3, 3) + pd1_r(3)*x33 + pd1_r(3)*(pd1_r(3)*x30 - pd2_rr(1, &
-               3)*x28 + x33) + pd2_rr(1, 3)*x39 + pd2_rr(3, 3)*x9 + x38*x6
+               lsf_scale*(-inv_pd*pd4_rrrr(1, 1, 3, 3) + pd1_r(3)*x33 + pd1_r(3)*(pd1_r(3)*x30 - &
+               pd2_rr(1, 3)*x28 + x33) + pd2_rr(1, 3)*x39 + pd2_rr(3, 3)*x9 + x38*x6)
             f4_rrrr(1, 1, 3, 3) = t_f4_rrrr_0022
             f4_rrrr(1, 3, 1, 3) = t_f4_rrrr_0022
             f4_rrrr(1, 3, 3, 1) = t_f4_rrrr_0022
@@ -335,15 +350,15 @@ contains
             f4_rrrr(3, 1, 3, 1) = t_f4_rrrr_0022
             f4_rrrr(3, 3, 1, 1) = t_f4_rrrr_0022
             t_f4_rrrr_0111 = &
-               -inv_pd*pd4_rrrr(1, 2, 2, 2) + pd1_r(1)*x40 + pd1_r(2)*x46 + pd2_rr(1, 2)*x19 + &
-               pd2_rr(2, 2)*x35 + x18*x34
+               lsf_scale*(-inv_pd*pd4_rrrr(1, 2, 2, 2) + pd1_r(1)*x40 + pd1_r(2)*x46 + pd2_rr(1, &
+               2)*x19 + pd2_rr(2, 2)*x35 + x18*x34)
             f4_rrrr(1, 2, 2, 2) = t_f4_rrrr_0111
             f4_rrrr(2, 1, 2, 2) = t_f4_rrrr_0111
             f4_rrrr(2, 2, 1, 2) = t_f4_rrrr_0111
             f4_rrrr(2, 2, 2, 1) = t_f4_rrrr_0111
             t_f4_rrrr_0112 = &
-               -inv_pd*pd4_rrrr(1, 2, 2, 3) + pd1_r(1)*x47 + pd1_r(3)*x46 + pd2_rr(1, 3)*x19 + &
-               pd2_rr(2, 3)*x35 + x18*x37
+               lsf_scale*(-inv_pd*pd4_rrrr(1, 2, 2, 3) + pd1_r(1)*x47 + pd1_r(3)*x46 + pd2_rr(1, &
+               3)*x19 + pd2_rr(2, 3)*x35 + x18*x37)
             f4_rrrr(1, 2, 2, 3) = t_f4_rrrr_0112
             f4_rrrr(1, 2, 3, 2) = t_f4_rrrr_0112
             f4_rrrr(1, 3, 2, 2) = t_f4_rrrr_0112
@@ -357,9 +372,9 @@ contains
             f4_rrrr(3, 2, 1, 2) = t_f4_rrrr_0112
             f4_rrrr(3, 2, 2, 1) = t_f4_rrrr_0112
             t_f4_rrrr_0122 = &
-               -inv_pd*pd4_rrrr(1, 2, 3, 3) + pd1_r(1)*x48 + pd1_r(2)*x38 + pd1_r(3)*x37 + &
-               pd1_r(3)*(-pd1_r(1)*x49 - pd1_r(2)*x50 + pd1_r(3)*x45 + pd3_rrr(1, 2, 3)*x0) + &
-               pd2_rr(1, 3)*x20 + pd2_rr(2, 3)*x17 + pd2_rr(3, 3)*x14
+               lsf_scale*(-inv_pd*pd4_rrrr(1, 2, 3, 3) + pd1_r(1)*x48 + pd1_r(2)*x38 + &
+               pd1_r(3)*x37 + pd1_r(3)*(-pd1_r(1)*x49 - pd1_r(2)*x50 + pd1_r(3)*x45 + pd3_rrr(1, &
+               2, 3)*x0) + pd2_rr(1, 3)*x20 + pd2_rr(2, 3)*x17 + pd2_rr(3, 3)*x14)
             f4_rrrr(1, 2, 3, 3) = t_f4_rrrr_0122
             f4_rrrr(1, 3, 2, 3) = t_f4_rrrr_0122
             f4_rrrr(1, 3, 3, 2) = t_f4_rrrr_0122
@@ -373,24 +388,26 @@ contains
             f4_rrrr(3, 3, 1, 2) = t_f4_rrrr_0122
             f4_rrrr(3, 3, 2, 1) = t_f4_rrrr_0122
             t_f4_rrrr_0222 = &
-               -inv_pd*pd4_rrrr(1, 3, 3, 3) + pd1_r(1)*x51 + pd1_r(3)*(-pd1_r(1)*x52 - &
+               lsf_scale*(-inv_pd*pd4_rrrr(1, 3, 3, 3) + pd1_r(1)*x51 + pd1_r(3)*(-pd1_r(1)*x52 - &
                pd1_r(3)*x50 + pd1_r(3)*(pd1_r(3)*x44 - x50) + pd3_rrr(1, 3, 3)*x0) + pd2_rr(1, &
-               3)*x22 + pd2_rr(3, 3)*x39 + x21*x38
+               3)*x22 + pd2_rr(3, 3)*x39 + x21*x38)
             f4_rrrr(1, 3, 3, 3) = t_f4_rrrr_0222
             f4_rrrr(3, 1, 3, 3) = t_f4_rrrr_0222
             f4_rrrr(3, 3, 1, 3) = t_f4_rrrr_0222
             f4_rrrr(3, 3, 3, 1) = t_f4_rrrr_0222
             f4_rrrr(2, 2, 2, 2) = &
-               -inv_pd*pd4_rrrr(2, 2, 2, 2) + pd1_r(2)*x58 + pd2_rr(2, 2)*x55 + x40*x53
+               lsf_scale*(-inv_pd*pd4_rrrr(2, 2, 2, 2) + pd1_r(2)*x58 + pd2_rr(2, 2)*x55 + &
+               x40*x53)
             t_f4_rrrr_1112 = &
-               -inv_pd*pd4_rrrr(2, 2, 2, 3) + pd1_r(3)*x58 + pd2_rr(2, 3)*x55 + x47*x53
+               lsf_scale*(-inv_pd*pd4_rrrr(2, 2, 2, 3) + pd1_r(3)*x58 + pd2_rr(2, 3)*x55 + &
+               x47*x53)
             f4_rrrr(2, 2, 2, 3) = t_f4_rrrr_1112
             f4_rrrr(2, 2, 3, 2) = t_f4_rrrr_1112
             f4_rrrr(2, 3, 2, 2) = t_f4_rrrr_1112
             f4_rrrr(3, 2, 2, 2) = t_f4_rrrr_1112
             t_f4_rrrr_1122 = &
-               -inv_pd*pd4_rrrr(2, 2, 3, 3) + pd1_r(3)*x47 + pd1_r(3)*(pd1_r(3)*x57 - pd2_rr(2, &
-               3)*x56 + x47) + pd2_rr(2, 3)*x59 + pd2_rr(3, 3)*x19 + x18*x48
+               lsf_scale*(-inv_pd*pd4_rrrr(2, 2, 3, 3) + pd1_r(3)*x47 + pd1_r(3)*(pd1_r(3)*x57 - &
+               pd2_rr(2, 3)*x56 + x47) + pd2_rr(2, 3)*x59 + pd2_rr(3, 3)*x19 + x18*x48)
             f4_rrrr(2, 2, 3, 3) = t_f4_rrrr_1122
             f4_rrrr(2, 3, 2, 3) = t_f4_rrrr_1122
             f4_rrrr(2, 3, 3, 2) = t_f4_rrrr_1122
@@ -398,24 +415,27 @@ contains
             f4_rrrr(3, 2, 3, 2) = t_f4_rrrr_1122
             f4_rrrr(3, 3, 2, 2) = t_f4_rrrr_1122
             t_f4_rrrr_1222 = &
-               -inv_pd*pd4_rrrr(2, 3, 3, 3) + pd1_r(2)*x51 + pd1_r(3)*(-pd1_r(2)*x52 - &
+               lsf_scale*(-inv_pd*pd4_rrrr(2, 3, 3, 3) + pd1_r(2)*x51 + pd1_r(3)*(-pd1_r(2)*x52 - &
                pd1_r(3)*x49 + pd1_r(3)*(x4*x43 - x49) + pd3_rrr(2, 3, 3)*x0) + pd2_rr(2, 3)*x22 + &
-               pd2_rr(3, 3)*x59 + x21*x48
+               pd2_rr(3, 3)*x59 + x21*x48)
             f4_rrrr(2, 3, 3, 3) = t_f4_rrrr_1222
             f4_rrrr(3, 2, 3, 3) = t_f4_rrrr_1222
             f4_rrrr(3, 3, 2, 3) = t_f4_rrrr_1222
             f4_rrrr(3, 3, 3, 2) = t_f4_rrrr_1222
             f4_rrrr(3, 3, 3, 3) = &
-               -inv_pd*pd4_rrrr(3, 3, 3, 3) + 3.0_wp*pd1_r(3)*x51 + pd1_r(3)*(-pd1_r(3)*pd2_rr(3, &
-               3)*x27 + pd1_r(3)*(x29*x60 - x52) + x51) + pd2_rr(3, 3)*(3.0_wp*pd2_rr(3, 3)*x0 - &
-               x60*x7)
+               lsf_scale*(-inv_pd*pd4_rrrr(3, 3, 3, 3) + 3.0_wp*pd1_r(3)*x51 + &
+               pd1_r(3)*(-pd1_r(3)*pd2_rr(3, 3)*x27 + pd1_r(3)*(x29*x60 - x52) + x51) + pd2_rr(3, &
+               3)*(3.0_wp*pd2_rr(3, 3)*x0 - x60*x7))
          end block
       end select
 
    end subroutine cfc_spatial_eval
 
-   pure module subroutine cfc_nuclear_eval(pd0, pd1_r, pd2_rr, pd3_rrr, qn0, qn1_r, qn2_rr, qn3_rrr, &
-                                    max_deriv, f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA)
+   pure module subroutine cfc_nuclear_eval(lsf_scale, pd0, pd1_r, pd2_rr, pd3_rrr, qn0, qn1_r, qn2_rr, &
+                                    qn3_rrr, max_deriv, f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA)
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated order-0 spatial derivative of PD
       real(wp), intent(in) :: pd0
       !> Accumulated order-1 spatial derivative of PD
@@ -467,9 +487,9 @@ contains
       select case (max_deriv)
       case (0)
          block
-            f1_rA(1) = -inv_pd*qn0(1)
-            f1_rA(2) = -inv_pd*qn0(2)
-            f1_rA(3) = -inv_pd*qn0(3)
+            f1_rA(1) = lsf_scale*(-inv_pd*qn0(1))
+            f1_rA(2) = lsf_scale*(-inv_pd*qn0(2))
+            f1_rA(3) = lsf_scale*(-inv_pd*qn0(3))
          end block
       case (1)
          block
@@ -480,18 +500,18 @@ contains
             x1 = pd1_r(1)*x0
             x2 = pd1_r(2)*x0
             x3 = pd1_r(3)*x0
-            f1_rA(1) = -inv_pd*qn0(1)
-            f1_rA(2) = -inv_pd*qn0(2)
-            f1_rA(3) = -inv_pd*qn0(3)
-            f2_r_rA(1, 1) = -inv_pd*qn1_r(1, 1) + qn0(1)*x1
-            f2_r_rA(1, 2) = -inv_pd*qn1_r(1, 2) + qn0(2)*x1
-            f2_r_rA(1, 3) = -inv_pd*qn1_r(1, 3) + qn0(3)*x1
-            f2_r_rA(2, 1) = -inv_pd*qn1_r(2, 1) + qn0(1)*x2
-            f2_r_rA(2, 2) = -inv_pd*qn1_r(2, 2) + qn0(2)*x2
-            f2_r_rA(2, 3) = -inv_pd*qn1_r(2, 3) + qn0(3)*x2
-            f2_r_rA(3, 1) = -inv_pd*qn1_r(3, 1) + qn0(1)*x3
-            f2_r_rA(3, 2) = -inv_pd*qn1_r(3, 2) + qn0(2)*x3
-            f2_r_rA(3, 3) = -inv_pd*qn1_r(3, 3) + qn0(3)*x3
+            f1_rA(1) = lsf_scale*(-inv_pd*qn0(1))
+            f1_rA(2) = lsf_scale*(-inv_pd*qn0(2))
+            f1_rA(3) = lsf_scale*(-inv_pd*qn0(3))
+            f2_r_rA(1, 1) = lsf_scale*(-inv_pd*qn1_r(1, 1) + qn0(1)*x1)
+            f2_r_rA(1, 2) = lsf_scale*(-inv_pd*qn1_r(1, 2) + qn0(2)*x1)
+            f2_r_rA(1, 3) = lsf_scale*(-inv_pd*qn1_r(1, 3) + qn0(3)*x1)
+            f2_r_rA(2, 1) = lsf_scale*(-inv_pd*qn1_r(2, 1) + qn0(1)*x2)
+            f2_r_rA(2, 2) = lsf_scale*(-inv_pd*qn1_r(2, 2) + qn0(2)*x2)
+            f2_r_rA(2, 3) = lsf_scale*(-inv_pd*qn1_r(2, 3) + qn0(3)*x2)
+            f2_r_rA(3, 1) = lsf_scale*(-inv_pd*qn1_r(3, 1) + qn0(1)*x3)
+            f2_r_rA(3, 2) = lsf_scale*(-inv_pd*qn1_r(3, 2) + qn0(2)*x3)
+            f2_r_rA(3, 3) = lsf_scale*(-inv_pd*qn1_r(3, 3) + qn0(3)*x3)
          end block
       case (2)
          block
@@ -516,54 +536,63 @@ contains
             x12 = -pd1_r(2)*pd1_r(3)*x5 + pd2_rr(2, 3)*x0
             x13 = 2.0_wp*x3
             x14 = -(pd1_r(3)*pd1_r(3))*x5 + pd2_rr(3, 3)*x0
-            f1_rA(1) = -inv_pd*qn0(1)
-            f1_rA(2) = -inv_pd*qn0(2)
-            f1_rA(3) = -inv_pd*qn0(3)
-            f2_r_rA(1, 1) = -inv_pd*qn1_r(1, 1) + qn0(1)*x1
-            f2_r_rA(1, 2) = -inv_pd*qn1_r(1, 2) + qn0(2)*x1
-            f2_r_rA(1, 3) = -inv_pd*qn1_r(1, 3) + qn0(3)*x1
-            f2_r_rA(2, 1) = -inv_pd*qn1_r(2, 1) + qn0(1)*x2
-            f2_r_rA(2, 2) = -inv_pd*qn1_r(2, 2) + qn0(2)*x2
-            f2_r_rA(2, 3) = -inv_pd*qn1_r(2, 3) + qn0(3)*x2
-            f2_r_rA(3, 1) = -inv_pd*qn1_r(3, 1) + qn0(1)*x3
-            f2_r_rA(3, 2) = -inv_pd*qn1_r(3, 2) + qn0(2)*x3
-            f2_r_rA(3, 3) = -inv_pd*qn1_r(3, 3) + qn0(3)*x3
-            f3_rr_rA(1, 1, 1) = -inv_pd*qn2_rr(1, 1, 1) + qn0(1)*x6 + qn1_r(1, 1)*x4
-            f3_rr_rA(1, 1, 2) = -inv_pd*qn2_rr(1, 1, 2) + qn0(2)*x6 + qn1_r(1, 2)*x4
-            f3_rr_rA(1, 1, 3) = -inv_pd*qn2_rr(1, 1, 3) + qn0(3)*x6 + qn1_r(1, 3)*x4
-            t_f3_rr_rA_010 = -inv_pd*qn2_rr(1, 2, 1) + qn0(1)*x8 + qn1_r(1, 1)*x2 + qn1_r(2, 1)*x1
+            f1_rA(1) = lsf_scale*(-inv_pd*qn0(1))
+            f1_rA(2) = lsf_scale*(-inv_pd*qn0(2))
+            f1_rA(3) = lsf_scale*(-inv_pd*qn0(3))
+            f2_r_rA(1, 1) = lsf_scale*(-inv_pd*qn1_r(1, 1) + qn0(1)*x1)
+            f2_r_rA(1, 2) = lsf_scale*(-inv_pd*qn1_r(1, 2) + qn0(2)*x1)
+            f2_r_rA(1, 3) = lsf_scale*(-inv_pd*qn1_r(1, 3) + qn0(3)*x1)
+            f2_r_rA(2, 1) = lsf_scale*(-inv_pd*qn1_r(2, 1) + qn0(1)*x2)
+            f2_r_rA(2, 2) = lsf_scale*(-inv_pd*qn1_r(2, 2) + qn0(2)*x2)
+            f2_r_rA(2, 3) = lsf_scale*(-inv_pd*qn1_r(2, 3) + qn0(3)*x2)
+            f2_r_rA(3, 1) = lsf_scale*(-inv_pd*qn1_r(3, 1) + qn0(1)*x3)
+            f2_r_rA(3, 2) = lsf_scale*(-inv_pd*qn1_r(3, 2) + qn0(2)*x3)
+            f2_r_rA(3, 3) = lsf_scale*(-inv_pd*qn1_r(3, 3) + qn0(3)*x3)
+            f3_rr_rA(1, 1, 1) = lsf_scale*(-inv_pd*qn2_rr(1, 1, 1) + qn0(1)*x6 + qn1_r(1, 1)*x4)
+            f3_rr_rA(1, 1, 2) = lsf_scale*(-inv_pd*qn2_rr(1, 1, 2) + qn0(2)*x6 + qn1_r(1, 2)*x4)
+            f3_rr_rA(1, 1, 3) = lsf_scale*(-inv_pd*qn2_rr(1, 1, 3) + qn0(3)*x6 + qn1_r(1, 3)*x4)
+            t_f3_rr_rA_010 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 2, 1) + qn0(1)*x8 + qn1_r(1, 1)*x2 + qn1_r(2, 1)*x1)
             f3_rr_rA(1, 2, 1) = t_f3_rr_rA_010
             f3_rr_rA(2, 1, 1) = t_f3_rr_rA_010
-            t_f3_rr_rA_011 = -inv_pd*qn2_rr(1, 2, 2) + qn0(2)*x8 + qn1_r(1, 2)*x2 + qn1_r(2, 2)*x1
+            t_f3_rr_rA_011 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 2, 2) + qn0(2)*x8 + qn1_r(1, 2)*x2 + qn1_r(2, 2)*x1)
             f3_rr_rA(1, 2, 2) = t_f3_rr_rA_011
             f3_rr_rA(2, 1, 2) = t_f3_rr_rA_011
-            t_f3_rr_rA_012 = -inv_pd*qn2_rr(1, 2, 3) + qn0(3)*x8 + qn1_r(1, 3)*x2 + qn1_r(2, 3)*x1
+            t_f3_rr_rA_012 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 2, 3) + qn0(3)*x8 + qn1_r(1, 3)*x2 + qn1_r(2, 3)*x1)
             f3_rr_rA(1, 2, 3) = t_f3_rr_rA_012
             f3_rr_rA(2, 1, 3) = t_f3_rr_rA_012
-            t_f3_rr_rA_020 = -inv_pd*qn2_rr(1, 3, 1) + qn0(1)*x9 + qn1_r(1, 1)*x3 + qn1_r(3, 1)*x1
+            t_f3_rr_rA_020 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 3, 1) + qn0(1)*x9 + qn1_r(1, 1)*x3 + qn1_r(3, 1)*x1)
             f3_rr_rA(1, 3, 1) = t_f3_rr_rA_020
             f3_rr_rA(3, 1, 1) = t_f3_rr_rA_020
-            t_f3_rr_rA_021 = -inv_pd*qn2_rr(1, 3, 2) + qn0(2)*x9 + qn1_r(1, 2)*x3 + qn1_r(3, 2)*x1
+            t_f3_rr_rA_021 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 3, 2) + qn0(2)*x9 + qn1_r(1, 2)*x3 + qn1_r(3, 2)*x1)
             f3_rr_rA(1, 3, 2) = t_f3_rr_rA_021
             f3_rr_rA(3, 1, 2) = t_f3_rr_rA_021
-            t_f3_rr_rA_022 = -inv_pd*qn2_rr(1, 3, 3) + qn0(3)*x9 + qn1_r(1, 3)*x3 + qn1_r(3, 3)*x1
+            t_f3_rr_rA_022 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 3, 3) + qn0(3)*x9 + qn1_r(1, 3)*x3 + qn1_r(3, 3)*x1)
             f3_rr_rA(1, 3, 3) = t_f3_rr_rA_022
             f3_rr_rA(3, 1, 3) = t_f3_rr_rA_022
-            f3_rr_rA(2, 2, 1) = -inv_pd*qn2_rr(2, 2, 1) + qn0(1)*x11 + qn1_r(2, 1)*x10
-            f3_rr_rA(2, 2, 2) = -inv_pd*qn2_rr(2, 2, 2) + qn0(2)*x11 + qn1_r(2, 2)*x10
-            f3_rr_rA(2, 2, 3) = -inv_pd*qn2_rr(2, 2, 3) + qn0(3)*x11 + qn1_r(2, 3)*x10
-            t_f3_rr_rA_120 = -inv_pd*qn2_rr(2, 3, 1) + qn0(1)*x12 + qn1_r(2, 1)*x3 + qn1_r(3, 1)*x2
+            f3_rr_rA(2, 2, 1) = lsf_scale*(-inv_pd*qn2_rr(2, 2, 1) + qn0(1)*x11 + qn1_r(2, 1)*x10)
+            f3_rr_rA(2, 2, 2) = lsf_scale*(-inv_pd*qn2_rr(2, 2, 2) + qn0(2)*x11 + qn1_r(2, 2)*x10)
+            f3_rr_rA(2, 2, 3) = lsf_scale*(-inv_pd*qn2_rr(2, 2, 3) + qn0(3)*x11 + qn1_r(2, 3)*x10)
+            t_f3_rr_rA_120 = &
+               lsf_scale*(-inv_pd*qn2_rr(2, 3, 1) + qn0(1)*x12 + qn1_r(2, 1)*x3 + qn1_r(3, 1)*x2)
             f3_rr_rA(2, 3, 1) = t_f3_rr_rA_120
             f3_rr_rA(3, 2, 1) = t_f3_rr_rA_120
-            t_f3_rr_rA_121 = -inv_pd*qn2_rr(2, 3, 2) + qn0(2)*x12 + qn1_r(2, 2)*x3 + qn1_r(3, 2)*x2
+            t_f3_rr_rA_121 = &
+               lsf_scale*(-inv_pd*qn2_rr(2, 3, 2) + qn0(2)*x12 + qn1_r(2, 2)*x3 + qn1_r(3, 2)*x2)
             f3_rr_rA(2, 3, 2) = t_f3_rr_rA_121
             f3_rr_rA(3, 2, 2) = t_f3_rr_rA_121
-            t_f3_rr_rA_122 = -inv_pd*qn2_rr(2, 3, 3) + qn0(3)*x12 + qn1_r(2, 3)*x3 + qn1_r(3, 3)*x2
+            t_f3_rr_rA_122 = &
+               lsf_scale*(-inv_pd*qn2_rr(2, 3, 3) + qn0(3)*x12 + qn1_r(2, 3)*x3 + qn1_r(3, 3)*x2)
             f3_rr_rA(2, 3, 3) = t_f3_rr_rA_122
             f3_rr_rA(3, 2, 3) = t_f3_rr_rA_122
-            f3_rr_rA(3, 3, 1) = -inv_pd*qn2_rr(3, 3, 1) + qn0(1)*x14 + qn1_r(3, 1)*x13
-            f3_rr_rA(3, 3, 2) = -inv_pd*qn2_rr(3, 3, 2) + qn0(2)*x14 + qn1_r(3, 2)*x13
-            f3_rr_rA(3, 3, 3) = -inv_pd*qn2_rr(3, 3, 3) + qn0(3)*x14 + qn1_r(3, 3)*x13
+            f3_rr_rA(3, 3, 1) = lsf_scale*(-inv_pd*qn2_rr(3, 3, 1) + qn0(1)*x14 + qn1_r(3, 1)*x13)
+            f3_rr_rA(3, 3, 2) = lsf_scale*(-inv_pd*qn2_rr(3, 3, 2) + qn0(2)*x14 + qn1_r(3, 2)*x13)
+            f3_rr_rA(3, 3, 3) = lsf_scale*(-inv_pd*qn2_rr(3, 3, 3) + qn0(3)*x14 + qn1_r(3, 3)*x13)
          end block
       case default
          block
@@ -636,117 +665,130 @@ contains
             x53 = 6.0_wp*x18
             x54 = 3.0_wp*pd2_rr(3, 3)*x0 - x53*x6
             x55 = -pd1_r(3)*pd2_rr(3, 3)*x23 + pd1_r(3)*(x25*x53 - x41) + pd3_rrr(3, 3, 3)*x0
-            f1_rA(1) = -inv_pd*qn0(1)
-            f1_rA(2) = -inv_pd*qn0(2)
-            f1_rA(3) = -inv_pd*qn0(3)
-            f2_r_rA(1, 1) = -inv_pd*qn1_r(1, 1) + qn0(1)*x1
-            f2_r_rA(1, 2) = -inv_pd*qn1_r(1, 2) + qn0(2)*x1
-            f2_r_rA(1, 3) = -inv_pd*qn1_r(1, 3) + qn0(3)*x1
-            f2_r_rA(2, 1) = -inv_pd*qn1_r(2, 1) + qn0(1)*x2
-            f2_r_rA(2, 2) = -inv_pd*qn1_r(2, 2) + qn0(2)*x2
-            f2_r_rA(2, 3) = -inv_pd*qn1_r(2, 3) + qn0(3)*x2
-            f2_r_rA(3, 1) = -inv_pd*qn1_r(3, 1) + qn0(1)*x3
-            f2_r_rA(3, 2) = -inv_pd*qn1_r(3, 2) + qn0(2)*x3
-            f2_r_rA(3, 3) = -inv_pd*qn1_r(3, 3) + qn0(3)*x3
-            f3_rr_rA(1, 1, 1) = -inv_pd*qn2_rr(1, 1, 1) + qn0(1)*x8 + qn1_r(1, 1)*x4
-            f3_rr_rA(1, 1, 2) = -inv_pd*qn2_rr(1, 1, 2) + qn0(2)*x8 + qn1_r(1, 2)*x4
-            f3_rr_rA(1, 1, 3) = -inv_pd*qn2_rr(1, 1, 3) + qn0(3)*x8 + qn1_r(1, 3)*x4
-            t_f3_rr_rA_010 = -inv_pd*qn2_rr(1, 2, 1) + qn0(1)*x10 + qn1_r(1, 1)*x2 + qn1_r(2, 1)*x1
+            f1_rA(1) = lsf_scale*(-inv_pd*qn0(1))
+            f1_rA(2) = lsf_scale*(-inv_pd*qn0(2))
+            f1_rA(3) = lsf_scale*(-inv_pd*qn0(3))
+            f2_r_rA(1, 1) = lsf_scale*(-inv_pd*qn1_r(1, 1) + qn0(1)*x1)
+            f2_r_rA(1, 2) = lsf_scale*(-inv_pd*qn1_r(1, 2) + qn0(2)*x1)
+            f2_r_rA(1, 3) = lsf_scale*(-inv_pd*qn1_r(1, 3) + qn0(3)*x1)
+            f2_r_rA(2, 1) = lsf_scale*(-inv_pd*qn1_r(2, 1) + qn0(1)*x2)
+            f2_r_rA(2, 2) = lsf_scale*(-inv_pd*qn1_r(2, 2) + qn0(2)*x2)
+            f2_r_rA(2, 3) = lsf_scale*(-inv_pd*qn1_r(2, 3) + qn0(3)*x2)
+            f2_r_rA(3, 1) = lsf_scale*(-inv_pd*qn1_r(3, 1) + qn0(1)*x3)
+            f2_r_rA(3, 2) = lsf_scale*(-inv_pd*qn1_r(3, 2) + qn0(2)*x3)
+            f2_r_rA(3, 3) = lsf_scale*(-inv_pd*qn1_r(3, 3) + qn0(3)*x3)
+            f3_rr_rA(1, 1, 1) = lsf_scale*(-inv_pd*qn2_rr(1, 1, 1) + qn0(1)*x8 + qn1_r(1, 1)*x4)
+            f3_rr_rA(1, 1, 2) = lsf_scale*(-inv_pd*qn2_rr(1, 1, 2) + qn0(2)*x8 + qn1_r(1, 2)*x4)
+            f3_rr_rA(1, 1, 3) = lsf_scale*(-inv_pd*qn2_rr(1, 1, 3) + qn0(3)*x8 + qn1_r(1, 3)*x4)
+            t_f3_rr_rA_010 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 2, 1) + qn0(1)*x10 + qn1_r(1, 1)*x2 + qn1_r(2, 1)*x1)
             f3_rr_rA(1, 2, 1) = t_f3_rr_rA_010
             f3_rr_rA(2, 1, 1) = t_f3_rr_rA_010
-            t_f3_rr_rA_011 = -inv_pd*qn2_rr(1, 2, 2) + qn0(2)*x10 + qn1_r(1, 2)*x2 + qn1_r(2, 2)*x1
+            t_f3_rr_rA_011 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 2, 2) + qn0(2)*x10 + qn1_r(1, 2)*x2 + qn1_r(2, 2)*x1)
             f3_rr_rA(1, 2, 2) = t_f3_rr_rA_011
             f3_rr_rA(2, 1, 2) = t_f3_rr_rA_011
-            t_f3_rr_rA_012 = -inv_pd*qn2_rr(1, 2, 3) + qn0(3)*x10 + qn1_r(1, 3)*x2 + qn1_r(2, 3)*x1
+            t_f3_rr_rA_012 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 2, 3) + qn0(3)*x10 + qn1_r(1, 3)*x2 + qn1_r(2, 3)*x1)
             f3_rr_rA(1, 2, 3) = t_f3_rr_rA_012
             f3_rr_rA(2, 1, 3) = t_f3_rr_rA_012
-            t_f3_rr_rA_020 = -inv_pd*qn2_rr(1, 3, 1) + qn0(1)*x11 + qn1_r(1, 1)*x3 + qn1_r(3, 1)*x1
+            t_f3_rr_rA_020 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 3, 1) + qn0(1)*x11 + qn1_r(1, 1)*x3 + qn1_r(3, 1)*x1)
             f3_rr_rA(1, 3, 1) = t_f3_rr_rA_020
             f3_rr_rA(3, 1, 1) = t_f3_rr_rA_020
-            t_f3_rr_rA_021 = -inv_pd*qn2_rr(1, 3, 2) + qn0(2)*x11 + qn1_r(1, 2)*x3 + qn1_r(3, 2)*x1
+            t_f3_rr_rA_021 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 3, 2) + qn0(2)*x11 + qn1_r(1, 2)*x3 + qn1_r(3, 2)*x1)
             f3_rr_rA(1, 3, 2) = t_f3_rr_rA_021
             f3_rr_rA(3, 1, 2) = t_f3_rr_rA_021
-            t_f3_rr_rA_022 = -inv_pd*qn2_rr(1, 3, 3) + qn0(3)*x11 + qn1_r(1, 3)*x3 + qn1_r(3, 3)*x1
+            t_f3_rr_rA_022 = &
+               lsf_scale*(-inv_pd*qn2_rr(1, 3, 3) + qn0(3)*x11 + qn1_r(1, 3)*x3 + qn1_r(3, 3)*x1)
             f3_rr_rA(1, 3, 3) = t_f3_rr_rA_022
             f3_rr_rA(3, 1, 3) = t_f3_rr_rA_022
-            f3_rr_rA(2, 2, 1) = -inv_pd*qn2_rr(2, 2, 1) + qn0(1)*x14 + qn1_r(2, 1)*x12
-            f3_rr_rA(2, 2, 2) = -inv_pd*qn2_rr(2, 2, 2) + qn0(2)*x14 + qn1_r(2, 2)*x12
-            f3_rr_rA(2, 2, 3) = -inv_pd*qn2_rr(2, 2, 3) + qn0(3)*x14 + qn1_r(2, 3)*x12
-            t_f3_rr_rA_120 = -inv_pd*qn2_rr(2, 3, 1) + qn0(1)*x16 + qn1_r(2, 1)*x3 + qn1_r(3, 1)*x2
+            f3_rr_rA(2, 2, 1) = lsf_scale*(-inv_pd*qn2_rr(2, 2, 1) + qn0(1)*x14 + qn1_r(2, 1)*x12)
+            f3_rr_rA(2, 2, 2) = lsf_scale*(-inv_pd*qn2_rr(2, 2, 2) + qn0(2)*x14 + qn1_r(2, 2)*x12)
+            f3_rr_rA(2, 2, 3) = lsf_scale*(-inv_pd*qn2_rr(2, 2, 3) + qn0(3)*x14 + qn1_r(2, 3)*x12)
+            t_f3_rr_rA_120 = &
+               lsf_scale*(-inv_pd*qn2_rr(2, 3, 1) + qn0(1)*x16 + qn1_r(2, 1)*x3 + qn1_r(3, 1)*x2)
             f3_rr_rA(2, 3, 1) = t_f3_rr_rA_120
             f3_rr_rA(3, 2, 1) = t_f3_rr_rA_120
-            t_f3_rr_rA_121 = -inv_pd*qn2_rr(2, 3, 2) + qn0(2)*x16 + qn1_r(2, 2)*x3 + qn1_r(3, 2)*x2
+            t_f3_rr_rA_121 = &
+               lsf_scale*(-inv_pd*qn2_rr(2, 3, 2) + qn0(2)*x16 + qn1_r(2, 2)*x3 + qn1_r(3, 2)*x2)
             f3_rr_rA(2, 3, 2) = t_f3_rr_rA_121
             f3_rr_rA(3, 2, 2) = t_f3_rr_rA_121
-            t_f3_rr_rA_122 = -inv_pd*qn2_rr(2, 3, 3) + qn0(3)*x16 + qn1_r(2, 3)*x3 + qn1_r(3, 3)*x2
+            t_f3_rr_rA_122 = &
+               lsf_scale*(-inv_pd*qn2_rr(2, 3, 3) + qn0(3)*x16 + qn1_r(2, 3)*x3 + qn1_r(3, 3)*x2)
             f3_rr_rA(2, 3, 3) = t_f3_rr_rA_122
             f3_rr_rA(3, 2, 3) = t_f3_rr_rA_122
-            f3_rr_rA(3, 3, 1) = -inv_pd*qn2_rr(3, 3, 1) + qn0(1)*x19 + qn1_r(3, 1)*x17
-            f3_rr_rA(3, 3, 2) = -inv_pd*qn2_rr(3, 3, 2) + qn0(2)*x19 + qn1_r(3, 2)*x17
-            f3_rr_rA(3, 3, 3) = -inv_pd*qn2_rr(3, 3, 3) + qn0(3)*x19 + qn1_r(3, 3)*x17
+            f3_rr_rA(3, 3, 1) = lsf_scale*(-inv_pd*qn2_rr(3, 3, 1) + qn0(1)*x19 + qn1_r(3, 1)*x17)
+            f3_rr_rA(3, 3, 2) = lsf_scale*(-inv_pd*qn2_rr(3, 3, 2) + qn0(2)*x19 + qn1_r(3, 2)*x17)
+            f3_rr_rA(3, 3, 3) = lsf_scale*(-inv_pd*qn2_rr(3, 3, 3) + qn0(3)*x19 + qn1_r(3, 3)*x17)
             f4_rrr_rA(1, 1, 1, 1) = &
-               -inv_pd*qn3_rrr(1, 1, 1, 1) + qn0(1)*x27 + qn1_r(1, 1)*x22 + qn2_rr(1, 1, 1)*x20
+               lsf_scale*(-inv_pd*qn3_rrr(1, 1, 1, 1) + qn0(1)*x27 + qn1_r(1, 1)*x22 + qn2_rr(1, &
+               1, 1)*x20)
             f4_rrr_rA(1, 1, 1, 2) = &
-               -inv_pd*qn3_rrr(1, 1, 1, 2) + qn0(2)*x27 + qn1_r(1, 2)*x22 + qn2_rr(1, 1, 2)*x20
+               lsf_scale*(-inv_pd*qn3_rrr(1, 1, 1, 2) + qn0(2)*x27 + qn1_r(1, 2)*x22 + qn2_rr(1, &
+               1, 2)*x20)
             f4_rrr_rA(1, 1, 1, 3) = &
-               -inv_pd*qn3_rrr(1, 1, 1, 3) + qn0(3)*x27 + qn1_r(1, 3)*x22 + qn2_rr(1, 1, 3)*x20
+               lsf_scale*(-inv_pd*qn3_rrr(1, 1, 1, 3) + qn0(3)*x27 + qn1_r(1, 3)*x22 + qn2_rr(1, &
+               1, 3)*x20)
             t_f4_rrr_rA_0010 = &
-               -inv_pd*qn3_rrr(1, 1, 2, 1) + qn0(1)*x29 + qn1_r(1, 1)*x28 + qn1_r(2, 1)*x8 + &
-               qn2_rr(1, 1, 1)*x2 + qn2_rr(1, 2, 1)*x4
+               lsf_scale*(-inv_pd*qn3_rrr(1, 1, 2, 1) + qn0(1)*x29 + qn1_r(1, 1)*x28 + qn1_r(2, &
+               1)*x8 + qn2_rr(1, 1, 1)*x2 + qn2_rr(1, 2, 1)*x4)
             f4_rrr_rA(1, 1, 2, 1) = t_f4_rrr_rA_0010
             f4_rrr_rA(1, 2, 1, 1) = t_f4_rrr_rA_0010
             f4_rrr_rA(2, 1, 1, 1) = t_f4_rrr_rA_0010
             t_f4_rrr_rA_0011 = &
-               -inv_pd*qn3_rrr(1, 1, 2, 2) + qn0(2)*x29 + qn1_r(1, 2)*x28 + qn1_r(2, 2)*x8 + &
-               qn2_rr(1, 1, 2)*x2 + qn2_rr(1, 2, 2)*x4
+               lsf_scale*(-inv_pd*qn3_rrr(1, 1, 2, 2) + qn0(2)*x29 + qn1_r(1, 2)*x28 + qn1_r(2, &
+               2)*x8 + qn2_rr(1, 1, 2)*x2 + qn2_rr(1, 2, 2)*x4)
             f4_rrr_rA(1, 1, 2, 2) = t_f4_rrr_rA_0011
             f4_rrr_rA(1, 2, 1, 2) = t_f4_rrr_rA_0011
             f4_rrr_rA(2, 1, 1, 2) = t_f4_rrr_rA_0011
             t_f4_rrr_rA_0012 = &
-               -inv_pd*qn3_rrr(1, 1, 2, 3) + qn0(3)*x29 + qn1_r(1, 3)*x28 + qn1_r(2, 3)*x8 + &
-               qn2_rr(1, 1, 3)*x2 + qn2_rr(1, 2, 3)*x4
+               lsf_scale*(-inv_pd*qn3_rrr(1, 1, 2, 3) + qn0(3)*x29 + qn1_r(1, 3)*x28 + qn1_r(2, &
+               3)*x8 + qn2_rr(1, 1, 3)*x2 + qn2_rr(1, 2, 3)*x4)
             f4_rrr_rA(1, 1, 2, 3) = t_f4_rrr_rA_0012
             f4_rrr_rA(1, 2, 1, 3) = t_f4_rrr_rA_0012
             f4_rrr_rA(2, 1, 1, 3) = t_f4_rrr_rA_0012
             t_f4_rrr_rA_0020 = &
-               -inv_pd*qn3_rrr(1, 1, 3, 1) + qn0(1)*x31 + qn1_r(1, 1)*x30 + qn1_r(3, 1)*x8 + &
-               qn2_rr(1, 1, 1)*x3 + qn2_rr(1, 3, 1)*x4
+               lsf_scale*(-inv_pd*qn3_rrr(1, 1, 3, 1) + qn0(1)*x31 + qn1_r(1, 1)*x30 + qn1_r(3, &
+               1)*x8 + qn2_rr(1, 1, 1)*x3 + qn2_rr(1, 3, 1)*x4)
             f4_rrr_rA(1, 1, 3, 1) = t_f4_rrr_rA_0020
             f4_rrr_rA(1, 3, 1, 1) = t_f4_rrr_rA_0020
             f4_rrr_rA(3, 1, 1, 1) = t_f4_rrr_rA_0020
             t_f4_rrr_rA_0021 = &
-               -inv_pd*qn3_rrr(1, 1, 3, 2) + qn0(2)*x31 + qn1_r(1, 2)*x30 + qn1_r(3, 2)*x8 + &
-               qn2_rr(1, 1, 2)*x3 + qn2_rr(1, 3, 2)*x4
+               lsf_scale*(-inv_pd*qn3_rrr(1, 1, 3, 2) + qn0(2)*x31 + qn1_r(1, 2)*x30 + qn1_r(3, &
+               2)*x8 + qn2_rr(1, 1, 2)*x3 + qn2_rr(1, 3, 2)*x4)
             f4_rrr_rA(1, 1, 3, 2) = t_f4_rrr_rA_0021
             f4_rrr_rA(1, 3, 1, 2) = t_f4_rrr_rA_0021
             f4_rrr_rA(3, 1, 1, 2) = t_f4_rrr_rA_0021
             t_f4_rrr_rA_0022 = &
-               -inv_pd*qn3_rrr(1, 1, 3, 3) + qn0(3)*x31 + qn1_r(1, 3)*x30 + qn1_r(3, 3)*x8 + &
-               qn2_rr(1, 1, 3)*x3 + qn2_rr(1, 3, 3)*x4
+               lsf_scale*(-inv_pd*qn3_rrr(1, 1, 3, 3) + qn0(3)*x31 + qn1_r(1, 3)*x30 + qn1_r(3, &
+               3)*x8 + qn2_rr(1, 1, 3)*x3 + qn2_rr(1, 3, 3)*x4)
             f4_rrr_rA(1, 1, 3, 3) = t_f4_rrr_rA_0022
             f4_rrr_rA(1, 3, 1, 3) = t_f4_rrr_rA_0022
             f4_rrr_rA(3, 1, 1, 3) = t_f4_rrr_rA_0022
             t_f4_rrr_rA_0110 = &
-               -inv_pd*qn3_rrr(1, 2, 2, 1) + qn0(1)*x37 + qn1_r(1, 1)*x14 + qn1_r(2, 1)*x28 + &
-               qn2_rr(1, 2, 1)*x12 + qn2_rr(2, 2, 1)*x1
+               lsf_scale*(-inv_pd*qn3_rrr(1, 2, 2, 1) + qn0(1)*x37 + qn1_r(1, 1)*x14 + qn1_r(2, &
+               1)*x28 + qn2_rr(1, 2, 1)*x12 + qn2_rr(2, 2, 1)*x1)
             f4_rrr_rA(1, 2, 2, 1) = t_f4_rrr_rA_0110
             f4_rrr_rA(2, 1, 2, 1) = t_f4_rrr_rA_0110
             f4_rrr_rA(2, 2, 1, 1) = t_f4_rrr_rA_0110
             t_f4_rrr_rA_0111 = &
-               -inv_pd*qn3_rrr(1, 2, 2, 2) + qn0(2)*x37 + qn1_r(1, 2)*x14 + qn1_r(2, 2)*x28 + &
-               qn2_rr(1, 2, 2)*x12 + qn2_rr(2, 2, 2)*x1
+               lsf_scale*(-inv_pd*qn3_rrr(1, 2, 2, 2) + qn0(2)*x37 + qn1_r(1, 2)*x14 + qn1_r(2, &
+               2)*x28 + qn2_rr(1, 2, 2)*x12 + qn2_rr(2, 2, 2)*x1)
             f4_rrr_rA(1, 2, 2, 2) = t_f4_rrr_rA_0111
             f4_rrr_rA(2, 1, 2, 2) = t_f4_rrr_rA_0111
             f4_rrr_rA(2, 2, 1, 2) = t_f4_rrr_rA_0111
             t_f4_rrr_rA_0112 = &
-               -inv_pd*qn3_rrr(1, 2, 2, 3) + qn0(3)*x37 + qn1_r(1, 3)*x14 + qn1_r(2, 3)*x28 + &
-               qn2_rr(1, 2, 3)*x12 + qn2_rr(2, 2, 3)*x1
+               lsf_scale*(-inv_pd*qn3_rrr(1, 2, 2, 3) + qn0(3)*x37 + qn1_r(1, 3)*x14 + qn1_r(2, &
+               3)*x28 + qn2_rr(1, 2, 3)*x12 + qn2_rr(2, 2, 3)*x1)
             f4_rrr_rA(1, 2, 2, 3) = t_f4_rrr_rA_0112
             f4_rrr_rA(2, 1, 2, 3) = t_f4_rrr_rA_0112
             f4_rrr_rA(2, 2, 1, 3) = t_f4_rrr_rA_0112
             t_f4_rrr_rA_0120 = &
-               -inv_pd*qn3_rrr(1, 2, 3, 1) + qn0(1)*x40 + qn1_r(1, 1)*x16 + qn1_r(2, 1)*x11 + &
-               qn1_r(3, 1)*x10 + qn2_rr(1, 2, 1)*x3 + qn2_rr(1, 3, 1)*x2 + qn2_rr(2, 3, 1)*x1
+               lsf_scale*(-inv_pd*qn3_rrr(1, 2, 3, 1) + qn0(1)*x40 + qn1_r(1, 1)*x16 + qn1_r(2, &
+               1)*x11 + qn1_r(3, 1)*x10 + qn2_rr(1, 2, 1)*x3 + qn2_rr(1, 3, 1)*x2 + qn2_rr(2, 3, &
+               1)*x1)
             f4_rrr_rA(1, 2, 3, 1) = t_f4_rrr_rA_0120
             f4_rrr_rA(1, 3, 2, 1) = t_f4_rrr_rA_0120
             f4_rrr_rA(2, 1, 3, 1) = t_f4_rrr_rA_0120
@@ -754,8 +796,9 @@ contains
             f4_rrr_rA(3, 1, 2, 1) = t_f4_rrr_rA_0120
             f4_rrr_rA(3, 2, 1, 1) = t_f4_rrr_rA_0120
             t_f4_rrr_rA_0121 = &
-               -inv_pd*qn3_rrr(1, 2, 3, 2) + qn0(2)*x40 + qn1_r(1, 2)*x16 + qn1_r(2, 2)*x11 + &
-               qn1_r(3, 2)*x10 + qn2_rr(1, 2, 2)*x3 + qn2_rr(1, 3, 2)*x2 + qn2_rr(2, 3, 2)*x1
+               lsf_scale*(-inv_pd*qn3_rrr(1, 2, 3, 2) + qn0(2)*x40 + qn1_r(1, 2)*x16 + qn1_r(2, &
+               2)*x11 + qn1_r(3, 2)*x10 + qn2_rr(1, 2, 2)*x3 + qn2_rr(1, 3, 2)*x2 + qn2_rr(2, 3, &
+               2)*x1)
             f4_rrr_rA(1, 2, 3, 2) = t_f4_rrr_rA_0121
             f4_rrr_rA(1, 3, 2, 2) = t_f4_rrr_rA_0121
             f4_rrr_rA(2, 1, 3, 2) = t_f4_rrr_rA_0121
@@ -763,8 +806,9 @@ contains
             f4_rrr_rA(3, 1, 2, 2) = t_f4_rrr_rA_0121
             f4_rrr_rA(3, 2, 1, 2) = t_f4_rrr_rA_0121
             t_f4_rrr_rA_0122 = &
-               -inv_pd*qn3_rrr(1, 2, 3, 3) + qn0(3)*x40 + qn1_r(1, 3)*x16 + qn1_r(2, 3)*x11 + &
-               qn1_r(3, 3)*x10 + qn2_rr(1, 2, 3)*x3 + qn2_rr(1, 3, 3)*x2 + qn2_rr(2, 3, 3)*x1
+               lsf_scale*(-inv_pd*qn3_rrr(1, 2, 3, 3) + qn0(3)*x40 + qn1_r(1, 3)*x16 + qn1_r(2, &
+               3)*x11 + qn1_r(3, 3)*x10 + qn2_rr(1, 2, 3)*x3 + qn2_rr(1, 3, 3)*x2 + qn2_rr(2, 3, &
+               3)*x1)
             f4_rrr_rA(1, 2, 3, 3) = t_f4_rrr_rA_0122
             f4_rrr_rA(1, 3, 2, 3) = t_f4_rrr_rA_0122
             f4_rrr_rA(2, 1, 3, 3) = t_f4_rrr_rA_0122
@@ -772,78 +816,88 @@ contains
             f4_rrr_rA(3, 1, 2, 3) = t_f4_rrr_rA_0122
             f4_rrr_rA(3, 2, 1, 3) = t_f4_rrr_rA_0122
             t_f4_rrr_rA_0220 = &
-               -inv_pd*qn3_rrr(1, 3, 3, 1) + qn0(1)*x42 + qn1_r(1, 1)*x19 + qn1_r(3, 1)*x30 + &
-               qn2_rr(1, 3, 1)*x17 + qn2_rr(3, 3, 1)*x1
+               lsf_scale*(-inv_pd*qn3_rrr(1, 3, 3, 1) + qn0(1)*x42 + qn1_r(1, 1)*x19 + qn1_r(3, &
+               1)*x30 + qn2_rr(1, 3, 1)*x17 + qn2_rr(3, 3, 1)*x1)
             f4_rrr_rA(1, 3, 3, 1) = t_f4_rrr_rA_0220
             f4_rrr_rA(3, 1, 3, 1) = t_f4_rrr_rA_0220
             f4_rrr_rA(3, 3, 1, 1) = t_f4_rrr_rA_0220
             t_f4_rrr_rA_0221 = &
-               -inv_pd*qn3_rrr(1, 3, 3, 2) + qn0(2)*x42 + qn1_r(1, 2)*x19 + qn1_r(3, 2)*x30 + &
-               qn2_rr(1, 3, 2)*x17 + qn2_rr(3, 3, 2)*x1
+               lsf_scale*(-inv_pd*qn3_rrr(1, 3, 3, 2) + qn0(2)*x42 + qn1_r(1, 2)*x19 + qn1_r(3, &
+               2)*x30 + qn2_rr(1, 3, 2)*x17 + qn2_rr(3, 3, 2)*x1)
             f4_rrr_rA(1, 3, 3, 2) = t_f4_rrr_rA_0221
             f4_rrr_rA(3, 1, 3, 2) = t_f4_rrr_rA_0221
             f4_rrr_rA(3, 3, 1, 2) = t_f4_rrr_rA_0221
             t_f4_rrr_rA_0222 = &
-               -inv_pd*qn3_rrr(1, 3, 3, 3) + qn0(3)*x42 + qn1_r(1, 3)*x19 + qn1_r(3, 3)*x30 + &
-               qn2_rr(1, 3, 3)*x17 + qn2_rr(3, 3, 3)*x1
+               lsf_scale*(-inv_pd*qn3_rrr(1, 3, 3, 3) + qn0(3)*x42 + qn1_r(1, 3)*x19 + qn1_r(3, &
+               3)*x30 + qn2_rr(1, 3, 3)*x17 + qn2_rr(3, 3, 3)*x1)
             f4_rrr_rA(1, 3, 3, 3) = t_f4_rrr_rA_0222
             f4_rrr_rA(3, 1, 3, 3) = t_f4_rrr_rA_0222
             f4_rrr_rA(3, 3, 1, 3) = t_f4_rrr_rA_0222
             f4_rrr_rA(2, 2, 2, 1) = &
-               -inv_pd*qn3_rrr(2, 2, 2, 1) + qn0(1)*x48 + qn1_r(2, 1)*x45 + qn2_rr(2, 2, 1)*x43
+               lsf_scale*(-inv_pd*qn3_rrr(2, 2, 2, 1) + qn0(1)*x48 + qn1_r(2, 1)*x45 + qn2_rr(2, &
+               2, 1)*x43)
             f4_rrr_rA(2, 2, 2, 2) = &
-               -inv_pd*qn3_rrr(2, 2, 2, 2) + qn0(2)*x48 + qn1_r(2, 2)*x45 + qn2_rr(2, 2, 2)*x43
+               lsf_scale*(-inv_pd*qn3_rrr(2, 2, 2, 2) + qn0(2)*x48 + qn1_r(2, 2)*x45 + qn2_rr(2, &
+               2, 2)*x43)
             f4_rrr_rA(2, 2, 2, 3) = &
-               -inv_pd*qn3_rrr(2, 2, 2, 3) + qn0(3)*x48 + qn1_r(2, 3)*x45 + qn2_rr(2, 2, 3)*x43
+               lsf_scale*(-inv_pd*qn3_rrr(2, 2, 2, 3) + qn0(3)*x48 + qn1_r(2, 3)*x45 + qn2_rr(2, &
+               2, 3)*x43)
             t_f4_rrr_rA_1120 = &
-               -inv_pd*qn3_rrr(2, 2, 3, 1) + qn0(1)*x50 + qn1_r(2, 1)*x49 + qn1_r(3, 1)*x14 + &
-               qn2_rr(2, 2, 1)*x3 + qn2_rr(2, 3, 1)*x12
+               lsf_scale*(-inv_pd*qn3_rrr(2, 2, 3, 1) + qn0(1)*x50 + qn1_r(2, 1)*x49 + qn1_r(3, &
+               1)*x14 + qn2_rr(2, 2, 1)*x3 + qn2_rr(2, 3, 1)*x12)
             f4_rrr_rA(2, 2, 3, 1) = t_f4_rrr_rA_1120
             f4_rrr_rA(2, 3, 2, 1) = t_f4_rrr_rA_1120
             f4_rrr_rA(3, 2, 2, 1) = t_f4_rrr_rA_1120
             t_f4_rrr_rA_1121 = &
-               -inv_pd*qn3_rrr(2, 2, 3, 2) + qn0(2)*x50 + qn1_r(2, 2)*x49 + qn1_r(3, 2)*x14 + &
-               qn2_rr(2, 2, 2)*x3 + qn2_rr(2, 3, 2)*x12
+               lsf_scale*(-inv_pd*qn3_rrr(2, 2, 3, 2) + qn0(2)*x50 + qn1_r(2, 2)*x49 + qn1_r(3, &
+               2)*x14 + qn2_rr(2, 2, 2)*x3 + qn2_rr(2, 3, 2)*x12)
             f4_rrr_rA(2, 2, 3, 2) = t_f4_rrr_rA_1121
             f4_rrr_rA(2, 3, 2, 2) = t_f4_rrr_rA_1121
             f4_rrr_rA(3, 2, 2, 2) = t_f4_rrr_rA_1121
             t_f4_rrr_rA_1122 = &
-               -inv_pd*qn3_rrr(2, 2, 3, 3) + qn0(3)*x50 + qn1_r(2, 3)*x49 + qn1_r(3, 3)*x14 + &
-               qn2_rr(2, 2, 3)*x3 + qn2_rr(2, 3, 3)*x12
+               lsf_scale*(-inv_pd*qn3_rrr(2, 2, 3, 3) + qn0(3)*x50 + qn1_r(2, 3)*x49 + qn1_r(3, &
+               3)*x14 + qn2_rr(2, 2, 3)*x3 + qn2_rr(2, 3, 3)*x12)
             f4_rrr_rA(2, 2, 3, 3) = t_f4_rrr_rA_1122
             f4_rrr_rA(2, 3, 2, 3) = t_f4_rrr_rA_1122
             f4_rrr_rA(3, 2, 2, 3) = t_f4_rrr_rA_1122
             t_f4_rrr_rA_1220 = &
-               -inv_pd*qn3_rrr(2, 3, 3, 1) + qn0(1)*x51 + qn1_r(2, 1)*x19 + qn1_r(3, 1)*x49 + &
-               qn2_rr(2, 3, 1)*x17 + qn2_rr(3, 3, 1)*x2
+               lsf_scale*(-inv_pd*qn3_rrr(2, 3, 3, 1) + qn0(1)*x51 + qn1_r(2, 1)*x19 + qn1_r(3, &
+               1)*x49 + qn2_rr(2, 3, 1)*x17 + qn2_rr(3, 3, 1)*x2)
             f4_rrr_rA(2, 3, 3, 1) = t_f4_rrr_rA_1220
             f4_rrr_rA(3, 2, 3, 1) = t_f4_rrr_rA_1220
             f4_rrr_rA(3, 3, 2, 1) = t_f4_rrr_rA_1220
             t_f4_rrr_rA_1221 = &
-               -inv_pd*qn3_rrr(2, 3, 3, 2) + qn0(2)*x51 + qn1_r(2, 2)*x19 + qn1_r(3, 2)*x49 + &
-               qn2_rr(2, 3, 2)*x17 + qn2_rr(3, 3, 2)*x2
+               lsf_scale*(-inv_pd*qn3_rrr(2, 3, 3, 2) + qn0(2)*x51 + qn1_r(2, 2)*x19 + qn1_r(3, &
+               2)*x49 + qn2_rr(2, 3, 2)*x17 + qn2_rr(3, 3, 2)*x2)
             f4_rrr_rA(2, 3, 3, 2) = t_f4_rrr_rA_1221
             f4_rrr_rA(3, 2, 3, 2) = t_f4_rrr_rA_1221
             f4_rrr_rA(3, 3, 2, 2) = t_f4_rrr_rA_1221
             t_f4_rrr_rA_1222 = &
-               -inv_pd*qn3_rrr(2, 3, 3, 3) + qn0(3)*x51 + qn1_r(2, 3)*x19 + qn1_r(3, 3)*x49 + &
-               qn2_rr(2, 3, 3)*x17 + qn2_rr(3, 3, 3)*x2
+               lsf_scale*(-inv_pd*qn3_rrr(2, 3, 3, 3) + qn0(3)*x51 + qn1_r(2, 3)*x19 + qn1_r(3, &
+               3)*x49 + qn2_rr(2, 3, 3)*x17 + qn2_rr(3, 3, 3)*x2)
             f4_rrr_rA(2, 3, 3, 3) = t_f4_rrr_rA_1222
             f4_rrr_rA(3, 2, 3, 3) = t_f4_rrr_rA_1222
             f4_rrr_rA(3, 3, 2, 3) = t_f4_rrr_rA_1222
             f4_rrr_rA(3, 3, 3, 1) = &
-               -inv_pd*qn3_rrr(3, 3, 3, 1) + qn0(1)*x55 + qn1_r(3, 1)*x54 + qn2_rr(3, 3, 1)*x52
+               lsf_scale*(-inv_pd*qn3_rrr(3, 3, 3, 1) + qn0(1)*x55 + qn1_r(3, 1)*x54 + qn2_rr(3, &
+               3, 1)*x52)
             f4_rrr_rA(3, 3, 3, 2) = &
-               -inv_pd*qn3_rrr(3, 3, 3, 2) + qn0(2)*x55 + qn1_r(3, 2)*x54 + qn2_rr(3, 3, 2)*x52
+               lsf_scale*(-inv_pd*qn3_rrr(3, 3, 3, 2) + qn0(2)*x55 + qn1_r(3, 2)*x54 + qn2_rr(3, &
+               3, 2)*x52)
             f4_rrr_rA(3, 3, 3, 3) = &
-               -inv_pd*qn3_rrr(3, 3, 3, 3) + qn0(3)*x55 + qn1_r(3, 3)*x54 + qn2_rr(3, 3, 3)*x52
+               lsf_scale*(-inv_pd*qn3_rrr(3, 3, 3, 3) + qn0(3)*x55 + qn1_r(3, 3)*x54 + qn2_rr(3, &
+               3, 3)*x52)
          end block
       end select
 
    end subroutine cfc_nuclear_eval
 
-   pure module subroutine cfc_hessian_eval(pd0, pd1_r, pd2_rr, qa0, qa1_r, qa2_rr, qb0, qb1_r, qb2_rr, &
-                                    qq0, qq1_r, qq2_rr, max_deriv, f2_rArB, f3_r_rArB, f4_rr_rArB)
+   pure module subroutine cfc_hessian_eval(lsf_scale, pd0, pd1_r, pd2_rr, qa0, qa1_r, qa2_rr, qb0, &
+                                    qb1_r, qb2_rr, qq0, qq1_r, qq2_rr, max_deriv, f2_rArB, &
+                                    f3_r_rArB, f4_rr_rArB)
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated order-0 spatial derivative of PD
       real(wp), intent(in) :: pd0
       !> Accumulated order-1 spatial derivative of PD
@@ -911,15 +965,15 @@ contains
             x1 = qa0(1)*x0
             x2 = qa0(2)*x0
             x3 = qa0(3)*x0
-            f2_rArB(1, 1) = -inv_pd*qq0(1, 1) + qb0(1)*x1
-            f2_rArB(1, 2) = -inv_pd*qq0(1, 2) + qb0(2)*x1
-            f2_rArB(1, 3) = -inv_pd*qq0(1, 3) + qb0(3)*x1
-            f2_rArB(2, 1) = -inv_pd*qq0(2, 1) + qb0(1)*x2
-            f2_rArB(2, 2) = -inv_pd*qq0(2, 2) + qb0(2)*x2
-            f2_rArB(2, 3) = -inv_pd*qq0(2, 3) + qb0(3)*x2
-            f2_rArB(3, 1) = -inv_pd*qq0(3, 1) + qb0(1)*x3
-            f2_rArB(3, 2) = -inv_pd*qq0(3, 2) + qb0(2)*x3
-            f2_rArB(3, 3) = -inv_pd*qq0(3, 3) + qb0(3)*x3
+            f2_rArB(1, 1) = lsf_scale*(-inv_pd*qq0(1, 1) + qb0(1)*x1)
+            f2_rArB(1, 2) = lsf_scale*(-inv_pd*qq0(1, 2) + qb0(2)*x1)
+            f2_rArB(1, 3) = lsf_scale*(-inv_pd*qq0(1, 3) + qb0(3)*x1)
+            f2_rArB(2, 1) = lsf_scale*(-inv_pd*qq0(2, 1) + qb0(1)*x2)
+            f2_rArB(2, 2) = lsf_scale*(-inv_pd*qq0(2, 2) + qb0(2)*x2)
+            f2_rArB(2, 3) = lsf_scale*(-inv_pd*qq0(2, 3) + qb0(3)*x2)
+            f2_rArB(3, 1) = lsf_scale*(-inv_pd*qq0(3, 1) + qb0(1)*x3)
+            f2_rArB(3, 2) = lsf_scale*(-inv_pd*qq0(3, 2) + qb0(2)*x3)
+            f2_rArB(3, 3) = lsf_scale*(-inv_pd*qq0(3, 3) + qb0(3)*x3)
          end block
       case (1)
          block
@@ -947,60 +1001,69 @@ contains
             x17 = -qa0(1)*x16 + qa1_r(3, 1)*x0
             x18 = -qa0(2)*x16 + qa1_r(3, 2)*x0
             x19 = -qa0(3)*x16 + qa1_r(3, 3)*x0
-            f2_rArB(1, 1) = -inv_pd*qq0(1, 1) + qb0(1)*x1
-            f2_rArB(1, 2) = -inv_pd*qq0(1, 2) + qb0(2)*x1
-            f2_rArB(1, 3) = -inv_pd*qq0(1, 3) + qb0(3)*x1
-            f2_rArB(2, 1) = -inv_pd*qq0(2, 1) + qb0(1)*x2
-            f2_rArB(2, 2) = -inv_pd*qq0(2, 2) + qb0(2)*x2
-            f2_rArB(2, 3) = -inv_pd*qq0(2, 3) + qb0(3)*x2
-            f2_rArB(3, 1) = -inv_pd*qq0(3, 1) + qb0(1)*x3
-            f2_rArB(3, 2) = -inv_pd*qq0(3, 2) + qb0(2)*x3
-            f2_rArB(3, 3) = -inv_pd*qq0(3, 3) + qb0(3)*x3
-            f3_r_rArB(1, 1, 1) = -inv_pd*qq1_r(1, 1, 1) + qb0(1)*x7 + qb1_r(1, 1)*x1 + qq0(1, 1)*x4
-            f3_r_rArB(1, 1, 2) = -inv_pd*qq1_r(1, 1, 2) + qb0(2)*x7 + qb1_r(1, 2)*x1 + qq0(1, 2)*x4
-            f3_r_rArB(1, 1, 3) = -inv_pd*qq1_r(1, 1, 3) + qb0(3)*x7 + qb1_r(1, 3)*x1 + qq0(1, 3)*x4
-            f3_r_rArB(1, 2, 1) = -inv_pd*qq1_r(1, 2, 1) + qb0(1)*x8 + qb1_r(1, 1)*x2 + qq0(2, 1)*x4
-            f3_r_rArB(1, 2, 2) = -inv_pd*qq1_r(1, 2, 2) + qb0(2)*x8 + qb1_r(1, 2)*x2 + qq0(2, 2)*x4
-            f3_r_rArB(1, 2, 3) = -inv_pd*qq1_r(1, 2, 3) + qb0(3)*x8 + qb1_r(1, 3)*x2 + qq0(2, 3)*x4
-            f3_r_rArB(1, 3, 1) = -inv_pd*qq1_r(1, 3, 1) + qb0(1)*x9 + qb1_r(1, 1)*x3 + qq0(3, 1)*x4
-            f3_r_rArB(1, 3, 2) = -inv_pd*qq1_r(1, 3, 2) + qb0(2)*x9 + qb1_r(1, 2)*x3 + qq0(3, 2)*x4
-            f3_r_rArB(1, 3, 3) = -inv_pd*qq1_r(1, 3, 3) + qb0(3)*x9 + qb1_r(1, 3)*x3 + qq0(3, 3)*x4
+            f2_rArB(1, 1) = lsf_scale*(-inv_pd*qq0(1, 1) + qb0(1)*x1)
+            f2_rArB(1, 2) = lsf_scale*(-inv_pd*qq0(1, 2) + qb0(2)*x1)
+            f2_rArB(1, 3) = lsf_scale*(-inv_pd*qq0(1, 3) + qb0(3)*x1)
+            f2_rArB(2, 1) = lsf_scale*(-inv_pd*qq0(2, 1) + qb0(1)*x2)
+            f2_rArB(2, 2) = lsf_scale*(-inv_pd*qq0(2, 2) + qb0(2)*x2)
+            f2_rArB(2, 3) = lsf_scale*(-inv_pd*qq0(2, 3) + qb0(3)*x2)
+            f2_rArB(3, 1) = lsf_scale*(-inv_pd*qq0(3, 1) + qb0(1)*x3)
+            f2_rArB(3, 2) = lsf_scale*(-inv_pd*qq0(3, 2) + qb0(2)*x3)
+            f2_rArB(3, 3) = lsf_scale*(-inv_pd*qq0(3, 3) + qb0(3)*x3)
+            f3_r_rArB(1, 1, 1) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 1, 1) + qb0(1)*x7 + qb1_r(1, 1)*x1 + qq0(1, 1)*x4)
+            f3_r_rArB(1, 1, 2) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 1, 2) + qb0(2)*x7 + qb1_r(1, 2)*x1 + qq0(1, 2)*x4)
+            f3_r_rArB(1, 1, 3) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 1, 3) + qb0(3)*x7 + qb1_r(1, 3)*x1 + qq0(1, 3)*x4)
+            f3_r_rArB(1, 2, 1) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 2, 1) + qb0(1)*x8 + qb1_r(1, 1)*x2 + qq0(2, 1)*x4)
+            f3_r_rArB(1, 2, 2) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 2, 2) + qb0(2)*x8 + qb1_r(1, 2)*x2 + qq0(2, 2)*x4)
+            f3_r_rArB(1, 2, 3) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 2, 3) + qb0(3)*x8 + qb1_r(1, 3)*x2 + qq0(2, 3)*x4)
+            f3_r_rArB(1, 3, 1) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 3, 1) + qb0(1)*x9 + qb1_r(1, 1)*x3 + qq0(3, 1)*x4)
+            f3_r_rArB(1, 3, 2) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 3, 2) + qb0(2)*x9 + qb1_r(1, 2)*x3 + qq0(3, 2)*x4)
+            f3_r_rArB(1, 3, 3) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 3, 3) + qb0(3)*x9 + qb1_r(1, 3)*x3 + qq0(3, 3)*x4)
             f3_r_rArB(2, 1, 1) = &
-               -inv_pd*qq1_r(2, 1, 1) + qb0(1)*x12 + qb1_r(2, 1)*x1 + qq0(1, 1)*x10
+               lsf_scale*(-inv_pd*qq1_r(2, 1, 1) + qb0(1)*x12 + qb1_r(2, 1)*x1 + qq0(1, 1)*x10)
             f3_r_rArB(2, 1, 2) = &
-               -inv_pd*qq1_r(2, 1, 2) + qb0(2)*x12 + qb1_r(2, 2)*x1 + qq0(1, 2)*x10
+               lsf_scale*(-inv_pd*qq1_r(2, 1, 2) + qb0(2)*x12 + qb1_r(2, 2)*x1 + qq0(1, 2)*x10)
             f3_r_rArB(2, 1, 3) = &
-               -inv_pd*qq1_r(2, 1, 3) + qb0(3)*x12 + qb1_r(2, 3)*x1 + qq0(1, 3)*x10
+               lsf_scale*(-inv_pd*qq1_r(2, 1, 3) + qb0(3)*x12 + qb1_r(2, 3)*x1 + qq0(1, 3)*x10)
             f3_r_rArB(2, 2, 1) = &
-               -inv_pd*qq1_r(2, 2, 1) + qb0(1)*x13 + qb1_r(2, 1)*x2 + qq0(2, 1)*x10
+               lsf_scale*(-inv_pd*qq1_r(2, 2, 1) + qb0(1)*x13 + qb1_r(2, 1)*x2 + qq0(2, 1)*x10)
             f3_r_rArB(2, 2, 2) = &
-               -inv_pd*qq1_r(2, 2, 2) + qb0(2)*x13 + qb1_r(2, 2)*x2 + qq0(2, 2)*x10
+               lsf_scale*(-inv_pd*qq1_r(2, 2, 2) + qb0(2)*x13 + qb1_r(2, 2)*x2 + qq0(2, 2)*x10)
             f3_r_rArB(2, 2, 3) = &
-               -inv_pd*qq1_r(2, 2, 3) + qb0(3)*x13 + qb1_r(2, 3)*x2 + qq0(2, 3)*x10
+               lsf_scale*(-inv_pd*qq1_r(2, 2, 3) + qb0(3)*x13 + qb1_r(2, 3)*x2 + qq0(2, 3)*x10)
             f3_r_rArB(2, 3, 1) = &
-               -inv_pd*qq1_r(2, 3, 1) + qb0(1)*x14 + qb1_r(2, 1)*x3 + qq0(3, 1)*x10
+               lsf_scale*(-inv_pd*qq1_r(2, 3, 1) + qb0(1)*x14 + qb1_r(2, 1)*x3 + qq0(3, 1)*x10)
             f3_r_rArB(2, 3, 2) = &
-               -inv_pd*qq1_r(2, 3, 2) + qb0(2)*x14 + qb1_r(2, 2)*x3 + qq0(3, 2)*x10
+               lsf_scale*(-inv_pd*qq1_r(2, 3, 2) + qb0(2)*x14 + qb1_r(2, 2)*x3 + qq0(3, 2)*x10)
             f3_r_rArB(2, 3, 3) = &
-               -inv_pd*qq1_r(2, 3, 3) + qb0(3)*x14 + qb1_r(2, 3)*x3 + qq0(3, 3)*x10
+               lsf_scale*(-inv_pd*qq1_r(2, 3, 3) + qb0(3)*x14 + qb1_r(2, 3)*x3 + qq0(3, 3)*x10)
             f3_r_rArB(3, 1, 1) = &
-               -inv_pd*qq1_r(3, 1, 1) + qb0(1)*x17 + qb1_r(3, 1)*x1 + qq0(1, 1)*x15
+               lsf_scale*(-inv_pd*qq1_r(3, 1, 1) + qb0(1)*x17 + qb1_r(3, 1)*x1 + qq0(1, 1)*x15)
             f3_r_rArB(3, 1, 2) = &
-               -inv_pd*qq1_r(3, 1, 2) + qb0(2)*x17 + qb1_r(3, 2)*x1 + qq0(1, 2)*x15
+               lsf_scale*(-inv_pd*qq1_r(3, 1, 2) + qb0(2)*x17 + qb1_r(3, 2)*x1 + qq0(1, 2)*x15)
             f3_r_rArB(3, 1, 3) = &
-               -inv_pd*qq1_r(3, 1, 3) + qb0(3)*x17 + qb1_r(3, 3)*x1 + qq0(1, 3)*x15
+               lsf_scale*(-inv_pd*qq1_r(3, 1, 3) + qb0(3)*x17 + qb1_r(3, 3)*x1 + qq0(1, 3)*x15)
             f3_r_rArB(3, 2, 1) = &
-               -inv_pd*qq1_r(3, 2, 1) + qb0(1)*x18 + qb1_r(3, 1)*x2 + qq0(2, 1)*x15
+               lsf_scale*(-inv_pd*qq1_r(3, 2, 1) + qb0(1)*x18 + qb1_r(3, 1)*x2 + qq0(2, 1)*x15)
             f3_r_rArB(3, 2, 2) = &
-               -inv_pd*qq1_r(3, 2, 2) + qb0(2)*x18 + qb1_r(3, 2)*x2 + qq0(2, 2)*x15
+               lsf_scale*(-inv_pd*qq1_r(3, 2, 2) + qb0(2)*x18 + qb1_r(3, 2)*x2 + qq0(2, 2)*x15)
             f3_r_rArB(3, 2, 3) = &
-               -inv_pd*qq1_r(3, 2, 3) + qb0(3)*x18 + qb1_r(3, 3)*x2 + qq0(2, 3)*x15
+               lsf_scale*(-inv_pd*qq1_r(3, 2, 3) + qb0(3)*x18 + qb1_r(3, 3)*x2 + qq0(2, 3)*x15)
             f3_r_rArB(3, 3, 1) = &
-               -inv_pd*qq1_r(3, 3, 1) + qb0(1)*x19 + qb1_r(3, 1)*x3 + qq0(3, 1)*x15
+               lsf_scale*(-inv_pd*qq1_r(3, 3, 1) + qb0(1)*x19 + qb1_r(3, 1)*x3 + qq0(3, 1)*x15)
             f3_r_rArB(3, 3, 2) = &
-               -inv_pd*qq1_r(3, 3, 2) + qb0(2)*x19 + qb1_r(3, 2)*x3 + qq0(3, 2)*x15
+               lsf_scale*(-inv_pd*qq1_r(3, 3, 2) + qb0(2)*x19 + qb1_r(3, 2)*x3 + qq0(3, 2)*x15)
             f3_r_rArB(3, 3, 3) = &
-               -inv_pd*qq1_r(3, 3, 3) + qb0(3)*x19 + qb1_r(3, 3)*x3 + qq0(3, 3)*x15
+               lsf_scale*(-inv_pd*qq1_r(3, 3, 3) + qb0(3)*x19 + qb1_r(3, 3)*x3 + qq0(3, 3)*x15)
          end block
       case default
          block
@@ -1090,284 +1153,323 @@ contains
             x69 = qa0(2)*x66 - qa1_r(3, 2)*x62 + qa2_rr(3, 3, 2)*x0
             x70 = -qa0(3)*x62 + 2.0_wp*qa1_r(3, 3)*x0
             x71 = qa0(3)*x66 - qa1_r(3, 3)*x62 + qa2_rr(3, 3, 3)*x0
-            f2_rArB(1, 1) = -inv_pd*qq0(1, 1) + qb0(1)*x1
-            f2_rArB(1, 2) = -inv_pd*qq0(1, 2) + qb0(2)*x1
-            f2_rArB(1, 3) = -inv_pd*qq0(1, 3) + qb0(3)*x1
-            f2_rArB(2, 1) = -inv_pd*qq0(2, 1) + qb0(1)*x2
-            f2_rArB(2, 2) = -inv_pd*qq0(2, 2) + qb0(2)*x2
-            f2_rArB(2, 3) = -inv_pd*qq0(2, 3) + qb0(3)*x2
-            f2_rArB(3, 1) = -inv_pd*qq0(3, 1) + qb0(1)*x3
-            f2_rArB(3, 2) = -inv_pd*qq0(3, 2) + qb0(2)*x3
-            f2_rArB(3, 3) = -inv_pd*qq0(3, 3) + qb0(3)*x3
-            f3_r_rArB(1, 1, 1) = -inv_pd*qq1_r(1, 1, 1) + qb0(1)*x8 + qb1_r(1, 1)*x1 + qq0(1, 1)*x4
-            f3_r_rArB(1, 1, 2) = -inv_pd*qq1_r(1, 1, 2) + qb0(2)*x8 + qb1_r(1, 2)*x1 + qq0(1, 2)*x4
-            f3_r_rArB(1, 1, 3) = -inv_pd*qq1_r(1, 1, 3) + qb0(3)*x8 + qb1_r(1, 3)*x1 + qq0(1, 3)*x4
-            f3_r_rArB(1, 2, 1) = -inv_pd*qq1_r(1, 2, 1) + qb0(1)*x9 + qb1_r(1, 1)*x2 + qq0(2, 1)*x4
-            f3_r_rArB(1, 2, 2) = -inv_pd*qq1_r(1, 2, 2) + qb0(2)*x9 + qb1_r(1, 2)*x2 + qq0(2, 2)*x4
-            f3_r_rArB(1, 2, 3) = -inv_pd*qq1_r(1, 2, 3) + qb0(3)*x9 + qb1_r(1, 3)*x2 + qq0(2, 3)*x4
-            f3_r_rArB(1, 3, 1) = -inv_pd*qq1_r(1, 3, 1) + qb0(1)*x10 + qb1_r(1, 1)*x3 + qq0(3, 1)*x4
-            f3_r_rArB(1, 3, 2) = -inv_pd*qq1_r(1, 3, 2) + qb0(2)*x10 + qb1_r(1, 2)*x3 + qq0(3, 2)*x4
-            f3_r_rArB(1, 3, 3) = -inv_pd*qq1_r(1, 3, 3) + qb0(3)*x10 + qb1_r(1, 3)*x3 + qq0(3, 3)*x4
+            f2_rArB(1, 1) = lsf_scale*(-inv_pd*qq0(1, 1) + qb0(1)*x1)
+            f2_rArB(1, 2) = lsf_scale*(-inv_pd*qq0(1, 2) + qb0(2)*x1)
+            f2_rArB(1, 3) = lsf_scale*(-inv_pd*qq0(1, 3) + qb0(3)*x1)
+            f2_rArB(2, 1) = lsf_scale*(-inv_pd*qq0(2, 1) + qb0(1)*x2)
+            f2_rArB(2, 2) = lsf_scale*(-inv_pd*qq0(2, 2) + qb0(2)*x2)
+            f2_rArB(2, 3) = lsf_scale*(-inv_pd*qq0(2, 3) + qb0(3)*x2)
+            f2_rArB(3, 1) = lsf_scale*(-inv_pd*qq0(3, 1) + qb0(1)*x3)
+            f2_rArB(3, 2) = lsf_scale*(-inv_pd*qq0(3, 2) + qb0(2)*x3)
+            f2_rArB(3, 3) = lsf_scale*(-inv_pd*qq0(3, 3) + qb0(3)*x3)
+            f3_r_rArB(1, 1, 1) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 1, 1) + qb0(1)*x8 + qb1_r(1, 1)*x1 + qq0(1, 1)*x4)
+            f3_r_rArB(1, 1, 2) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 1, 2) + qb0(2)*x8 + qb1_r(1, 2)*x1 + qq0(1, 2)*x4)
+            f3_r_rArB(1, 1, 3) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 1, 3) + qb0(3)*x8 + qb1_r(1, 3)*x1 + qq0(1, 3)*x4)
+            f3_r_rArB(1, 2, 1) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 2, 1) + qb0(1)*x9 + qb1_r(1, 1)*x2 + qq0(2, 1)*x4)
+            f3_r_rArB(1, 2, 2) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 2, 2) + qb0(2)*x9 + qb1_r(1, 2)*x2 + qq0(2, 2)*x4)
+            f3_r_rArB(1, 2, 3) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 2, 3) + qb0(3)*x9 + qb1_r(1, 3)*x2 + qq0(2, 3)*x4)
+            f3_r_rArB(1, 3, 1) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 3, 1) + qb0(1)*x10 + qb1_r(1, 1)*x3 + qq0(3, 1)*x4)
+            f3_r_rArB(1, 3, 2) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 3, 2) + qb0(2)*x10 + qb1_r(1, 2)*x3 + qq0(3, 2)*x4)
+            f3_r_rArB(1, 3, 3) = &
+               lsf_scale*(-inv_pd*qq1_r(1, 3, 3) + qb0(3)*x10 + qb1_r(1, 3)*x3 + qq0(3, 3)*x4)
             f3_r_rArB(2, 1, 1) = &
-               -inv_pd*qq1_r(2, 1, 1) + qb0(1)*x13 + qb1_r(2, 1)*x1 + qq0(1, 1)*x11
+               lsf_scale*(-inv_pd*qq1_r(2, 1, 1) + qb0(1)*x13 + qb1_r(2, 1)*x1 + qq0(1, 1)*x11)
             f3_r_rArB(2, 1, 2) = &
-               -inv_pd*qq1_r(2, 1, 2) + qb0(2)*x13 + qb1_r(2, 2)*x1 + qq0(1, 2)*x11
+               lsf_scale*(-inv_pd*qq1_r(2, 1, 2) + qb0(2)*x13 + qb1_r(2, 2)*x1 + qq0(1, 2)*x11)
             f3_r_rArB(2, 1, 3) = &
-               -inv_pd*qq1_r(2, 1, 3) + qb0(3)*x13 + qb1_r(2, 3)*x1 + qq0(1, 3)*x11
+               lsf_scale*(-inv_pd*qq1_r(2, 1, 3) + qb0(3)*x13 + qb1_r(2, 3)*x1 + qq0(1, 3)*x11)
             f3_r_rArB(2, 2, 1) = &
-               -inv_pd*qq1_r(2, 2, 1) + qb0(1)*x14 + qb1_r(2, 1)*x2 + qq0(2, 1)*x11
+               lsf_scale*(-inv_pd*qq1_r(2, 2, 1) + qb0(1)*x14 + qb1_r(2, 1)*x2 + qq0(2, 1)*x11)
             f3_r_rArB(2, 2, 2) = &
-               -inv_pd*qq1_r(2, 2, 2) + qb0(2)*x14 + qb1_r(2, 2)*x2 + qq0(2, 2)*x11
+               lsf_scale*(-inv_pd*qq1_r(2, 2, 2) + qb0(2)*x14 + qb1_r(2, 2)*x2 + qq0(2, 2)*x11)
             f3_r_rArB(2, 2, 3) = &
-               -inv_pd*qq1_r(2, 2, 3) + qb0(3)*x14 + qb1_r(2, 3)*x2 + qq0(2, 3)*x11
+               lsf_scale*(-inv_pd*qq1_r(2, 2, 3) + qb0(3)*x14 + qb1_r(2, 3)*x2 + qq0(2, 3)*x11)
             f3_r_rArB(2, 3, 1) = &
-               -inv_pd*qq1_r(2, 3, 1) + qb0(1)*x15 + qb1_r(2, 1)*x3 + qq0(3, 1)*x11
+               lsf_scale*(-inv_pd*qq1_r(2, 3, 1) + qb0(1)*x15 + qb1_r(2, 1)*x3 + qq0(3, 1)*x11)
             f3_r_rArB(2, 3, 2) = &
-               -inv_pd*qq1_r(2, 3, 2) + qb0(2)*x15 + qb1_r(2, 2)*x3 + qq0(3, 2)*x11
+               lsf_scale*(-inv_pd*qq1_r(2, 3, 2) + qb0(2)*x15 + qb1_r(2, 2)*x3 + qq0(3, 2)*x11)
             f3_r_rArB(2, 3, 3) = &
-               -inv_pd*qq1_r(2, 3, 3) + qb0(3)*x15 + qb1_r(2, 3)*x3 + qq0(3, 3)*x11
+               lsf_scale*(-inv_pd*qq1_r(2, 3, 3) + qb0(3)*x15 + qb1_r(2, 3)*x3 + qq0(3, 3)*x11)
             f3_r_rArB(3, 1, 1) = &
-               -inv_pd*qq1_r(3, 1, 1) + qb0(1)*x18 + qb1_r(3, 1)*x1 + qq0(1, 1)*x16
+               lsf_scale*(-inv_pd*qq1_r(3, 1, 1) + qb0(1)*x18 + qb1_r(3, 1)*x1 + qq0(1, 1)*x16)
             f3_r_rArB(3, 1, 2) = &
-               -inv_pd*qq1_r(3, 1, 2) + qb0(2)*x18 + qb1_r(3, 2)*x1 + qq0(1, 2)*x16
+               lsf_scale*(-inv_pd*qq1_r(3, 1, 2) + qb0(2)*x18 + qb1_r(3, 2)*x1 + qq0(1, 2)*x16)
             f3_r_rArB(3, 1, 3) = &
-               -inv_pd*qq1_r(3, 1, 3) + qb0(3)*x18 + qb1_r(3, 3)*x1 + qq0(1, 3)*x16
+               lsf_scale*(-inv_pd*qq1_r(3, 1, 3) + qb0(3)*x18 + qb1_r(3, 3)*x1 + qq0(1, 3)*x16)
             f3_r_rArB(3, 2, 1) = &
-               -inv_pd*qq1_r(3, 2, 1) + qb0(1)*x19 + qb1_r(3, 1)*x2 + qq0(2, 1)*x16
+               lsf_scale*(-inv_pd*qq1_r(3, 2, 1) + qb0(1)*x19 + qb1_r(3, 1)*x2 + qq0(2, 1)*x16)
             f3_r_rArB(3, 2, 2) = &
-               -inv_pd*qq1_r(3, 2, 2) + qb0(2)*x19 + qb1_r(3, 2)*x2 + qq0(2, 2)*x16
+               lsf_scale*(-inv_pd*qq1_r(3, 2, 2) + qb0(2)*x19 + qb1_r(3, 2)*x2 + qq0(2, 2)*x16)
             f3_r_rArB(3, 2, 3) = &
-               -inv_pd*qq1_r(3, 2, 3) + qb0(3)*x19 + qb1_r(3, 3)*x2 + qq0(2, 3)*x16
+               lsf_scale*(-inv_pd*qq1_r(3, 2, 3) + qb0(3)*x19 + qb1_r(3, 3)*x2 + qq0(2, 3)*x16)
             f3_r_rArB(3, 3, 1) = &
-               -inv_pd*qq1_r(3, 3, 1) + qb0(1)*x20 + qb1_r(3, 1)*x3 + qq0(3, 1)*x16
+               lsf_scale*(-inv_pd*qq1_r(3, 3, 1) + qb0(1)*x20 + qb1_r(3, 1)*x3 + qq0(3, 1)*x16)
             f3_r_rArB(3, 3, 2) = &
-               -inv_pd*qq1_r(3, 3, 2) + qb0(2)*x20 + qb1_r(3, 2)*x3 + qq0(3, 2)*x16
+               lsf_scale*(-inv_pd*qq1_r(3, 3, 2) + qb0(2)*x20 + qb1_r(3, 2)*x3 + qq0(3, 2)*x16)
             f3_r_rArB(3, 3, 3) = &
-               -inv_pd*qq1_r(3, 3, 3) + qb0(3)*x20 + qb1_r(3, 3)*x3 + qq0(3, 3)*x16
+               lsf_scale*(-inv_pd*qq1_r(3, 3, 3) + qb0(3)*x20 + qb1_r(3, 3)*x3 + qq0(3, 3)*x16)
             f4_rr_rArB(1, 1, 1, 1) = &
-               -inv_pd*qq2_rr(1, 1, 1, 1) + qb0(1)*x29 + qb1_r(1, 1)*x24 + qb2_rr(1, 1, 1)*x1 + &
-               qq0(1, 1)*x26 + qq1_r(1, 1, 1)*x21
+               lsf_scale*(-inv_pd*qq2_rr(1, 1, 1, 1) + qb0(1)*x29 + qb1_r(1, 1)*x24 + qb2_rr(1, 1, &
+               1)*x1 + qq0(1, 1)*x26 + qq1_r(1, 1, 1)*x21)
             f4_rr_rArB(1, 1, 1, 2) = &
-               -inv_pd*qq2_rr(1, 1, 1, 2) + qb0(2)*x29 + qb1_r(1, 2)*x24 + qb2_rr(1, 1, 2)*x1 + &
-               qq0(1, 2)*x26 + qq1_r(1, 1, 2)*x21
+               lsf_scale*(-inv_pd*qq2_rr(1, 1, 1, 2) + qb0(2)*x29 + qb1_r(1, 2)*x24 + qb2_rr(1, 1, &
+               2)*x1 + qq0(1, 2)*x26 + qq1_r(1, 1, 2)*x21)
             f4_rr_rArB(1, 1, 1, 3) = &
-               -inv_pd*qq2_rr(1, 1, 1, 3) + qb0(3)*x29 + qb1_r(1, 3)*x24 + qb2_rr(1, 1, 3)*x1 + &
-               qq0(1, 3)*x26 + qq1_r(1, 1, 3)*x21
+               lsf_scale*(-inv_pd*qq2_rr(1, 1, 1, 3) + qb0(3)*x29 + qb1_r(1, 3)*x24 + qb2_rr(1, 1, &
+               3)*x1 + qq0(1, 3)*x26 + qq1_r(1, 1, 3)*x21)
             f4_rr_rArB(1, 1, 2, 1) = &
-               -inv_pd*qq2_rr(1, 1, 2, 1) + qb0(1)*x31 + qb1_r(1, 1)*x30 + qb2_rr(1, 1, 1)*x2 + &
-               qq0(2, 1)*x26 + qq1_r(1, 2, 1)*x21
+               lsf_scale*(-inv_pd*qq2_rr(1, 1, 2, 1) + qb0(1)*x31 + qb1_r(1, 1)*x30 + qb2_rr(1, 1, &
+               1)*x2 + qq0(2, 1)*x26 + qq1_r(1, 2, 1)*x21)
             f4_rr_rArB(1, 1, 2, 2) = &
-               -inv_pd*qq2_rr(1, 1, 2, 2) + qb0(2)*x31 + qb1_r(1, 2)*x30 + qb2_rr(1, 1, 2)*x2 + &
-               qq0(2, 2)*x26 + qq1_r(1, 2, 2)*x21
+               lsf_scale*(-inv_pd*qq2_rr(1, 1, 2, 2) + qb0(2)*x31 + qb1_r(1, 2)*x30 + qb2_rr(1, 1, &
+               2)*x2 + qq0(2, 2)*x26 + qq1_r(1, 2, 2)*x21)
             f4_rr_rArB(1, 1, 2, 3) = &
-               -inv_pd*qq2_rr(1, 1, 2, 3) + qb0(3)*x31 + qb1_r(1, 3)*x30 + qb2_rr(1, 1, 3)*x2 + &
-               qq0(2, 3)*x26 + qq1_r(1, 2, 3)*x21
+               lsf_scale*(-inv_pd*qq2_rr(1, 1, 2, 3) + qb0(3)*x31 + qb1_r(1, 3)*x30 + qb2_rr(1, 1, &
+               3)*x2 + qq0(2, 3)*x26 + qq1_r(1, 2, 3)*x21)
             f4_rr_rArB(1, 1, 3, 1) = &
-               -inv_pd*qq2_rr(1, 1, 3, 1) + qb0(1)*x33 + qb1_r(1, 1)*x32 + qb2_rr(1, 1, 1)*x3 + &
-               qq0(3, 1)*x26 + qq1_r(1, 3, 1)*x21
+               lsf_scale*(-inv_pd*qq2_rr(1, 1, 3, 1) + qb0(1)*x33 + qb1_r(1, 1)*x32 + qb2_rr(1, 1, &
+               1)*x3 + qq0(3, 1)*x26 + qq1_r(1, 3, 1)*x21)
             f4_rr_rArB(1, 1, 3, 2) = &
-               -inv_pd*qq2_rr(1, 1, 3, 2) + qb0(2)*x33 + qb1_r(1, 2)*x32 + qb2_rr(1, 1, 2)*x3 + &
-               qq0(3, 2)*x26 + qq1_r(1, 3, 2)*x21
+               lsf_scale*(-inv_pd*qq2_rr(1, 1, 3, 2) + qb0(2)*x33 + qb1_r(1, 2)*x32 + qb2_rr(1, 1, &
+               2)*x3 + qq0(3, 2)*x26 + qq1_r(1, 3, 2)*x21)
             f4_rr_rArB(1, 1, 3, 3) = &
-               -inv_pd*qq2_rr(1, 1, 3, 3) + qb0(3)*x33 + qb1_r(1, 3)*x32 + qb2_rr(1, 1, 3)*x3 + &
-               qq0(3, 3)*x26 + qq1_r(1, 3, 3)*x21
+               lsf_scale*(-inv_pd*qq2_rr(1, 1, 3, 3) + qb0(3)*x33 + qb1_r(1, 3)*x32 + qb2_rr(1, 1, &
+               3)*x3 + qq0(3, 3)*x26 + qq1_r(1, 3, 3)*x21)
             t_f4_rr_rArB_0100 = &
-               -inv_pd*qq2_rr(1, 2, 1, 1) + qb0(1)*x37 + qb1_r(1, 1)*x13 + qb1_r(2, 1)*x8 + &
-               qb2_rr(1, 2, 1)*x1 + qq0(1, 1)*x34 + qq1_r(1, 1, 1)*x11 + qq1_r(2, 1, 1)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 2, 1, 1) + qb0(1)*x37 + qb1_r(1, 1)*x13 + qb1_r(2, &
+               1)*x8 + qb2_rr(1, 2, 1)*x1 + qq0(1, 1)*x34 + qq1_r(1, 1, 1)*x11 + qq1_r(2, 1, &
+               1)*x4)
             f4_rr_rArB(1, 2, 1, 1) = t_f4_rr_rArB_0100
             f4_rr_rArB(2, 1, 1, 1) = t_f4_rr_rArB_0100
             t_f4_rr_rArB_0101 = &
-               -inv_pd*qq2_rr(1, 2, 1, 2) + qb0(2)*x37 + qb1_r(1, 2)*x13 + qb1_r(2, 2)*x8 + &
-               qb2_rr(1, 2, 2)*x1 + qq0(1, 2)*x34 + qq1_r(1, 1, 2)*x11 + qq1_r(2, 1, 2)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 2, 1, 2) + qb0(2)*x37 + qb1_r(1, 2)*x13 + qb1_r(2, &
+               2)*x8 + qb2_rr(1, 2, 2)*x1 + qq0(1, 2)*x34 + qq1_r(1, 1, 2)*x11 + qq1_r(2, 1, &
+               2)*x4)
             f4_rr_rArB(1, 2, 1, 2) = t_f4_rr_rArB_0101
             f4_rr_rArB(2, 1, 1, 2) = t_f4_rr_rArB_0101
             t_f4_rr_rArB_0102 = &
-               -inv_pd*qq2_rr(1, 2, 1, 3) + qb0(3)*x37 + qb1_r(1, 3)*x13 + qb1_r(2, 3)*x8 + &
-               qb2_rr(1, 2, 3)*x1 + qq0(1, 3)*x34 + qq1_r(1, 1, 3)*x11 + qq1_r(2, 1, 3)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 2, 1, 3) + qb0(3)*x37 + qb1_r(1, 3)*x13 + qb1_r(2, &
+               3)*x8 + qb2_rr(1, 2, 3)*x1 + qq0(1, 3)*x34 + qq1_r(1, 1, 3)*x11 + qq1_r(2, 1, &
+               3)*x4)
             f4_rr_rArB(1, 2, 1, 3) = t_f4_rr_rArB_0102
             f4_rr_rArB(2, 1, 1, 3) = t_f4_rr_rArB_0102
             t_f4_rr_rArB_0110 = &
-               -inv_pd*qq2_rr(1, 2, 2, 1) + qb0(1)*x38 + qb1_r(1, 1)*x14 + qb1_r(2, 1)*x9 + &
-               qb2_rr(1, 2, 1)*x2 + qq0(2, 1)*x34 + qq1_r(1, 2, 1)*x11 + qq1_r(2, 2, 1)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 2, 2, 1) + qb0(1)*x38 + qb1_r(1, 1)*x14 + qb1_r(2, &
+               1)*x9 + qb2_rr(1, 2, 1)*x2 + qq0(2, 1)*x34 + qq1_r(1, 2, 1)*x11 + qq1_r(2, 2, &
+               1)*x4)
             f4_rr_rArB(1, 2, 2, 1) = t_f4_rr_rArB_0110
             f4_rr_rArB(2, 1, 2, 1) = t_f4_rr_rArB_0110
             t_f4_rr_rArB_0111 = &
-               -inv_pd*qq2_rr(1, 2, 2, 2) + qb0(2)*x38 + qb1_r(1, 2)*x14 + qb1_r(2, 2)*x9 + &
-               qb2_rr(1, 2, 2)*x2 + qq0(2, 2)*x34 + qq1_r(1, 2, 2)*x11 + qq1_r(2, 2, 2)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 2, 2, 2) + qb0(2)*x38 + qb1_r(1, 2)*x14 + qb1_r(2, &
+               2)*x9 + qb2_rr(1, 2, 2)*x2 + qq0(2, 2)*x34 + qq1_r(1, 2, 2)*x11 + qq1_r(2, 2, &
+               2)*x4)
             f4_rr_rArB(1, 2, 2, 2) = t_f4_rr_rArB_0111
             f4_rr_rArB(2, 1, 2, 2) = t_f4_rr_rArB_0111
             t_f4_rr_rArB_0112 = &
-               -inv_pd*qq2_rr(1, 2, 2, 3) + qb0(3)*x38 + qb1_r(1, 3)*x14 + qb1_r(2, 3)*x9 + &
-               qb2_rr(1, 2, 3)*x2 + qq0(2, 3)*x34 + qq1_r(1, 2, 3)*x11 + qq1_r(2, 2, 3)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 2, 2, 3) + qb0(3)*x38 + qb1_r(1, 3)*x14 + qb1_r(2, &
+               3)*x9 + qb2_rr(1, 2, 3)*x2 + qq0(2, 3)*x34 + qq1_r(1, 2, 3)*x11 + qq1_r(2, 2, &
+               3)*x4)
             f4_rr_rArB(1, 2, 2, 3) = t_f4_rr_rArB_0112
             f4_rr_rArB(2, 1, 2, 3) = t_f4_rr_rArB_0112
             t_f4_rr_rArB_0120 = &
-               -inv_pd*qq2_rr(1, 2, 3, 1) + qb0(1)*x39 + qb1_r(1, 1)*x15 + qb1_r(2, 1)*x10 + &
-               qb2_rr(1, 2, 1)*x3 + qq0(3, 1)*x34 + qq1_r(1, 3, 1)*x11 + qq1_r(2, 3, 1)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 2, 3, 1) + qb0(1)*x39 + qb1_r(1, 1)*x15 + qb1_r(2, &
+               1)*x10 + qb2_rr(1, 2, 1)*x3 + qq0(3, 1)*x34 + qq1_r(1, 3, 1)*x11 + qq1_r(2, 3, &
+               1)*x4)
             f4_rr_rArB(1, 2, 3, 1) = t_f4_rr_rArB_0120
             f4_rr_rArB(2, 1, 3, 1) = t_f4_rr_rArB_0120
             t_f4_rr_rArB_0121 = &
-               -inv_pd*qq2_rr(1, 2, 3, 2) + qb0(2)*x39 + qb1_r(1, 2)*x15 + qb1_r(2, 2)*x10 + &
-               qb2_rr(1, 2, 2)*x3 + qq0(3, 2)*x34 + qq1_r(1, 3, 2)*x11 + qq1_r(2, 3, 2)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 2, 3, 2) + qb0(2)*x39 + qb1_r(1, 2)*x15 + qb1_r(2, &
+               2)*x10 + qb2_rr(1, 2, 2)*x3 + qq0(3, 2)*x34 + qq1_r(1, 3, 2)*x11 + qq1_r(2, 3, &
+               2)*x4)
             f4_rr_rArB(1, 2, 3, 2) = t_f4_rr_rArB_0121
             f4_rr_rArB(2, 1, 3, 2) = t_f4_rr_rArB_0121
             t_f4_rr_rArB_0122 = &
-               -inv_pd*qq2_rr(1, 2, 3, 3) + qb0(3)*x39 + qb1_r(1, 3)*x15 + qb1_r(2, 3)*x10 + &
-               qb2_rr(1, 2, 3)*x3 + qq0(3, 3)*x34 + qq1_r(1, 3, 3)*x11 + qq1_r(2, 3, 3)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 2, 3, 3) + qb0(3)*x39 + qb1_r(1, 3)*x15 + qb1_r(2, &
+               3)*x10 + qb2_rr(1, 2, 3)*x3 + qq0(3, 3)*x34 + qq1_r(1, 3, 3)*x11 + qq1_r(2, 3, &
+               3)*x4)
             f4_rr_rArB(1, 2, 3, 3) = t_f4_rr_rArB_0122
             f4_rr_rArB(2, 1, 3, 3) = t_f4_rr_rArB_0122
             t_f4_rr_rArB_0200 = &
-               -inv_pd*qq2_rr(1, 3, 1, 1) + qb0(1)*x42 + qb1_r(1, 1)*x18 + qb1_r(3, 1)*x8 + &
-               qb2_rr(1, 3, 1)*x1 + qq0(1, 1)*x40 + qq1_r(1, 1, 1)*x16 + qq1_r(3, 1, 1)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 3, 1, 1) + qb0(1)*x42 + qb1_r(1, 1)*x18 + qb1_r(3, &
+               1)*x8 + qb2_rr(1, 3, 1)*x1 + qq0(1, 1)*x40 + qq1_r(1, 1, 1)*x16 + qq1_r(3, 1, &
+               1)*x4)
             f4_rr_rArB(1, 3, 1, 1) = t_f4_rr_rArB_0200
             f4_rr_rArB(3, 1, 1, 1) = t_f4_rr_rArB_0200
             t_f4_rr_rArB_0201 = &
-               -inv_pd*qq2_rr(1, 3, 1, 2) + qb0(2)*x42 + qb1_r(1, 2)*x18 + qb1_r(3, 2)*x8 + &
-               qb2_rr(1, 3, 2)*x1 + qq0(1, 2)*x40 + qq1_r(1, 1, 2)*x16 + qq1_r(3, 1, 2)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 3, 1, 2) + qb0(2)*x42 + qb1_r(1, 2)*x18 + qb1_r(3, &
+               2)*x8 + qb2_rr(1, 3, 2)*x1 + qq0(1, 2)*x40 + qq1_r(1, 1, 2)*x16 + qq1_r(3, 1, &
+               2)*x4)
             f4_rr_rArB(1, 3, 1, 2) = t_f4_rr_rArB_0201
             f4_rr_rArB(3, 1, 1, 2) = t_f4_rr_rArB_0201
             t_f4_rr_rArB_0202 = &
-               -inv_pd*qq2_rr(1, 3, 1, 3) + qb0(3)*x42 + qb1_r(1, 3)*x18 + qb1_r(3, 3)*x8 + &
-               qb2_rr(1, 3, 3)*x1 + qq0(1, 3)*x40 + qq1_r(1, 1, 3)*x16 + qq1_r(3, 1, 3)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 3, 1, 3) + qb0(3)*x42 + qb1_r(1, 3)*x18 + qb1_r(3, &
+               3)*x8 + qb2_rr(1, 3, 3)*x1 + qq0(1, 3)*x40 + qq1_r(1, 1, 3)*x16 + qq1_r(3, 1, &
+               3)*x4)
             f4_rr_rArB(1, 3, 1, 3) = t_f4_rr_rArB_0202
             f4_rr_rArB(3, 1, 1, 3) = t_f4_rr_rArB_0202
             t_f4_rr_rArB_0210 = &
-               -inv_pd*qq2_rr(1, 3, 2, 1) + qb0(1)*x43 + qb1_r(1, 1)*x19 + qb1_r(3, 1)*x9 + &
-               qb2_rr(1, 3, 1)*x2 + qq0(2, 1)*x40 + qq1_r(1, 2, 1)*x16 + qq1_r(3, 2, 1)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 3, 2, 1) + qb0(1)*x43 + qb1_r(1, 1)*x19 + qb1_r(3, &
+               1)*x9 + qb2_rr(1, 3, 1)*x2 + qq0(2, 1)*x40 + qq1_r(1, 2, 1)*x16 + qq1_r(3, 2, &
+               1)*x4)
             f4_rr_rArB(1, 3, 2, 1) = t_f4_rr_rArB_0210
             f4_rr_rArB(3, 1, 2, 1) = t_f4_rr_rArB_0210
             t_f4_rr_rArB_0211 = &
-               -inv_pd*qq2_rr(1, 3, 2, 2) + qb0(2)*x43 + qb1_r(1, 2)*x19 + qb1_r(3, 2)*x9 + &
-               qb2_rr(1, 3, 2)*x2 + qq0(2, 2)*x40 + qq1_r(1, 2, 2)*x16 + qq1_r(3, 2, 2)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 3, 2, 2) + qb0(2)*x43 + qb1_r(1, 2)*x19 + qb1_r(3, &
+               2)*x9 + qb2_rr(1, 3, 2)*x2 + qq0(2, 2)*x40 + qq1_r(1, 2, 2)*x16 + qq1_r(3, 2, &
+               2)*x4)
             f4_rr_rArB(1, 3, 2, 2) = t_f4_rr_rArB_0211
             f4_rr_rArB(3, 1, 2, 2) = t_f4_rr_rArB_0211
             t_f4_rr_rArB_0212 = &
-               -inv_pd*qq2_rr(1, 3, 2, 3) + qb0(3)*x43 + qb1_r(1, 3)*x19 + qb1_r(3, 3)*x9 + &
-               qb2_rr(1, 3, 3)*x2 + qq0(2, 3)*x40 + qq1_r(1, 2, 3)*x16 + qq1_r(3, 2, 3)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 3, 2, 3) + qb0(3)*x43 + qb1_r(1, 3)*x19 + qb1_r(3, &
+               3)*x9 + qb2_rr(1, 3, 3)*x2 + qq0(2, 3)*x40 + qq1_r(1, 2, 3)*x16 + qq1_r(3, 2, &
+               3)*x4)
             f4_rr_rArB(1, 3, 2, 3) = t_f4_rr_rArB_0212
             f4_rr_rArB(3, 1, 2, 3) = t_f4_rr_rArB_0212
             t_f4_rr_rArB_0220 = &
-               -inv_pd*qq2_rr(1, 3, 3, 1) + qb0(1)*x44 + qb1_r(1, 1)*x20 + qb1_r(3, 1)*x10 + &
-               qb2_rr(1, 3, 1)*x3 + qq0(3, 1)*x40 + qq1_r(1, 3, 1)*x16 + qq1_r(3, 3, 1)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 3, 3, 1) + qb0(1)*x44 + qb1_r(1, 1)*x20 + qb1_r(3, &
+               1)*x10 + qb2_rr(1, 3, 1)*x3 + qq0(3, 1)*x40 + qq1_r(1, 3, 1)*x16 + qq1_r(3, 3, &
+               1)*x4)
             f4_rr_rArB(1, 3, 3, 1) = t_f4_rr_rArB_0220
             f4_rr_rArB(3, 1, 3, 1) = t_f4_rr_rArB_0220
             t_f4_rr_rArB_0221 = &
-               -inv_pd*qq2_rr(1, 3, 3, 2) + qb0(2)*x44 + qb1_r(1, 2)*x20 + qb1_r(3, 2)*x10 + &
-               qb2_rr(1, 3, 2)*x3 + qq0(3, 2)*x40 + qq1_r(1, 3, 2)*x16 + qq1_r(3, 3, 2)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 3, 3, 2) + qb0(2)*x44 + qb1_r(1, 2)*x20 + qb1_r(3, &
+               2)*x10 + qb2_rr(1, 3, 2)*x3 + qq0(3, 2)*x40 + qq1_r(1, 3, 2)*x16 + qq1_r(3, 3, &
+               2)*x4)
             f4_rr_rArB(1, 3, 3, 2) = t_f4_rr_rArB_0221
             f4_rr_rArB(3, 1, 3, 2) = t_f4_rr_rArB_0221
             t_f4_rr_rArB_0222 = &
-               -inv_pd*qq2_rr(1, 3, 3, 3) + qb0(3)*x44 + qb1_r(1, 3)*x20 + qb1_r(3, 3)*x10 + &
-               qb2_rr(1, 3, 3)*x3 + qq0(3, 3)*x40 + qq1_r(1, 3, 3)*x16 + qq1_r(3, 3, 3)*x4
+               lsf_scale*(-inv_pd*qq2_rr(1, 3, 3, 3) + qb0(3)*x44 + qb1_r(1, 3)*x20 + qb1_r(3, &
+               3)*x10 + qb2_rr(1, 3, 3)*x3 + qq0(3, 3)*x40 + qq1_r(1, 3, 3)*x16 + qq1_r(3, 3, &
+               3)*x4)
             f4_rr_rArB(1, 3, 3, 3) = t_f4_rr_rArB_0222
             f4_rr_rArB(3, 1, 3, 3) = t_f4_rr_rArB_0222
             f4_rr_rArB(2, 2, 1, 1) = &
-               -inv_pd*qq2_rr(2, 2, 1, 1) + qb0(1)*x51 + qb1_r(2, 1)*x47 + qb2_rr(2, 2, 1)*x1 + &
-               qq0(1, 1)*x49 + qq1_r(2, 1, 1)*x45
+               lsf_scale*(-inv_pd*qq2_rr(2, 2, 1, 1) + qb0(1)*x51 + qb1_r(2, 1)*x47 + qb2_rr(2, 2, &
+               1)*x1 + qq0(1, 1)*x49 + qq1_r(2, 1, 1)*x45)
             f4_rr_rArB(2, 2, 1, 2) = &
-               -inv_pd*qq2_rr(2, 2, 1, 2) + qb0(2)*x51 + qb1_r(2, 2)*x47 + qb2_rr(2, 2, 2)*x1 + &
-               qq0(1, 2)*x49 + qq1_r(2, 1, 2)*x45
+               lsf_scale*(-inv_pd*qq2_rr(2, 2, 1, 2) + qb0(2)*x51 + qb1_r(2, 2)*x47 + qb2_rr(2, 2, &
+               2)*x1 + qq0(1, 2)*x49 + qq1_r(2, 1, 2)*x45)
             f4_rr_rArB(2, 2, 1, 3) = &
-               -inv_pd*qq2_rr(2, 2, 1, 3) + qb0(3)*x51 + qb1_r(2, 3)*x47 + qb2_rr(2, 2, 3)*x1 + &
-               qq0(1, 3)*x49 + qq1_r(2, 1, 3)*x45
+               lsf_scale*(-inv_pd*qq2_rr(2, 2, 1, 3) + qb0(3)*x51 + qb1_r(2, 3)*x47 + qb2_rr(2, 2, &
+               3)*x1 + qq0(1, 3)*x49 + qq1_r(2, 1, 3)*x45)
             f4_rr_rArB(2, 2, 2, 1) = &
-               -inv_pd*qq2_rr(2, 2, 2, 1) + qb0(1)*x53 + qb1_r(2, 1)*x52 + qb2_rr(2, 2, 1)*x2 + &
-               qq0(2, 1)*x49 + qq1_r(2, 2, 1)*x45
+               lsf_scale*(-inv_pd*qq2_rr(2, 2, 2, 1) + qb0(1)*x53 + qb1_r(2, 1)*x52 + qb2_rr(2, 2, &
+               1)*x2 + qq0(2, 1)*x49 + qq1_r(2, 2, 1)*x45)
             f4_rr_rArB(2, 2, 2, 2) = &
-               -inv_pd*qq2_rr(2, 2, 2, 2) + qb0(2)*x53 + qb1_r(2, 2)*x52 + qb2_rr(2, 2, 2)*x2 + &
-               qq0(2, 2)*x49 + qq1_r(2, 2, 2)*x45
+               lsf_scale*(-inv_pd*qq2_rr(2, 2, 2, 2) + qb0(2)*x53 + qb1_r(2, 2)*x52 + qb2_rr(2, 2, &
+               2)*x2 + qq0(2, 2)*x49 + qq1_r(2, 2, 2)*x45)
             f4_rr_rArB(2, 2, 2, 3) = &
-               -inv_pd*qq2_rr(2, 2, 2, 3) + qb0(3)*x53 + qb1_r(2, 3)*x52 + qb2_rr(2, 2, 3)*x2 + &
-               qq0(2, 3)*x49 + qq1_r(2, 2, 3)*x45
+               lsf_scale*(-inv_pd*qq2_rr(2, 2, 2, 3) + qb0(3)*x53 + qb1_r(2, 3)*x52 + qb2_rr(2, 2, &
+               3)*x2 + qq0(2, 3)*x49 + qq1_r(2, 2, 3)*x45)
             f4_rr_rArB(2, 2, 3, 1) = &
-               -inv_pd*qq2_rr(2, 2, 3, 1) + qb0(1)*x55 + qb1_r(2, 1)*x54 + qb2_rr(2, 2, 1)*x3 + &
-               qq0(3, 1)*x49 + qq1_r(2, 3, 1)*x45
+               lsf_scale*(-inv_pd*qq2_rr(2, 2, 3, 1) + qb0(1)*x55 + qb1_r(2, 1)*x54 + qb2_rr(2, 2, &
+               1)*x3 + qq0(3, 1)*x49 + qq1_r(2, 3, 1)*x45)
             f4_rr_rArB(2, 2, 3, 2) = &
-               -inv_pd*qq2_rr(2, 2, 3, 2) + qb0(2)*x55 + qb1_r(2, 2)*x54 + qb2_rr(2, 2, 2)*x3 + &
-               qq0(3, 2)*x49 + qq1_r(2, 3, 2)*x45
+               lsf_scale*(-inv_pd*qq2_rr(2, 2, 3, 2) + qb0(2)*x55 + qb1_r(2, 2)*x54 + qb2_rr(2, 2, &
+               2)*x3 + qq0(3, 2)*x49 + qq1_r(2, 3, 2)*x45)
             f4_rr_rArB(2, 2, 3, 3) = &
-               -inv_pd*qq2_rr(2, 2, 3, 3) + qb0(3)*x55 + qb1_r(2, 3)*x54 + qb2_rr(2, 2, 3)*x3 + &
-               qq0(3, 3)*x49 + qq1_r(2, 3, 3)*x45
+               lsf_scale*(-inv_pd*qq2_rr(2, 2, 3, 3) + qb0(3)*x55 + qb1_r(2, 3)*x54 + qb2_rr(2, 2, &
+               3)*x3 + qq0(3, 3)*x49 + qq1_r(2, 3, 3)*x45)
             t_f4_rr_rArB_1200 = &
-               -inv_pd*qq2_rr(2, 3, 1, 1) + qb0(1)*x58 + qb1_r(2, 1)*x18 + qb1_r(3, 1)*x13 + &
-               qb2_rr(2, 3, 1)*x1 + qq0(1, 1)*x56 + qq1_r(2, 1, 1)*x16 + qq1_r(3, 1, 1)*x11
+               lsf_scale*(-inv_pd*qq2_rr(2, 3, 1, 1) + qb0(1)*x58 + qb1_r(2, 1)*x18 + qb1_r(3, &
+               1)*x13 + qb2_rr(2, 3, 1)*x1 + qq0(1, 1)*x56 + qq1_r(2, 1, 1)*x16 + qq1_r(3, 1, &
+               1)*x11)
             f4_rr_rArB(2, 3, 1, 1) = t_f4_rr_rArB_1200
             f4_rr_rArB(3, 2, 1, 1) = t_f4_rr_rArB_1200
             t_f4_rr_rArB_1201 = &
-               -inv_pd*qq2_rr(2, 3, 1, 2) + qb0(2)*x58 + qb1_r(2, 2)*x18 + qb1_r(3, 2)*x13 + &
-               qb2_rr(2, 3, 2)*x1 + qq0(1, 2)*x56 + qq1_r(2, 1, 2)*x16 + qq1_r(3, 1, 2)*x11
+               lsf_scale*(-inv_pd*qq2_rr(2, 3, 1, 2) + qb0(2)*x58 + qb1_r(2, 2)*x18 + qb1_r(3, &
+               2)*x13 + qb2_rr(2, 3, 2)*x1 + qq0(1, 2)*x56 + qq1_r(2, 1, 2)*x16 + qq1_r(3, 1, &
+               2)*x11)
             f4_rr_rArB(2, 3, 1, 2) = t_f4_rr_rArB_1201
             f4_rr_rArB(3, 2, 1, 2) = t_f4_rr_rArB_1201
             t_f4_rr_rArB_1202 = &
-               -inv_pd*qq2_rr(2, 3, 1, 3) + qb0(3)*x58 + qb1_r(2, 3)*x18 + qb1_r(3, 3)*x13 + &
-               qb2_rr(2, 3, 3)*x1 + qq0(1, 3)*x56 + qq1_r(2, 1, 3)*x16 + qq1_r(3, 1, 3)*x11
+               lsf_scale*(-inv_pd*qq2_rr(2, 3, 1, 3) + qb0(3)*x58 + qb1_r(2, 3)*x18 + qb1_r(3, &
+               3)*x13 + qb2_rr(2, 3, 3)*x1 + qq0(1, 3)*x56 + qq1_r(2, 1, 3)*x16 + qq1_r(3, 1, &
+               3)*x11)
             f4_rr_rArB(2, 3, 1, 3) = t_f4_rr_rArB_1202
             f4_rr_rArB(3, 2, 1, 3) = t_f4_rr_rArB_1202
             t_f4_rr_rArB_1210 = &
-               -inv_pd*qq2_rr(2, 3, 2, 1) + qb0(1)*x59 + qb1_r(2, 1)*x19 + qb1_r(3, 1)*x14 + &
-               qb2_rr(2, 3, 1)*x2 + qq0(2, 1)*x56 + qq1_r(2, 2, 1)*x16 + qq1_r(3, 2, 1)*x11
+               lsf_scale*(-inv_pd*qq2_rr(2, 3, 2, 1) + qb0(1)*x59 + qb1_r(2, 1)*x19 + qb1_r(3, &
+               1)*x14 + qb2_rr(2, 3, 1)*x2 + qq0(2, 1)*x56 + qq1_r(2, 2, 1)*x16 + qq1_r(3, 2, &
+               1)*x11)
             f4_rr_rArB(2, 3, 2, 1) = t_f4_rr_rArB_1210
             f4_rr_rArB(3, 2, 2, 1) = t_f4_rr_rArB_1210
             t_f4_rr_rArB_1211 = &
-               -inv_pd*qq2_rr(2, 3, 2, 2) + qb0(2)*x59 + qb1_r(2, 2)*x19 + qb1_r(3, 2)*x14 + &
-               qb2_rr(2, 3, 2)*x2 + qq0(2, 2)*x56 + qq1_r(2, 2, 2)*x16 + qq1_r(3, 2, 2)*x11
+               lsf_scale*(-inv_pd*qq2_rr(2, 3, 2, 2) + qb0(2)*x59 + qb1_r(2, 2)*x19 + qb1_r(3, &
+               2)*x14 + qb2_rr(2, 3, 2)*x2 + qq0(2, 2)*x56 + qq1_r(2, 2, 2)*x16 + qq1_r(3, 2, &
+               2)*x11)
             f4_rr_rArB(2, 3, 2, 2) = t_f4_rr_rArB_1211
             f4_rr_rArB(3, 2, 2, 2) = t_f4_rr_rArB_1211
             t_f4_rr_rArB_1212 = &
-               -inv_pd*qq2_rr(2, 3, 2, 3) + qb0(3)*x59 + qb1_r(2, 3)*x19 + qb1_r(3, 3)*x14 + &
-               qb2_rr(2, 3, 3)*x2 + qq0(2, 3)*x56 + qq1_r(2, 2, 3)*x16 + qq1_r(3, 2, 3)*x11
+               lsf_scale*(-inv_pd*qq2_rr(2, 3, 2, 3) + qb0(3)*x59 + qb1_r(2, 3)*x19 + qb1_r(3, &
+               3)*x14 + qb2_rr(2, 3, 3)*x2 + qq0(2, 3)*x56 + qq1_r(2, 2, 3)*x16 + qq1_r(3, 2, &
+               3)*x11)
             f4_rr_rArB(2, 3, 2, 3) = t_f4_rr_rArB_1212
             f4_rr_rArB(3, 2, 2, 3) = t_f4_rr_rArB_1212
             t_f4_rr_rArB_1220 = &
-               -inv_pd*qq2_rr(2, 3, 3, 1) + qb0(1)*x60 + qb1_r(2, 1)*x20 + qb1_r(3, 1)*x15 + &
-               qb2_rr(2, 3, 1)*x3 + qq0(3, 1)*x56 + qq1_r(2, 3, 1)*x16 + qq1_r(3, 3, 1)*x11
+               lsf_scale*(-inv_pd*qq2_rr(2, 3, 3, 1) + qb0(1)*x60 + qb1_r(2, 1)*x20 + qb1_r(3, &
+               1)*x15 + qb2_rr(2, 3, 1)*x3 + qq0(3, 1)*x56 + qq1_r(2, 3, 1)*x16 + qq1_r(3, 3, &
+               1)*x11)
             f4_rr_rArB(2, 3, 3, 1) = t_f4_rr_rArB_1220
             f4_rr_rArB(3, 2, 3, 1) = t_f4_rr_rArB_1220
             t_f4_rr_rArB_1221 = &
-               -inv_pd*qq2_rr(2, 3, 3, 2) + qb0(2)*x60 + qb1_r(2, 2)*x20 + qb1_r(3, 2)*x15 + &
-               qb2_rr(2, 3, 2)*x3 + qq0(3, 2)*x56 + qq1_r(2, 3, 2)*x16 + qq1_r(3, 3, 2)*x11
+               lsf_scale*(-inv_pd*qq2_rr(2, 3, 3, 2) + qb0(2)*x60 + qb1_r(2, 2)*x20 + qb1_r(3, &
+               2)*x15 + qb2_rr(2, 3, 2)*x3 + qq0(3, 2)*x56 + qq1_r(2, 3, 2)*x16 + qq1_r(3, 3, &
+               2)*x11)
             f4_rr_rArB(2, 3, 3, 2) = t_f4_rr_rArB_1221
             f4_rr_rArB(3, 2, 3, 2) = t_f4_rr_rArB_1221
             t_f4_rr_rArB_1222 = &
-               -inv_pd*qq2_rr(2, 3, 3, 3) + qb0(3)*x60 + qb1_r(2, 3)*x20 + qb1_r(3, 3)*x15 + &
-               qb2_rr(2, 3, 3)*x3 + qq0(3, 3)*x56 + qq1_r(2, 3, 3)*x16 + qq1_r(3, 3, 3)*x11
+               lsf_scale*(-inv_pd*qq2_rr(2, 3, 3, 3) + qb0(3)*x60 + qb1_r(2, 3)*x20 + qb1_r(3, &
+               3)*x15 + qb2_rr(2, 3, 3)*x3 + qq0(3, 3)*x56 + qq1_r(2, 3, 3)*x16 + qq1_r(3, 3, &
+               3)*x11)
             f4_rr_rArB(2, 3, 3, 3) = t_f4_rr_rArB_1222
             f4_rr_rArB(3, 2, 3, 3) = t_f4_rr_rArB_1222
             f4_rr_rArB(3, 3, 1, 1) = &
-               -inv_pd*qq2_rr(3, 3, 1, 1) + qb0(1)*x67 + qb1_r(3, 1)*x63 + qb2_rr(3, 3, 1)*x1 + &
-               qq0(1, 1)*x65 + qq1_r(3, 1, 1)*x61
+               lsf_scale*(-inv_pd*qq2_rr(3, 3, 1, 1) + qb0(1)*x67 + qb1_r(3, 1)*x63 + qb2_rr(3, 3, &
+               1)*x1 + qq0(1, 1)*x65 + qq1_r(3, 1, 1)*x61)
             f4_rr_rArB(3, 3, 1, 2) = &
-               -inv_pd*qq2_rr(3, 3, 1, 2) + qb0(2)*x67 + qb1_r(3, 2)*x63 + qb2_rr(3, 3, 2)*x1 + &
-               qq0(1, 2)*x65 + qq1_r(3, 1, 2)*x61
+               lsf_scale*(-inv_pd*qq2_rr(3, 3, 1, 2) + qb0(2)*x67 + qb1_r(3, 2)*x63 + qb2_rr(3, 3, &
+               2)*x1 + qq0(1, 2)*x65 + qq1_r(3, 1, 2)*x61)
             f4_rr_rArB(3, 3, 1, 3) = &
-               -inv_pd*qq2_rr(3, 3, 1, 3) + qb0(3)*x67 + qb1_r(3, 3)*x63 + qb2_rr(3, 3, 3)*x1 + &
-               qq0(1, 3)*x65 + qq1_r(3, 1, 3)*x61
+               lsf_scale*(-inv_pd*qq2_rr(3, 3, 1, 3) + qb0(3)*x67 + qb1_r(3, 3)*x63 + qb2_rr(3, 3, &
+               3)*x1 + qq0(1, 3)*x65 + qq1_r(3, 1, 3)*x61)
             f4_rr_rArB(3, 3, 2, 1) = &
-               -inv_pd*qq2_rr(3, 3, 2, 1) + qb0(1)*x69 + qb1_r(3, 1)*x68 + qb2_rr(3, 3, 1)*x2 + &
-               qq0(2, 1)*x65 + qq1_r(3, 2, 1)*x61
+               lsf_scale*(-inv_pd*qq2_rr(3, 3, 2, 1) + qb0(1)*x69 + qb1_r(3, 1)*x68 + qb2_rr(3, 3, &
+               1)*x2 + qq0(2, 1)*x65 + qq1_r(3, 2, 1)*x61)
             f4_rr_rArB(3, 3, 2, 2) = &
-               -inv_pd*qq2_rr(3, 3, 2, 2) + qb0(2)*x69 + qb1_r(3, 2)*x68 + qb2_rr(3, 3, 2)*x2 + &
-               qq0(2, 2)*x65 + qq1_r(3, 2, 2)*x61
+               lsf_scale*(-inv_pd*qq2_rr(3, 3, 2, 2) + qb0(2)*x69 + qb1_r(3, 2)*x68 + qb2_rr(3, 3, &
+               2)*x2 + qq0(2, 2)*x65 + qq1_r(3, 2, 2)*x61)
             f4_rr_rArB(3, 3, 2, 3) = &
-               -inv_pd*qq2_rr(3, 3, 2, 3) + qb0(3)*x69 + qb1_r(3, 3)*x68 + qb2_rr(3, 3, 3)*x2 + &
-               qq0(2, 3)*x65 + qq1_r(3, 2, 3)*x61
+               lsf_scale*(-inv_pd*qq2_rr(3, 3, 2, 3) + qb0(3)*x69 + qb1_r(3, 3)*x68 + qb2_rr(3, 3, &
+               3)*x2 + qq0(2, 3)*x65 + qq1_r(3, 2, 3)*x61)
             f4_rr_rArB(3, 3, 3, 1) = &
-               -inv_pd*qq2_rr(3, 3, 3, 1) + qb0(1)*x71 + qb1_r(3, 1)*x70 + qb2_rr(3, 3, 1)*x3 + &
-               qq0(3, 1)*x65 + qq1_r(3, 3, 1)*x61
+               lsf_scale*(-inv_pd*qq2_rr(3, 3, 3, 1) + qb0(1)*x71 + qb1_r(3, 1)*x70 + qb2_rr(3, 3, &
+               1)*x3 + qq0(3, 1)*x65 + qq1_r(3, 3, 1)*x61)
             f4_rr_rArB(3, 3, 3, 2) = &
-               -inv_pd*qq2_rr(3, 3, 3, 2) + qb0(2)*x71 + qb1_r(3, 2)*x70 + qb2_rr(3, 3, 2)*x3 + &
-               qq0(3, 2)*x65 + qq1_r(3, 3, 2)*x61
+               lsf_scale*(-inv_pd*qq2_rr(3, 3, 3, 2) + qb0(2)*x71 + qb1_r(3, 2)*x70 + qb2_rr(3, 3, &
+               2)*x3 + qq0(3, 2)*x65 + qq1_r(3, 3, 2)*x61)
             f4_rr_rArB(3, 3, 3, 3) = &
-               -inv_pd*qq2_rr(3, 3, 3, 3) + qb0(3)*x71 + qb1_r(3, 3)*x70 + qb2_rr(3, 3, 3)*x3 + &
-               qq0(3, 3)*x65 + qq1_r(3, 3, 3)*x61
+               lsf_scale*(-inv_pd*qq2_rr(3, 3, 3, 3) + qb0(3)*x71 + qb1_r(3, 3)*x70 + qb2_rr(3, 3, &
+               3)*x3 + qq0(3, 3)*x65 + qq1_r(3, 3, 3)*x61)
          end block
       end select
 
    end subroutine cfc_hessian_eval
 
-   pure module subroutine cfc_tangent_eval(pd0, pd1_r, pd2_rr, pd3_rrr, tg0, tg1_r, tg2_rr, tg3_rrr, &
-                                    max_deriv, tangent_f0, tangent_f1_r, tangent_f2_rr, &
+   pure module subroutine cfc_tangent_eval(lsf_scale, pd0, pd1_r, pd2_rr, pd3_rrr, tg0, tg1_r, tg2_rr, &
+                                    tg3_rrr, max_deriv, tangent_f0, tangent_f1_r, tangent_f2_rr, &
                                     tangent_f3_rrr)
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated order-0 spatial derivative of PD
       real(wp), intent(in) :: pd0
       !> Accumulated order-1 spatial derivative of PD
@@ -1411,7 +1513,7 @@ contains
       select case (max_deriv)
       case (0)
          block
-            tangent_f0 = -inv_pd*tg0
+            tangent_f0 = lsf_scale*(-inv_pd*tg0)
          end block
       case (1)
          block
@@ -1419,10 +1521,10 @@ contains
             real(wp) :: x0
 
             x0 = (inv_pd*inv_pd)*tg0
-            tangent_f0 = -inv_pd*tg0
-            tangent_f1_r(1) = -inv_pd*tg1_r(1) + pd1_r(1)*x0
-            tangent_f1_r(2) = -inv_pd*tg1_r(2) + pd1_r(2)*x0
-            tangent_f1_r(3) = -inv_pd*tg1_r(3) + pd1_r(3)*x0
+            tangent_f0 = lsf_scale*(-inv_pd*tg0)
+            tangent_f1_r(1) = lsf_scale*(-inv_pd*tg1_r(1) + pd1_r(1)*x0)
+            tangent_f1_r(2) = lsf_scale*(-inv_pd*tg1_r(2) + pd1_r(2)*x0)
+            tangent_f1_r(3) = lsf_scale*(-inv_pd*tg1_r(3) + pd1_r(3)*x0)
          end block
       case (2)
          block
@@ -1438,34 +1540,34 @@ contains
             x5 = pd1_r(1)*x3
             x6 = pd1_r(2)*x0
             x7 = pd1_r(3)*x0
-            tangent_f0 = -inv_pd*tg0
-            tangent_f1_r(1) = -inv_pd*tg1_r(1) + pd1_r(1)*x1
-            tangent_f1_r(2) = -inv_pd*tg1_r(2) + pd1_r(2)*x1
-            tangent_f1_r(3) = -inv_pd*tg1_r(3) + pd1_r(3)*x1
+            tangent_f0 = lsf_scale*(-inv_pd*tg0)
+            tangent_f1_r(1) = lsf_scale*(-inv_pd*tg1_r(1) + pd1_r(1)*x1)
+            tangent_f1_r(2) = lsf_scale*(-inv_pd*tg1_r(2) + pd1_r(2)*x1)
+            tangent_f1_r(3) = lsf_scale*(-inv_pd*tg1_r(3) + pd1_r(3)*x1)
             tangent_f2_rr(1, 1) = &
-               -inv_pd*tg2_rr(1, 1) + tg0*(-(pd1_r(1)*pd1_r(1))*x3 + pd2_rr(1, 1)*x0) + &
-               2.0_wp*tg1_r(1)*x2
+               lsf_scale*(-inv_pd*tg2_rr(1, 1) + tg0*(-(pd1_r(1)*pd1_r(1))*x3 + pd2_rr(1, 1)*x0) + &
+               2.0_wp*tg1_r(1)*x2)
             t_tangent_f2_rr_01 = &
-               -inv_pd*tg2_rr(1, 2) + pd1_r(2)*x4 + tg0*(-pd1_r(2)*x5 + pd2_rr(1, 2)*x0) + &
-               tg1_r(2)*x2
+               lsf_scale*(-inv_pd*tg2_rr(1, 2) + pd1_r(2)*x4 + tg0*(-pd1_r(2)*x5 + pd2_rr(1, &
+               2)*x0) + tg1_r(2)*x2)
             tangent_f2_rr(1, 2) = t_tangent_f2_rr_01
             tangent_f2_rr(2, 1) = t_tangent_f2_rr_01
             t_tangent_f2_rr_02 = &
-               -inv_pd*tg2_rr(1, 3) + pd1_r(3)*x4 + tg0*(-pd1_r(3)*x5 + pd2_rr(1, 3)*x0) + &
-               tg1_r(3)*x2
+               lsf_scale*(-inv_pd*tg2_rr(1, 3) + pd1_r(3)*x4 + tg0*(-pd1_r(3)*x5 + pd2_rr(1, &
+               3)*x0) + tg1_r(3)*x2)
             tangent_f2_rr(1, 3) = t_tangent_f2_rr_02
             tangent_f2_rr(3, 1) = t_tangent_f2_rr_02
             tangent_f2_rr(2, 2) = &
-               -inv_pd*tg2_rr(2, 2) + tg0*(-(pd1_r(2)*pd1_r(2))*x3 + pd2_rr(2, 2)*x0) + &
-               2.0_wp*tg1_r(2)*x6
+               lsf_scale*(-inv_pd*tg2_rr(2, 2) + tg0*(-(pd1_r(2)*pd1_r(2))*x3 + pd2_rr(2, 2)*x0) + &
+               2.0_wp*tg1_r(2)*x6)
             t_tangent_f2_rr_12 = &
-               -inv_pd*tg2_rr(2, 3) + tg0*(-pd1_r(2)*pd1_r(3)*x3 + pd2_rr(2, 3)*x0) + tg1_r(2)*x7 &
-               + tg1_r(3)*x6
+               lsf_scale*(-inv_pd*tg2_rr(2, 3) + tg0*(-pd1_r(2)*pd1_r(3)*x3 + pd2_rr(2, 3)*x0) + &
+               tg1_r(2)*x7 + tg1_r(3)*x6)
             tangent_f2_rr(2, 3) = t_tangent_f2_rr_12
             tangent_f2_rr(3, 2) = t_tangent_f2_rr_12
             tangent_f2_rr(3, 3) = &
-               -inv_pd*tg2_rr(3, 3) + tg0*(-(pd1_r(3)*pd1_r(3))*x3 + pd2_rr(3, 3)*x0) + &
-               2.0_wp*tg1_r(3)*x7
+               lsf_scale*(-inv_pd*tg2_rr(3, 3) + tg0*(-(pd1_r(3)*pd1_r(3))*x3 + pd2_rr(3, 3)*x0) + &
+               2.0_wp*tg1_r(3)*x7)
          end block
       case default
          block
@@ -1519,48 +1621,54 @@ contains
             x39 = x25*x37 - x29
             x40 = 2.0_wp*pd2_rr(2, 3)*x0 - x17*x23
             x41 = 6.0_wp*x20
-            tangent_f0 = -inv_pd*tg0
-            tangent_f1_r(1) = -inv_pd*tg1_r(1) + pd1_r(1)*x1
-            tangent_f1_r(2) = -inv_pd*tg1_r(2) + pd1_r(2)*x1
-            tangent_f1_r(3) = -inv_pd*tg1_r(3) + pd1_r(3)*x1
-            tangent_f2_rr(1, 1) = -inv_pd*tg2_rr(1, 1) + tg0*x7 + tg1_r(1)*x3
-            t_tangent_f2_rr_01 = -inv_pd*tg2_rr(1, 2) + pd1_r(2)*x8 + tg0*x10 + tg1_r(2)*x2
+            tangent_f0 = lsf_scale*(-inv_pd*tg0)
+            tangent_f1_r(1) = lsf_scale*(-inv_pd*tg1_r(1) + pd1_r(1)*x1)
+            tangent_f1_r(2) = lsf_scale*(-inv_pd*tg1_r(2) + pd1_r(2)*x1)
+            tangent_f1_r(3) = lsf_scale*(-inv_pd*tg1_r(3) + pd1_r(3)*x1)
+            tangent_f2_rr(1, 1) = lsf_scale*(-inv_pd*tg2_rr(1, 1) + tg0*x7 + tg1_r(1)*x3)
+            t_tangent_f2_rr_01 = &
+               lsf_scale*(-inv_pd*tg2_rr(1, 2) + pd1_r(2)*x8 + tg0*x10 + tg1_r(2)*x2)
             tangent_f2_rr(1, 2) = t_tangent_f2_rr_01
             tangent_f2_rr(2, 1) = t_tangent_f2_rr_01
-            t_tangent_f2_rr_02 = -inv_pd*tg2_rr(1, 3) + pd1_r(3)*x8 + tg0*x11 + tg1_r(3)*x2
+            t_tangent_f2_rr_02 = &
+               lsf_scale*(-inv_pd*tg2_rr(1, 3) + pd1_r(3)*x8 + tg0*x11 + tg1_r(3)*x2)
             tangent_f2_rr(1, 3) = t_tangent_f2_rr_02
             tangent_f2_rr(3, 1) = t_tangent_f2_rr_02
-            tangent_f2_rr(2, 2) = -inv_pd*tg2_rr(2, 2) + tg0*x15 + tg1_r(2)*x13
-            t_tangent_f2_rr_12 = -inv_pd*tg2_rr(2, 3) + tg0*x18 + tg1_r(2)*x16 + tg1_r(3)*x12
+            tangent_f2_rr(2, 2) = lsf_scale*(-inv_pd*tg2_rr(2, 2) + tg0*x15 + tg1_r(2)*x13)
+            t_tangent_f2_rr_12 = &
+               lsf_scale*(-inv_pd*tg2_rr(2, 3) + tg0*x18 + tg1_r(2)*x16 + tg1_r(3)*x12)
             tangent_f2_rr(2, 3) = t_tangent_f2_rr_12
             tangent_f2_rr(3, 2) = t_tangent_f2_rr_12
-            tangent_f2_rr(3, 3) = -inv_pd*tg2_rr(3, 3) + tg0*x21 + tg1_r(3)*x19
+            tangent_f2_rr(3, 3) = lsf_scale*(-inv_pd*tg2_rr(3, 3) + tg0*x21 + tg1_r(3)*x19)
             tangent_f3_rrr(1, 1, 1) = &
-               -inv_pd*tg3_rrr(1, 1, 1) + tg0*(pd1_r(1)*x26 - pd2_rr(1, 1)*x24 + pd3_rrr(1, 1, &
-               1)*x0) + tg1_r(1)*(3.0_wp*pd2_rr(1, 1)*x0 - x22*x5) + 3.0_wp*tg2_rr(1, 1)*x2
+               lsf_scale*(-inv_pd*tg3_rrr(1, 1, 1) + tg0*(pd1_r(1)*x26 - pd2_rr(1, 1)*x24 + &
+               pd3_rrr(1, 1, 1)*x0) + tg1_r(1)*(3.0_wp*pd2_rr(1, 1)*x0 - x22*x5) + &
+               3.0_wp*tg2_rr(1, 1)*x2)
             t_tangent_f3_rrr_001 = &
-               -inv_pd*tg3_rrr(1, 1, 2) + tg0*(pd1_r(2)*x26 - pd2_rr(1, 2)*x24 + pd3_rrr(1, 1, &
-               2)*x0) + tg1_r(1)*x27 + tg1_r(2)*x7 + tg2_rr(1, 1)*x12 + tg2_rr(1, 2)*x3
+               lsf_scale*(-inv_pd*tg3_rrr(1, 1, 2) + tg0*(pd1_r(2)*x26 - pd2_rr(1, 2)*x24 + &
+               pd3_rrr(1, 1, 2)*x0) + tg1_r(1)*x27 + tg1_r(2)*x7 + tg2_rr(1, 1)*x12 + tg2_rr(1, &
+               2)*x3)
             tangent_f3_rrr(1, 1, 2) = t_tangent_f3_rrr_001
             tangent_f3_rrr(1, 2, 1) = t_tangent_f3_rrr_001
             tangent_f3_rrr(2, 1, 1) = t_tangent_f3_rrr_001
             t_tangent_f3_rrr_002 = &
-               -inv_pd*tg3_rrr(1, 1, 3) + tg0*(pd1_r(3)*x26 - pd2_rr(1, 3)*x24 + pd3_rrr(1, 1, &
-               3)*x0) + tg1_r(1)*x28 + tg1_r(3)*x7 + tg2_rr(1, 1)*x16 + tg2_rr(1, 3)*x3
+               lsf_scale*(-inv_pd*tg3_rrr(1, 1, 3) + tg0*(pd1_r(3)*x26 - pd2_rr(1, 3)*x24 + &
+               pd3_rrr(1, 1, 3)*x0) + tg1_r(1)*x28 + tg1_r(3)*x7 + tg2_rr(1, 1)*x16 + tg2_rr(1, &
+               3)*x3)
             tangent_f3_rrr(1, 1, 3) = t_tangent_f3_rrr_002
             tangent_f3_rrr(1, 3, 1) = t_tangent_f3_rrr_002
             tangent_f3_rrr(3, 1, 1) = t_tangent_f3_rrr_002
             t_tangent_f3_rrr_011 = &
-               -inv_pd*tg3_rrr(1, 2, 2) + tg0*(-pd1_r(1)*x29 - pd1_r(2)*x30 + pd1_r(2)*x33 + &
-               pd3_rrr(1, 2, 2)*x0) + tg1_r(1)*x15 + tg1_r(2)*x27 + tg2_rr(1, 2)*x13 + tg2_rr(2, &
-               2)*x2
+               lsf_scale*(-inv_pd*tg3_rrr(1, 2, 2) + tg0*(-pd1_r(1)*x29 - pd1_r(2)*x30 + &
+               pd1_r(2)*x33 + pd3_rrr(1, 2, 2)*x0) + tg1_r(1)*x15 + tg1_r(2)*x27 + tg2_rr(1, &
+               2)*x13 + tg2_rr(2, 2)*x2)
             tangent_f3_rrr(1, 2, 2) = t_tangent_f3_rrr_011
             tangent_f3_rrr(2, 1, 2) = t_tangent_f3_rrr_011
             tangent_f3_rrr(2, 2, 1) = t_tangent_f3_rrr_011
             t_tangent_f3_rrr_012 = &
-               -inv_pd*tg3_rrr(1, 2, 3) + tg0*(-pd1_r(1)*x34 - pd1_r(2)*x35 + pd1_r(3)*x33 + &
-               pd3_rrr(1, 2, 3)*x0) + tg1_r(1)*x18 + tg1_r(2)*x11 + tg1_r(3)*x10 + tg2_rr(1, &
-               2)*x16 + tg2_rr(1, 3)*x12 + tg2_rr(2, 3)*x2
+               lsf_scale*(-inv_pd*tg3_rrr(1, 2, 3) + tg0*(-pd1_r(1)*x34 - pd1_r(2)*x35 + &
+               pd1_r(3)*x33 + pd3_rrr(1, 2, 3)*x0) + tg1_r(1)*x18 + tg1_r(2)*x11 + tg1_r(3)*x10 + &
+               tg2_rr(1, 2)*x16 + tg2_rr(1, 3)*x12 + tg2_rr(2, 3)*x2)
             tangent_f3_rrr(1, 2, 3) = t_tangent_f3_rrr_012
             tangent_f3_rrr(1, 3, 2) = t_tangent_f3_rrr_012
             tangent_f3_rrr(2, 1, 3) = t_tangent_f3_rrr_012
@@ -1568,39 +1676,45 @@ contains
             tangent_f3_rrr(3, 1, 2) = t_tangent_f3_rrr_012
             tangent_f3_rrr(3, 2, 1) = t_tangent_f3_rrr_012
             t_tangent_f3_rrr_022 = &
-               -inv_pd*tg3_rrr(1, 3, 3) + tg0*(-pd1_r(1)*x36 - pd1_r(3)*x35 + &
+               lsf_scale*(-inv_pd*tg3_rrr(1, 3, 3) + tg0*(-pd1_r(1)*x36 - pd1_r(3)*x35 + &
                pd1_r(3)*(pd1_r(3)*x32 - x35) + pd3_rrr(1, 3, 3)*x0) + tg1_r(1)*x21 + tg1_r(3)*x28 &
-               + tg2_rr(1, 3)*x19 + tg2_rr(3, 3)*x2
+               + tg2_rr(1, 3)*x19 + tg2_rr(3, 3)*x2)
             tangent_f3_rrr(1, 3, 3) = t_tangent_f3_rrr_022
             tangent_f3_rrr(3, 1, 3) = t_tangent_f3_rrr_022
             tangent_f3_rrr(3, 3, 1) = t_tangent_f3_rrr_022
             tangent_f3_rrr(2, 2, 2) = &
-               -inv_pd*tg3_rrr(2, 2, 2) + tg0*(pd1_r(2)*x39 - pd2_rr(2, 2)*x38 + pd3_rrr(2, 2, &
-               2)*x0) + tg1_r(2)*(3.0_wp*pd2_rr(2, 2)*x0 - x37*x5) + 3.0_wp*tg2_rr(2, 2)*x12
+               lsf_scale*(-inv_pd*tg3_rrr(2, 2, 2) + tg0*(pd1_r(2)*x39 - pd2_rr(2, 2)*x38 + &
+               pd3_rrr(2, 2, 2)*x0) + tg1_r(2)*(3.0_wp*pd2_rr(2, 2)*x0 - x37*x5) + &
+               3.0_wp*tg2_rr(2, 2)*x12)
             t_tangent_f3_rrr_112 = &
-               -inv_pd*tg3_rrr(2, 2, 3) + tg0*(pd1_r(3)*x39 - pd2_rr(2, 3)*x38 + pd3_rrr(2, 2, &
-               3)*x0) + tg1_r(2)*x40 + tg1_r(3)*x15 + tg2_rr(2, 2)*x16 + tg2_rr(2, 3)*x13
+               lsf_scale*(-inv_pd*tg3_rrr(2, 2, 3) + tg0*(pd1_r(3)*x39 - pd2_rr(2, 3)*x38 + &
+               pd3_rrr(2, 2, 3)*x0) + tg1_r(2)*x40 + tg1_r(3)*x15 + tg2_rr(2, 2)*x16 + tg2_rr(2, &
+               3)*x13)
             tangent_f3_rrr(2, 2, 3) = t_tangent_f3_rrr_112
             tangent_f3_rrr(2, 3, 2) = t_tangent_f3_rrr_112
             tangent_f3_rrr(3, 2, 2) = t_tangent_f3_rrr_112
             t_tangent_f3_rrr_122 = &
-               -inv_pd*tg3_rrr(2, 3, 3) + tg0*(-pd1_r(2)*x36 - pd1_r(3)*x34 + pd1_r(3)*(x17*x31 - &
-               x34) + pd3_rrr(2, 3, 3)*x0) + tg1_r(2)*x21 + tg1_r(3)*x40 + tg2_rr(2, 3)*x19 + &
-               tg2_rr(3, 3)*x12
+               lsf_scale*(-inv_pd*tg3_rrr(2, 3, 3) + tg0*(-pd1_r(2)*x36 - pd1_r(3)*x34 + &
+               pd1_r(3)*(x17*x31 - x34) + pd3_rrr(2, 3, 3)*x0) + tg1_r(2)*x21 + tg1_r(3)*x40 + &
+               tg2_rr(2, 3)*x19 + tg2_rr(3, 3)*x12)
             tangent_f3_rrr(2, 3, 3) = t_tangent_f3_rrr_122
             tangent_f3_rrr(3, 2, 3) = t_tangent_f3_rrr_122
             tangent_f3_rrr(3, 3, 2) = t_tangent_f3_rrr_122
             tangent_f3_rrr(3, 3, 3) = &
-               -inv_pd*tg3_rrr(3, 3, 3) + tg0*(-pd1_r(3)*pd2_rr(3, 3)*x23 + pd1_r(3)*(x25*x41 - &
-               x36) + pd3_rrr(3, 3, 3)*x0) + tg1_r(3)*(3.0_wp*pd2_rr(3, 3)*x0 - x41*x5) + &
-               3.0_wp*tg2_rr(3, 3)*x16
+               lsf_scale*(-inv_pd*tg3_rrr(3, 3, 3) + tg0*(-pd1_r(3)*pd2_rr(3, 3)*x23 + &
+               pd1_r(3)*(x25*x41 - x36) + pd3_rrr(3, 3, 3)*x0) + tg1_r(3)*(3.0_wp*pd2_rr(3, 3)*x0 &
+               - x41*x5) + 3.0_wp*tg2_rr(3, 3)*x16)
          end block
       end select
 
    end subroutine cfc_tangent_eval
 
-   pure module subroutine cfc_hvp_eval(pd0, pd1_r, pd2_rr, tg0, tg1_r, tg2_rr, qn0, qn1_r, qn2_rr, hvp0, &
-                                hvp1_r, hvp2_rr, max_deriv, hvp_f1_rA, hvp_f2_r_rA, hvp_f3_rr_rA)
+   pure module subroutine cfc_hvp_eval(lsf_scale, pd0, pd1_r, pd2_rr, tg0, tg1_r, tg2_rr, qn0, qn1_r, &
+                                qn2_rr, hvp0, hvp1_r, hvp2_rr, max_deriv, hvp_f1_rA, hvp_f2_r_rA, &
+                                hvp_f3_rr_rA)
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated order-0 spatial derivative of PD
       real(wp), intent(in) :: pd0
       !> Accumulated order-1 spatial derivative of PD
@@ -1662,9 +1776,9 @@ contains
             real(wp) :: x0
 
             x0 = (inv_pd*inv_pd)
-            hvp_f1_rA(1) = -hvp0(1)*inv_pd + qn0(1)*tg0*x0
-            hvp_f1_rA(2) = -hvp0(2)*inv_pd + qn0(2)*tg0*x0
-            hvp_f1_rA(3) = -hvp0(3)*inv_pd + qn0(3)*tg0*x0
+            hvp_f1_rA(1) = lsf_scale*(-hvp0(1)*inv_pd + qn0(1)*tg0*x0)
+            hvp_f1_rA(2) = lsf_scale*(-hvp0(2)*inv_pd + qn0(2)*tg0*x0)
+            hvp_f1_rA(3) = lsf_scale*(-hvp0(3)*inv_pd + qn0(3)*tg0*x0)
          end block
       case (1)
          block
@@ -1680,18 +1794,27 @@ contains
             x6 = -pd1_r(2)*x3 + tg1_r(2)*x0
             x7 = pd1_r(3)*x0
             x8 = -pd1_r(3)*x3 + tg1_r(3)*x0
-            hvp_f1_rA(1) = -hvp0(1)*inv_pd + qn0(1)*tg0*x0
-            hvp_f1_rA(2) = -hvp0(2)*inv_pd + qn0(2)*tg0*x0
-            hvp_f1_rA(3) = -hvp0(3)*inv_pd + qn0(3)*tg0*x0
-            hvp_f2_r_rA(1, 1) = hvp0(1)*x1 - hvp1_r(1, 1)*inv_pd + qn0(1)*x4 + qn1_r(1, 1)*x2
-            hvp_f2_r_rA(1, 2) = hvp0(2)*x1 - hvp1_r(1, 2)*inv_pd + qn0(2)*x4 + qn1_r(1, 2)*x2
-            hvp_f2_r_rA(1, 3) = hvp0(3)*x1 - hvp1_r(1, 3)*inv_pd + qn0(3)*x4 + qn1_r(1, 3)*x2
-            hvp_f2_r_rA(2, 1) = hvp0(1)*x5 - hvp1_r(2, 1)*inv_pd + qn0(1)*x6 + qn1_r(2, 1)*x2
-            hvp_f2_r_rA(2, 2) = hvp0(2)*x5 - hvp1_r(2, 2)*inv_pd + qn0(2)*x6 + qn1_r(2, 2)*x2
-            hvp_f2_r_rA(2, 3) = hvp0(3)*x5 - hvp1_r(2, 3)*inv_pd + qn0(3)*x6 + qn1_r(2, 3)*x2
-            hvp_f2_r_rA(3, 1) = hvp0(1)*x7 - hvp1_r(3, 1)*inv_pd + qn0(1)*x8 + qn1_r(3, 1)*x2
-            hvp_f2_r_rA(3, 2) = hvp0(2)*x7 - hvp1_r(3, 2)*inv_pd + qn0(2)*x8 + qn1_r(3, 2)*x2
-            hvp_f2_r_rA(3, 3) = hvp0(3)*x7 - hvp1_r(3, 3)*inv_pd + qn0(3)*x8 + qn1_r(3, 3)*x2
+            hvp_f1_rA(1) = lsf_scale*(-hvp0(1)*inv_pd + qn0(1)*tg0*x0)
+            hvp_f1_rA(2) = lsf_scale*(-hvp0(2)*inv_pd + qn0(2)*tg0*x0)
+            hvp_f1_rA(3) = lsf_scale*(-hvp0(3)*inv_pd + qn0(3)*tg0*x0)
+            hvp_f2_r_rA(1, 1) = &
+               lsf_scale*(hvp0(1)*x1 - hvp1_r(1, 1)*inv_pd + qn0(1)*x4 + qn1_r(1, 1)*x2)
+            hvp_f2_r_rA(1, 2) = &
+               lsf_scale*(hvp0(2)*x1 - hvp1_r(1, 2)*inv_pd + qn0(2)*x4 + qn1_r(1, 2)*x2)
+            hvp_f2_r_rA(1, 3) = &
+               lsf_scale*(hvp0(3)*x1 - hvp1_r(1, 3)*inv_pd + qn0(3)*x4 + qn1_r(1, 3)*x2)
+            hvp_f2_r_rA(2, 1) = &
+               lsf_scale*(hvp0(1)*x5 - hvp1_r(2, 1)*inv_pd + qn0(1)*x6 + qn1_r(2, 1)*x2)
+            hvp_f2_r_rA(2, 2) = &
+               lsf_scale*(hvp0(2)*x5 - hvp1_r(2, 2)*inv_pd + qn0(2)*x6 + qn1_r(2, 2)*x2)
+            hvp_f2_r_rA(2, 3) = &
+               lsf_scale*(hvp0(3)*x5 - hvp1_r(2, 3)*inv_pd + qn0(3)*x6 + qn1_r(2, 3)*x2)
+            hvp_f2_r_rA(3, 1) = &
+               lsf_scale*(hvp0(1)*x7 - hvp1_r(3, 1)*inv_pd + qn0(1)*x8 + qn1_r(3, 1)*x2)
+            hvp_f2_r_rA(3, 2) = &
+               lsf_scale*(hvp0(2)*x7 - hvp1_r(3, 2)*inv_pd + qn0(2)*x8 + qn1_r(3, 2)*x2)
+            hvp_f2_r_rA(3, 3) = &
+               lsf_scale*(hvp0(3)*x7 - hvp1_r(3, 3)*inv_pd + qn0(3)*x8 + qn1_r(3, 3)*x2)
          end block
       case default
          block
@@ -1749,96 +1872,109 @@ contains
             x39 = pd1_r(3)*x14
             x40 = -tg0*x39 + 2.0_wp*tg1_r(3)*x0
             x41 = tg0*(-pd2_rr(3, 3)*x4 + x17*x37) - tg1_r(3)*x39 + tg2_rr(3, 3)*x0
-            hvp_f1_rA(1) = -hvp0(1)*inv_pd + qn0(1)*tg0*x0
-            hvp_f1_rA(2) = -hvp0(2)*inv_pd + qn0(2)*tg0*x0
-            hvp_f1_rA(3) = -hvp0(3)*inv_pd + qn0(3)*tg0*x0
-            hvp_f2_r_rA(1, 1) = hvp0(1)*x1 - hvp1_r(1, 1)*inv_pd + qn0(1)*x6 + qn1_r(1, 1)*x2
-            hvp_f2_r_rA(1, 2) = hvp0(2)*x1 - hvp1_r(1, 2)*inv_pd + qn0(2)*x6 + qn1_r(1, 2)*x2
-            hvp_f2_r_rA(1, 3) = hvp0(3)*x1 - hvp1_r(1, 3)*inv_pd + qn0(3)*x6 + qn1_r(1, 3)*x2
-            hvp_f2_r_rA(2, 1) = hvp0(1)*x7 - hvp1_r(2, 1)*inv_pd + qn0(1)*x8 + qn1_r(2, 1)*x2
-            hvp_f2_r_rA(2, 2) = hvp0(2)*x7 - hvp1_r(2, 2)*inv_pd + qn0(2)*x8 + qn1_r(2, 2)*x2
-            hvp_f2_r_rA(2, 3) = hvp0(3)*x7 - hvp1_r(2, 3)*inv_pd + qn0(3)*x8 + qn1_r(2, 3)*x2
-            hvp_f2_r_rA(3, 1) = hvp0(1)*x9 - hvp1_r(3, 1)*inv_pd + qn0(1)*x10 + qn1_r(3, 1)*x2
-            hvp_f2_r_rA(3, 2) = hvp0(2)*x9 - hvp1_r(3, 2)*inv_pd + qn0(2)*x10 + qn1_r(3, 2)*x2
-            hvp_f2_r_rA(3, 3) = hvp0(3)*x9 - hvp1_r(3, 3)*inv_pd + qn0(3)*x10 + qn1_r(3, 3)*x2
+            hvp_f1_rA(1) = lsf_scale*(-hvp0(1)*inv_pd + qn0(1)*tg0*x0)
+            hvp_f1_rA(2) = lsf_scale*(-hvp0(2)*inv_pd + qn0(2)*tg0*x0)
+            hvp_f1_rA(3) = lsf_scale*(-hvp0(3)*inv_pd + qn0(3)*tg0*x0)
+            hvp_f2_r_rA(1, 1) = &
+               lsf_scale*(hvp0(1)*x1 - hvp1_r(1, 1)*inv_pd + qn0(1)*x6 + qn1_r(1, 1)*x2)
+            hvp_f2_r_rA(1, 2) = &
+               lsf_scale*(hvp0(2)*x1 - hvp1_r(1, 2)*inv_pd + qn0(2)*x6 + qn1_r(1, 2)*x2)
+            hvp_f2_r_rA(1, 3) = &
+               lsf_scale*(hvp0(3)*x1 - hvp1_r(1, 3)*inv_pd + qn0(3)*x6 + qn1_r(1, 3)*x2)
+            hvp_f2_r_rA(2, 1) = &
+               lsf_scale*(hvp0(1)*x7 - hvp1_r(2, 1)*inv_pd + qn0(1)*x8 + qn1_r(2, 1)*x2)
+            hvp_f2_r_rA(2, 2) = &
+               lsf_scale*(hvp0(2)*x7 - hvp1_r(2, 2)*inv_pd + qn0(2)*x8 + qn1_r(2, 2)*x2)
+            hvp_f2_r_rA(2, 3) = &
+               lsf_scale*(hvp0(3)*x7 - hvp1_r(2, 3)*inv_pd + qn0(3)*x8 + qn1_r(2, 3)*x2)
+            hvp_f2_r_rA(3, 1) = &
+               lsf_scale*(hvp0(1)*x9 - hvp1_r(3, 1)*inv_pd + qn0(1)*x10 + qn1_r(3, 1)*x2)
+            hvp_f2_r_rA(3, 2) = &
+               lsf_scale*(hvp0(2)*x9 - hvp1_r(3, 2)*inv_pd + qn0(2)*x10 + qn1_r(3, 2)*x2)
+            hvp_f2_r_rA(3, 3) = &
+               lsf_scale*(hvp0(3)*x9 - hvp1_r(3, 3)*inv_pd + qn0(3)*x10 + qn1_r(3, 3)*x2)
             hvp_f3_rr_rA(1, 1, 1) = &
-               hvp0(1)*x13 + hvp1_r(1, 1)*x11 - hvp2_rr(1, 1, 1)*inv_pd + qn0(1)*x18 + qn1_r(1, &
-               1)*x16 + qn2_rr(1, 1, 1)*x2
+               lsf_scale*(hvp0(1)*x13 + hvp1_r(1, 1)*x11 - hvp2_rr(1, 1, 1)*inv_pd + qn0(1)*x18 + &
+               qn1_r(1, 1)*x16 + qn2_rr(1, 1, 1)*x2)
             hvp_f3_rr_rA(1, 1, 2) = &
-               hvp0(2)*x13 + hvp1_r(1, 2)*x11 - hvp2_rr(1, 1, 2)*inv_pd + qn0(2)*x18 + qn1_r(1, &
-               2)*x16 + qn2_rr(1, 1, 2)*x2
+               lsf_scale*(hvp0(2)*x13 + hvp1_r(1, 2)*x11 - hvp2_rr(1, 1, 2)*inv_pd + qn0(2)*x18 + &
+               qn1_r(1, 2)*x16 + qn2_rr(1, 1, 2)*x2)
             hvp_f3_rr_rA(1, 1, 3) = &
-               hvp0(3)*x13 + hvp1_r(1, 3)*x11 - hvp2_rr(1, 1, 3)*inv_pd + qn0(3)*x18 + qn1_r(1, &
-               3)*x16 + qn2_rr(1, 1, 3)*x2
+               lsf_scale*(hvp0(3)*x13 + hvp1_r(1, 3)*x11 - hvp2_rr(1, 1, 3)*inv_pd + qn0(3)*x18 + &
+               qn1_r(1, 3)*x16 + qn2_rr(1, 1, 3)*x2)
             t_hvp_f3_rr_rA_010 = &
-               hvp0(1)*x20 + hvp1_r(1, 1)*x7 + hvp1_r(2, 1)*x1 - hvp2_rr(1, 2, 1)*inv_pd + &
-               qn0(1)*x23 + qn1_r(1, 1)*x8 + qn1_r(2, 1)*x6 + qn2_rr(1, 2, 1)*x2
+               lsf_scale*(hvp0(1)*x20 + hvp1_r(1, 1)*x7 + hvp1_r(2, 1)*x1 - hvp2_rr(1, 2, &
+               1)*inv_pd + qn0(1)*x23 + qn1_r(1, 1)*x8 + qn1_r(2, 1)*x6 + qn2_rr(1, 2, 1)*x2)
             hvp_f3_rr_rA(1, 2, 1) = t_hvp_f3_rr_rA_010
             hvp_f3_rr_rA(2, 1, 1) = t_hvp_f3_rr_rA_010
             t_hvp_f3_rr_rA_011 = &
-               hvp0(2)*x20 + hvp1_r(1, 2)*x7 + hvp1_r(2, 2)*x1 - hvp2_rr(1, 2, 2)*inv_pd + &
-               qn0(2)*x23 + qn1_r(1, 2)*x8 + qn1_r(2, 2)*x6 + qn2_rr(1, 2, 2)*x2
+               lsf_scale*(hvp0(2)*x20 + hvp1_r(1, 2)*x7 + hvp1_r(2, 2)*x1 - hvp2_rr(1, 2, &
+               2)*inv_pd + qn0(2)*x23 + qn1_r(1, 2)*x8 + qn1_r(2, 2)*x6 + qn2_rr(1, 2, 2)*x2)
             hvp_f3_rr_rA(1, 2, 2) = t_hvp_f3_rr_rA_011
             hvp_f3_rr_rA(2, 1, 2) = t_hvp_f3_rr_rA_011
             t_hvp_f3_rr_rA_012 = &
-               hvp0(3)*x20 + hvp1_r(1, 3)*x7 + hvp1_r(2, 3)*x1 - hvp2_rr(1, 2, 3)*inv_pd + &
-               qn0(3)*x23 + qn1_r(1, 3)*x8 + qn1_r(2, 3)*x6 + qn2_rr(1, 2, 3)*x2
+               lsf_scale*(hvp0(3)*x20 + hvp1_r(1, 3)*x7 + hvp1_r(2, 3)*x1 - hvp2_rr(1, 2, &
+               3)*inv_pd + qn0(3)*x23 + qn1_r(1, 3)*x8 + qn1_r(2, 3)*x6 + qn2_rr(1, 2, 3)*x2)
             hvp_f3_rr_rA(1, 2, 3) = t_hvp_f3_rr_rA_012
             hvp_f3_rr_rA(2, 1, 3) = t_hvp_f3_rr_rA_012
             t_hvp_f3_rr_rA_020 = &
-               hvp0(1)*x24 + hvp1_r(1, 1)*x9 + hvp1_r(3, 1)*x1 - hvp2_rr(1, 3, 1)*inv_pd + &
-               qn0(1)*x26 + qn1_r(1, 1)*x10 + qn1_r(3, 1)*x6 + qn2_rr(1, 3, 1)*x2
+               lsf_scale*(hvp0(1)*x24 + hvp1_r(1, 1)*x9 + hvp1_r(3, 1)*x1 - hvp2_rr(1, 3, &
+               1)*inv_pd + qn0(1)*x26 + qn1_r(1, 1)*x10 + qn1_r(3, 1)*x6 + qn2_rr(1, 3, 1)*x2)
             hvp_f3_rr_rA(1, 3, 1) = t_hvp_f3_rr_rA_020
             hvp_f3_rr_rA(3, 1, 1) = t_hvp_f3_rr_rA_020
             t_hvp_f3_rr_rA_021 = &
-               hvp0(2)*x24 + hvp1_r(1, 2)*x9 + hvp1_r(3, 2)*x1 - hvp2_rr(1, 3, 2)*inv_pd + &
-               qn0(2)*x26 + qn1_r(1, 2)*x10 + qn1_r(3, 2)*x6 + qn2_rr(1, 3, 2)*x2
+               lsf_scale*(hvp0(2)*x24 + hvp1_r(1, 2)*x9 + hvp1_r(3, 2)*x1 - hvp2_rr(1, 3, &
+               2)*inv_pd + qn0(2)*x26 + qn1_r(1, 2)*x10 + qn1_r(3, 2)*x6 + qn2_rr(1, 3, 2)*x2)
             hvp_f3_rr_rA(1, 3, 2) = t_hvp_f3_rr_rA_021
             hvp_f3_rr_rA(3, 1, 2) = t_hvp_f3_rr_rA_021
             t_hvp_f3_rr_rA_022 = &
-               hvp0(3)*x24 + hvp1_r(1, 3)*x9 + hvp1_r(3, 3)*x1 - hvp2_rr(1, 3, 3)*inv_pd + &
-               qn0(3)*x26 + qn1_r(1, 3)*x10 + qn1_r(3, 3)*x6 + qn2_rr(1, 3, 3)*x2
+               lsf_scale*(hvp0(3)*x24 + hvp1_r(1, 3)*x9 + hvp1_r(3, 3)*x1 - hvp2_rr(1, 3, &
+               3)*inv_pd + qn0(3)*x26 + qn1_r(1, 3)*x10 + qn1_r(3, 3)*x6 + qn2_rr(1, 3, 3)*x2)
             hvp_f3_rr_rA(1, 3, 3) = t_hvp_f3_rr_rA_022
             hvp_f3_rr_rA(3, 1, 3) = t_hvp_f3_rr_rA_022
             hvp_f3_rr_rA(2, 2, 1) = &
-               hvp0(1)*x29 + hvp1_r(2, 1)*x27 - hvp2_rr(2, 2, 1)*inv_pd + qn0(1)*x32 + qn1_r(2, &
-               1)*x31 + qn2_rr(2, 2, 1)*x2
+               lsf_scale*(hvp0(1)*x29 + hvp1_r(2, 1)*x27 - hvp2_rr(2, 2, 1)*inv_pd + qn0(1)*x32 + &
+               qn1_r(2, 1)*x31 + qn2_rr(2, 2, 1)*x2)
             hvp_f3_rr_rA(2, 2, 2) = &
-               hvp0(2)*x29 + hvp1_r(2, 2)*x27 - hvp2_rr(2, 2, 2)*inv_pd + qn0(2)*x32 + qn1_r(2, &
-               2)*x31 + qn2_rr(2, 2, 2)*x2
+               lsf_scale*(hvp0(2)*x29 + hvp1_r(2, 2)*x27 - hvp2_rr(2, 2, 2)*inv_pd + qn0(2)*x32 + &
+               qn1_r(2, 2)*x31 + qn2_rr(2, 2, 2)*x2)
             hvp_f3_rr_rA(2, 2, 3) = &
-               hvp0(3)*x29 + hvp1_r(2, 3)*x27 - hvp2_rr(2, 2, 3)*inv_pd + qn0(3)*x32 + qn1_r(2, &
-               3)*x31 + qn2_rr(2, 2, 3)*x2
+               lsf_scale*(hvp0(3)*x29 + hvp1_r(2, 3)*x27 - hvp2_rr(2, 2, 3)*inv_pd + qn0(3)*x32 + &
+               qn1_r(2, 3)*x31 + qn2_rr(2, 2, 3)*x2)
             t_hvp_f3_rr_rA_120 = &
-               hvp0(1)*x34 + hvp1_r(2, 1)*x9 + hvp1_r(3, 1)*x7 - hvp2_rr(2, 3, 1)*inv_pd + &
-               qn0(1)*x35 + qn1_r(2, 1)*x10 + qn1_r(3, 1)*x8 + qn2_rr(2, 3, 1)*x2
+               lsf_scale*(hvp0(1)*x34 + hvp1_r(2, 1)*x9 + hvp1_r(3, 1)*x7 - hvp2_rr(2, 3, &
+               1)*inv_pd + qn0(1)*x35 + qn1_r(2, 1)*x10 + qn1_r(3, 1)*x8 + qn2_rr(2, 3, 1)*x2)
             hvp_f3_rr_rA(2, 3, 1) = t_hvp_f3_rr_rA_120
             hvp_f3_rr_rA(3, 2, 1) = t_hvp_f3_rr_rA_120
             t_hvp_f3_rr_rA_121 = &
-               hvp0(2)*x34 + hvp1_r(2, 2)*x9 + hvp1_r(3, 2)*x7 - hvp2_rr(2, 3, 2)*inv_pd + &
-               qn0(2)*x35 + qn1_r(2, 2)*x10 + qn1_r(3, 2)*x8 + qn2_rr(2, 3, 2)*x2
+               lsf_scale*(hvp0(2)*x34 + hvp1_r(2, 2)*x9 + hvp1_r(3, 2)*x7 - hvp2_rr(2, 3, &
+               2)*inv_pd + qn0(2)*x35 + qn1_r(2, 2)*x10 + qn1_r(3, 2)*x8 + qn2_rr(2, 3, 2)*x2)
             hvp_f3_rr_rA(2, 3, 2) = t_hvp_f3_rr_rA_121
             hvp_f3_rr_rA(3, 2, 2) = t_hvp_f3_rr_rA_121
             t_hvp_f3_rr_rA_122 = &
-               hvp0(3)*x34 + hvp1_r(2, 3)*x9 + hvp1_r(3, 3)*x7 - hvp2_rr(2, 3, 3)*inv_pd + &
-               qn0(3)*x35 + qn1_r(2, 3)*x10 + qn1_r(3, 3)*x8 + qn2_rr(2, 3, 3)*x2
+               lsf_scale*(hvp0(3)*x34 + hvp1_r(2, 3)*x9 + hvp1_r(3, 3)*x7 - hvp2_rr(2, 3, &
+               3)*inv_pd + qn0(3)*x35 + qn1_r(2, 3)*x10 + qn1_r(3, 3)*x8 + qn2_rr(2, 3, 3)*x2)
             hvp_f3_rr_rA(2, 3, 3) = t_hvp_f3_rr_rA_122
             hvp_f3_rr_rA(3, 2, 3) = t_hvp_f3_rr_rA_122
             hvp_f3_rr_rA(3, 3, 1) = &
-               hvp0(1)*x38 + hvp1_r(3, 1)*x36 - hvp2_rr(3, 3, 1)*inv_pd + qn0(1)*x41 + qn1_r(3, &
-               1)*x40 + qn2_rr(3, 3, 1)*x2
+               lsf_scale*(hvp0(1)*x38 + hvp1_r(3, 1)*x36 - hvp2_rr(3, 3, 1)*inv_pd + qn0(1)*x41 + &
+               qn1_r(3, 1)*x40 + qn2_rr(3, 3, 1)*x2)
             hvp_f3_rr_rA(3, 3, 2) = &
-               hvp0(2)*x38 + hvp1_r(3, 2)*x36 - hvp2_rr(3, 3, 2)*inv_pd + qn0(2)*x41 + qn1_r(3, &
-               2)*x40 + qn2_rr(3, 3, 2)*x2
+               lsf_scale*(hvp0(2)*x38 + hvp1_r(3, 2)*x36 - hvp2_rr(3, 3, 2)*inv_pd + qn0(2)*x41 + &
+               qn1_r(3, 2)*x40 + qn2_rr(3, 3, 2)*x2)
             hvp_f3_rr_rA(3, 3, 3) = &
-               hvp0(3)*x38 + hvp1_r(3, 3)*x36 - hvp2_rr(3, 3, 3)*inv_pd + qn0(3)*x41 + qn1_r(3, &
-               3)*x40 + qn2_rr(3, 3, 3)*x2
+               lsf_scale*(hvp0(3)*x38 + hvp1_r(3, 3)*x36 - hvp2_rr(3, 3, 3)*inv_pd + qn0(3)*x41 + &
+               qn1_r(3, 3)*x40 + qn2_rr(3, 3, 3)*x2)
          end block
       end select
 
    end subroutine cfc_hvp_eval
 
-   pure module subroutine cfc_vjp_eval(pd0, pd1_r, pd2_rr, qn0, qn1_r, qn2_rr, w0, w1, w2, vjp_f1_rA)
+   pure module subroutine cfc_vjp_eval(lsf_scale, pd0, pd1_r, pd2_rr, qn0, qn1_r, qn2_rr, w0, w1, w2, &
+                                vjp_f1_rA)
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated order-0 spatial derivative of PD
       real(wp), intent(in) :: pd0
       !> Accumulated order-1 spatial derivative of PD
@@ -1905,28 +2041,32 @@ contains
       x25 = -inv_pd*qn2_rr(1, 3, 3) + qn0(3)*x17 + qn1_r(1, 3)*x10 + qn1_r(3, 3)*x3
       x26 = -inv_pd*qn2_rr(2, 3, 3) + qn0(3)*x19 + qn1_r(2, 3)*x10 + qn1_r(3, 3)*x7
       vjp_f1_rA(1) = &
-         -qn0(1)*x0 + w1(1)*(-inv_pd*qn1_r(1, 1) + pd1_r(1)*x2) + w1(2)*(-inv_pd*qn1_r(2, 1) + &
-         pd1_r(2)*x2) + w1(3)*(-inv_pd*qn1_r(3, 1) + pd1_r(3)*x2) + w2(1, 1)*(-inv_pd*qn2_rr(1, 1, &
-         1) + qn0(1)*x6 + qn1_r(1, 1)*x4) + w2(1, 2)*x16 + w2(1, 3)*x18 + w2(2, 1)*x16 + w2(2, &
-         2)*(-inv_pd*qn2_rr(2, 2, 1) + qn0(1)*x9 + qn1_r(2, 1)*x8) + w2(2, 3)*x20 + w2(3, 1)*x18 + &
-         w2(3, 2)*x20 + w2(3, 3)*(-inv_pd*qn2_rr(3, 3, 1) + qn0(1)*x12 + qn1_r(3, 1)*x11)
+         lsf_scale*(-qn0(1)*x0 + w1(1)*(-inv_pd*qn1_r(1, 1) + pd1_r(1)*x2) + &
+         w1(2)*(-inv_pd*qn1_r(2, 1) + pd1_r(2)*x2) + w1(3)*(-inv_pd*qn1_r(3, 1) + pd1_r(3)*x2) + &
+         w2(1, 1)*(-inv_pd*qn2_rr(1, 1, 1) + qn0(1)*x6 + qn1_r(1, 1)*x4) + w2(1, 2)*x16 + w2(1, &
+         3)*x18 + w2(2, 1)*x16 + w2(2, 2)*(-inv_pd*qn2_rr(2, 2, 1) + qn0(1)*x9 + qn1_r(2, 1)*x8) + &
+         w2(2, 3)*x20 + w2(3, 1)*x18 + w2(3, 2)*x20 + w2(3, 3)*(-inv_pd*qn2_rr(3, 3, 1) + &
+         qn0(1)*x12 + qn1_r(3, 1)*x11))
       vjp_f1_rA(2) = &
-         -qn0(2)*x0 + w1(1)*(-inv_pd*qn1_r(1, 2) + qn0(2)*x3) + w1(2)*(-inv_pd*qn1_r(2, 2) + &
-         qn0(2)*x7) + w1(3)*(-inv_pd*qn1_r(3, 2) + qn0(2)*x10) + w2(1, 1)*(-inv_pd*qn2_rr(1, 1, 2) &
-         + qn0(2)*x6 + qn1_r(1, 2)*x4) + w2(1, 2)*x21 + w2(1, 3)*x22 + w2(2, 1)*x21 + w2(2, &
+         lsf_scale*(-qn0(2)*x0 + w1(1)*(-inv_pd*qn1_r(1, 2) + qn0(2)*x3) + w1(2)*(-inv_pd*qn1_r(2, &
+         2) + qn0(2)*x7) + w1(3)*(-inv_pd*qn1_r(3, 2) + qn0(2)*x10) + w2(1, 1)*(-inv_pd*qn2_rr(1, &
+         1, 2) + qn0(2)*x6 + qn1_r(1, 2)*x4) + w2(1, 2)*x21 + w2(1, 3)*x22 + w2(2, 1)*x21 + w2(2, &
          2)*(-inv_pd*qn2_rr(2, 2, 2) + qn0(2)*x9 + qn1_r(2, 2)*x8) + w2(2, 3)*x23 + w2(3, 1)*x22 + &
-         w2(3, 2)*x23 + w2(3, 3)*(-inv_pd*qn2_rr(3, 3, 2) + qn0(2)*x12 + qn1_r(3, 2)*x11)
+         w2(3, 2)*x23 + w2(3, 3)*(-inv_pd*qn2_rr(3, 3, 2) + qn0(2)*x12 + qn1_r(3, 2)*x11))
       vjp_f1_rA(3) = &
-         -qn0(3)*x0 + w1(1)*(-inv_pd*qn1_r(1, 3) + qn0(3)*x3) + w1(2)*(-inv_pd*qn1_r(2, 3) + &
-         qn0(3)*x7) + w1(3)*(-inv_pd*qn1_r(3, 3) + qn0(3)*x10) + w2(1, 1)*(-inv_pd*qn2_rr(1, 1, 3) &
-         + qn0(3)*x6 + qn1_r(1, 3)*x4) + w2(1, 2)*x24 + w2(1, 3)*x25 + w2(2, 1)*x24 + w2(2, &
+         lsf_scale*(-qn0(3)*x0 + w1(1)*(-inv_pd*qn1_r(1, 3) + qn0(3)*x3) + w1(2)*(-inv_pd*qn1_r(2, &
+         3) + qn0(3)*x7) + w1(3)*(-inv_pd*qn1_r(3, 3) + qn0(3)*x10) + w2(1, 1)*(-inv_pd*qn2_rr(1, &
+         1, 3) + qn0(3)*x6 + qn1_r(1, 3)*x4) + w2(1, 2)*x24 + w2(1, 3)*x25 + w2(2, 1)*x24 + w2(2, &
          2)*(-inv_pd*qn2_rr(2, 2, 3) + qn0(3)*x9 + qn1_r(2, 3)*x8) + w2(2, 3)*x26 + w2(3, 1)*x25 + &
-         w2(3, 2)*x26 + w2(3, 3)*(-inv_pd*qn2_rr(3, 3, 3) + qn0(3)*x12 + qn1_r(3, 3)*x11)
+         w2(3, 2)*x26 + w2(3, 3)*(-inv_pd*qn2_rr(3, 3, 3) + qn0(3)*x12 + qn1_r(3, 3)*x11))
 
    end subroutine cfc_vjp_eval
 
-   pure module subroutine cfc_radius_eval(pd0, pd1_r, pd2_rr, pd3_rrr, rd0, rd1_r, rd2_rr, rd3_rrr, &
-                                   max_deriv, f1_rad, f2_r_rad, f3_rr_rad, f4_rrr_rad)
+   pure module subroutine cfc_radius_eval(lsf_scale, pd0, pd1_r, pd2_rr, pd3_rrr, rd0, rd1_r, rd2_rr, &
+                                   rd3_rrr, max_deriv, f1_rad, f2_r_rad, f3_rr_rad, f4_rrr_rad)
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated order-0 spatial derivative of PD
       real(wp), intent(in) :: pd0
       !> Accumulated order-1 spatial derivative of PD
@@ -1974,7 +2114,7 @@ contains
       select case (max_deriv)
       case (0)
          block
-            f1_rad = -inv_pd*rd0
+            f1_rad = lsf_scale*(-inv_pd*rd0)
          end block
       case (1)
          block
@@ -1982,10 +2122,10 @@ contains
             real(wp) :: x0
 
             x0 = (inv_pd*inv_pd)*rd0
-            f1_rad = -inv_pd*rd0
-            f2_r_rad(1) = -inv_pd*rd1_r(1) + pd1_r(1)*x0
-            f2_r_rad(2) = -inv_pd*rd1_r(2) + pd1_r(2)*x0
-            f2_r_rad(3) = -inv_pd*rd1_r(3) + pd1_r(3)*x0
+            f1_rad = lsf_scale*(-inv_pd*rd0)
+            f2_r_rad(1) = lsf_scale*(-inv_pd*rd1_r(1) + pd1_r(1)*x0)
+            f2_r_rad(2) = lsf_scale*(-inv_pd*rd1_r(2) + pd1_r(2)*x0)
+            f2_r_rad(3) = lsf_scale*(-inv_pd*rd1_r(3) + pd1_r(3)*x0)
          end block
       case (2)
          block
@@ -2001,34 +2141,34 @@ contains
             x5 = pd1_r(1)*x3
             x6 = pd1_r(2)*x0
             x7 = pd1_r(3)*x0
-            f1_rad = -inv_pd*rd0
-            f2_r_rad(1) = -inv_pd*rd1_r(1) + pd1_r(1)*x1
-            f2_r_rad(2) = -inv_pd*rd1_r(2) + pd1_r(2)*x1
-            f2_r_rad(3) = -inv_pd*rd1_r(3) + pd1_r(3)*x1
+            f1_rad = lsf_scale*(-inv_pd*rd0)
+            f2_r_rad(1) = lsf_scale*(-inv_pd*rd1_r(1) + pd1_r(1)*x1)
+            f2_r_rad(2) = lsf_scale*(-inv_pd*rd1_r(2) + pd1_r(2)*x1)
+            f2_r_rad(3) = lsf_scale*(-inv_pd*rd1_r(3) + pd1_r(3)*x1)
             f3_rr_rad(1, 1) = &
-               -inv_pd*rd2_rr(1, 1) + rd0*(-(pd1_r(1)*pd1_r(1))*x3 + pd2_rr(1, 1)*x0) + &
-               2.0_wp*rd1_r(1)*x2
+               lsf_scale*(-inv_pd*rd2_rr(1, 1) + rd0*(-(pd1_r(1)*pd1_r(1))*x3 + pd2_rr(1, 1)*x0) + &
+               2.0_wp*rd1_r(1)*x2)
             t_f3_rr_rad_01 = &
-               -inv_pd*rd2_rr(1, 2) + pd1_r(2)*x4 + rd0*(-pd1_r(2)*x5 + pd2_rr(1, 2)*x0) + &
-               rd1_r(2)*x2
+               lsf_scale*(-inv_pd*rd2_rr(1, 2) + pd1_r(2)*x4 + rd0*(-pd1_r(2)*x5 + pd2_rr(1, &
+               2)*x0) + rd1_r(2)*x2)
             f3_rr_rad(1, 2) = t_f3_rr_rad_01
             f3_rr_rad(2, 1) = t_f3_rr_rad_01
             t_f3_rr_rad_02 = &
-               -inv_pd*rd2_rr(1, 3) + pd1_r(3)*x4 + rd0*(-pd1_r(3)*x5 + pd2_rr(1, 3)*x0) + &
-               rd1_r(3)*x2
+               lsf_scale*(-inv_pd*rd2_rr(1, 3) + pd1_r(3)*x4 + rd0*(-pd1_r(3)*x5 + pd2_rr(1, &
+               3)*x0) + rd1_r(3)*x2)
             f3_rr_rad(1, 3) = t_f3_rr_rad_02
             f3_rr_rad(3, 1) = t_f3_rr_rad_02
             f3_rr_rad(2, 2) = &
-               -inv_pd*rd2_rr(2, 2) + rd0*(-(pd1_r(2)*pd1_r(2))*x3 + pd2_rr(2, 2)*x0) + &
-               2.0_wp*rd1_r(2)*x6
+               lsf_scale*(-inv_pd*rd2_rr(2, 2) + rd0*(-(pd1_r(2)*pd1_r(2))*x3 + pd2_rr(2, 2)*x0) + &
+               2.0_wp*rd1_r(2)*x6)
             t_f3_rr_rad_12 = &
-               -inv_pd*rd2_rr(2, 3) + rd0*(-pd1_r(2)*pd1_r(3)*x3 + pd2_rr(2, 3)*x0) + rd1_r(2)*x7 &
-               + rd1_r(3)*x6
+               lsf_scale*(-inv_pd*rd2_rr(2, 3) + rd0*(-pd1_r(2)*pd1_r(3)*x3 + pd2_rr(2, 3)*x0) + &
+               rd1_r(2)*x7 + rd1_r(3)*x6)
             f3_rr_rad(2, 3) = t_f3_rr_rad_12
             f3_rr_rad(3, 2) = t_f3_rr_rad_12
             f3_rr_rad(3, 3) = &
-               -inv_pd*rd2_rr(3, 3) + rd0*(-(pd1_r(3)*pd1_r(3))*x3 + pd2_rr(3, 3)*x0) + &
-               2.0_wp*rd1_r(3)*x7
+               lsf_scale*(-inv_pd*rd2_rr(3, 3) + rd0*(-(pd1_r(3)*pd1_r(3))*x3 + pd2_rr(3, 3)*x0) + &
+               2.0_wp*rd1_r(3)*x7)
          end block
       case default
          block
@@ -2082,48 +2222,52 @@ contains
             x39 = x25*x37 - x29
             x40 = 2.0_wp*pd2_rr(2, 3)*x0 - x17*x23
             x41 = 6.0_wp*x20
-            f1_rad = -inv_pd*rd0
-            f2_r_rad(1) = -inv_pd*rd1_r(1) + pd1_r(1)*x1
-            f2_r_rad(2) = -inv_pd*rd1_r(2) + pd1_r(2)*x1
-            f2_r_rad(3) = -inv_pd*rd1_r(3) + pd1_r(3)*x1
-            f3_rr_rad(1, 1) = -inv_pd*rd2_rr(1, 1) + rd0*x7 + rd1_r(1)*x3
-            t_f3_rr_rad_01 = -inv_pd*rd2_rr(1, 2) + pd1_r(2)*x8 + rd0*x10 + rd1_r(2)*x2
+            f1_rad = lsf_scale*(-inv_pd*rd0)
+            f2_r_rad(1) = lsf_scale*(-inv_pd*rd1_r(1) + pd1_r(1)*x1)
+            f2_r_rad(2) = lsf_scale*(-inv_pd*rd1_r(2) + pd1_r(2)*x1)
+            f2_r_rad(3) = lsf_scale*(-inv_pd*rd1_r(3) + pd1_r(3)*x1)
+            f3_rr_rad(1, 1) = lsf_scale*(-inv_pd*rd2_rr(1, 1) + rd0*x7 + rd1_r(1)*x3)
+            t_f3_rr_rad_01 = lsf_scale*(-inv_pd*rd2_rr(1, 2) + pd1_r(2)*x8 + rd0*x10 + rd1_r(2)*x2)
             f3_rr_rad(1, 2) = t_f3_rr_rad_01
             f3_rr_rad(2, 1) = t_f3_rr_rad_01
-            t_f3_rr_rad_02 = -inv_pd*rd2_rr(1, 3) + pd1_r(3)*x8 + rd0*x11 + rd1_r(3)*x2
+            t_f3_rr_rad_02 = lsf_scale*(-inv_pd*rd2_rr(1, 3) + pd1_r(3)*x8 + rd0*x11 + rd1_r(3)*x2)
             f3_rr_rad(1, 3) = t_f3_rr_rad_02
             f3_rr_rad(3, 1) = t_f3_rr_rad_02
-            f3_rr_rad(2, 2) = -inv_pd*rd2_rr(2, 2) + rd0*x15 + rd1_r(2)*x13
-            t_f3_rr_rad_12 = -inv_pd*rd2_rr(2, 3) + rd0*x18 + rd1_r(2)*x16 + rd1_r(3)*x12
+            f3_rr_rad(2, 2) = lsf_scale*(-inv_pd*rd2_rr(2, 2) + rd0*x15 + rd1_r(2)*x13)
+            t_f3_rr_rad_12 = &
+               lsf_scale*(-inv_pd*rd2_rr(2, 3) + rd0*x18 + rd1_r(2)*x16 + rd1_r(3)*x12)
             f3_rr_rad(2, 3) = t_f3_rr_rad_12
             f3_rr_rad(3, 2) = t_f3_rr_rad_12
-            f3_rr_rad(3, 3) = -inv_pd*rd2_rr(3, 3) + rd0*x21 + rd1_r(3)*x19
+            f3_rr_rad(3, 3) = lsf_scale*(-inv_pd*rd2_rr(3, 3) + rd0*x21 + rd1_r(3)*x19)
             f4_rrr_rad(1, 1, 1) = &
-               -inv_pd*rd3_rrr(1, 1, 1) + rd0*(pd1_r(1)*x26 - pd2_rr(1, 1)*x24 + pd3_rrr(1, 1, &
-               1)*x0) + rd1_r(1)*(3.0_wp*pd2_rr(1, 1)*x0 - x22*x5) + 3.0_wp*rd2_rr(1, 1)*x2
+               lsf_scale*(-inv_pd*rd3_rrr(1, 1, 1) + rd0*(pd1_r(1)*x26 - pd2_rr(1, 1)*x24 + &
+               pd3_rrr(1, 1, 1)*x0) + rd1_r(1)*(3.0_wp*pd2_rr(1, 1)*x0 - x22*x5) + &
+               3.0_wp*rd2_rr(1, 1)*x2)
             t_f4_rrr_rad_001 = &
-               -inv_pd*rd3_rrr(1, 1, 2) + rd0*(pd1_r(2)*x26 - pd2_rr(1, 2)*x24 + pd3_rrr(1, 1, &
-               2)*x0) + rd1_r(1)*x27 + rd1_r(2)*x7 + rd2_rr(1, 1)*x12 + rd2_rr(1, 2)*x3
+               lsf_scale*(-inv_pd*rd3_rrr(1, 1, 2) + rd0*(pd1_r(2)*x26 - pd2_rr(1, 2)*x24 + &
+               pd3_rrr(1, 1, 2)*x0) + rd1_r(1)*x27 + rd1_r(2)*x7 + rd2_rr(1, 1)*x12 + rd2_rr(1, &
+               2)*x3)
             f4_rrr_rad(1, 1, 2) = t_f4_rrr_rad_001
             f4_rrr_rad(1, 2, 1) = t_f4_rrr_rad_001
             f4_rrr_rad(2, 1, 1) = t_f4_rrr_rad_001
             t_f4_rrr_rad_002 = &
-               -inv_pd*rd3_rrr(1, 1, 3) + rd0*(pd1_r(3)*x26 - pd2_rr(1, 3)*x24 + pd3_rrr(1, 1, &
-               3)*x0) + rd1_r(1)*x28 + rd1_r(3)*x7 + rd2_rr(1, 1)*x16 + rd2_rr(1, 3)*x3
+               lsf_scale*(-inv_pd*rd3_rrr(1, 1, 3) + rd0*(pd1_r(3)*x26 - pd2_rr(1, 3)*x24 + &
+               pd3_rrr(1, 1, 3)*x0) + rd1_r(1)*x28 + rd1_r(3)*x7 + rd2_rr(1, 1)*x16 + rd2_rr(1, &
+               3)*x3)
             f4_rrr_rad(1, 1, 3) = t_f4_rrr_rad_002
             f4_rrr_rad(1, 3, 1) = t_f4_rrr_rad_002
             f4_rrr_rad(3, 1, 1) = t_f4_rrr_rad_002
             t_f4_rrr_rad_011 = &
-               -inv_pd*rd3_rrr(1, 2, 2) + rd0*(-pd1_r(1)*x29 - pd1_r(2)*x30 + pd1_r(2)*x33 + &
-               pd3_rrr(1, 2, 2)*x0) + rd1_r(1)*x15 + rd1_r(2)*x27 + rd2_rr(1, 2)*x13 + rd2_rr(2, &
-               2)*x2
+               lsf_scale*(-inv_pd*rd3_rrr(1, 2, 2) + rd0*(-pd1_r(1)*x29 - pd1_r(2)*x30 + &
+               pd1_r(2)*x33 + pd3_rrr(1, 2, 2)*x0) + rd1_r(1)*x15 + rd1_r(2)*x27 + rd2_rr(1, &
+               2)*x13 + rd2_rr(2, 2)*x2)
             f4_rrr_rad(1, 2, 2) = t_f4_rrr_rad_011
             f4_rrr_rad(2, 1, 2) = t_f4_rrr_rad_011
             f4_rrr_rad(2, 2, 1) = t_f4_rrr_rad_011
             t_f4_rrr_rad_012 = &
-               -inv_pd*rd3_rrr(1, 2, 3) + rd0*(-pd1_r(1)*x34 - pd1_r(2)*x35 + pd1_r(3)*x33 + &
-               pd3_rrr(1, 2, 3)*x0) + rd1_r(1)*x18 + rd1_r(2)*x11 + rd1_r(3)*x10 + rd2_rr(1, &
-               2)*x16 + rd2_rr(1, 3)*x12 + rd2_rr(2, 3)*x2
+               lsf_scale*(-inv_pd*rd3_rrr(1, 2, 3) + rd0*(-pd1_r(1)*x34 - pd1_r(2)*x35 + &
+               pd1_r(3)*x33 + pd3_rrr(1, 2, 3)*x0) + rd1_r(1)*x18 + rd1_r(2)*x11 + rd1_r(3)*x10 + &
+               rd2_rr(1, 2)*x16 + rd2_rr(1, 3)*x12 + rd2_rr(2, 3)*x2)
             f4_rrr_rad(1, 2, 3) = t_f4_rrr_rad_012
             f4_rrr_rad(1, 3, 2) = t_f4_rrr_rad_012
             f4_rrr_rad(2, 1, 3) = t_f4_rrr_rad_012
@@ -2131,40 +2275,45 @@ contains
             f4_rrr_rad(3, 1, 2) = t_f4_rrr_rad_012
             f4_rrr_rad(3, 2, 1) = t_f4_rrr_rad_012
             t_f4_rrr_rad_022 = &
-               -inv_pd*rd3_rrr(1, 3, 3) + rd0*(-pd1_r(1)*x36 - pd1_r(3)*x35 + &
+               lsf_scale*(-inv_pd*rd3_rrr(1, 3, 3) + rd0*(-pd1_r(1)*x36 - pd1_r(3)*x35 + &
                pd1_r(3)*(pd1_r(3)*x32 - x35) + pd3_rrr(1, 3, 3)*x0) + rd1_r(1)*x21 + rd1_r(3)*x28 &
-               + rd2_rr(1, 3)*x19 + rd2_rr(3, 3)*x2
+               + rd2_rr(1, 3)*x19 + rd2_rr(3, 3)*x2)
             f4_rrr_rad(1, 3, 3) = t_f4_rrr_rad_022
             f4_rrr_rad(3, 1, 3) = t_f4_rrr_rad_022
             f4_rrr_rad(3, 3, 1) = t_f4_rrr_rad_022
             f4_rrr_rad(2, 2, 2) = &
-               -inv_pd*rd3_rrr(2, 2, 2) + rd0*(pd1_r(2)*x39 - pd2_rr(2, 2)*x38 + pd3_rrr(2, 2, &
-               2)*x0) + rd1_r(2)*(3.0_wp*pd2_rr(2, 2)*x0 - x37*x5) + 3.0_wp*rd2_rr(2, 2)*x12
+               lsf_scale*(-inv_pd*rd3_rrr(2, 2, 2) + rd0*(pd1_r(2)*x39 - pd2_rr(2, 2)*x38 + &
+               pd3_rrr(2, 2, 2)*x0) + rd1_r(2)*(3.0_wp*pd2_rr(2, 2)*x0 - x37*x5) + &
+               3.0_wp*rd2_rr(2, 2)*x12)
             t_f4_rrr_rad_112 = &
-               -inv_pd*rd3_rrr(2, 2, 3) + rd0*(pd1_r(3)*x39 - pd2_rr(2, 3)*x38 + pd3_rrr(2, 2, &
-               3)*x0) + rd1_r(2)*x40 + rd1_r(3)*x15 + rd2_rr(2, 2)*x16 + rd2_rr(2, 3)*x13
+               lsf_scale*(-inv_pd*rd3_rrr(2, 2, 3) + rd0*(pd1_r(3)*x39 - pd2_rr(2, 3)*x38 + &
+               pd3_rrr(2, 2, 3)*x0) + rd1_r(2)*x40 + rd1_r(3)*x15 + rd2_rr(2, 2)*x16 + rd2_rr(2, &
+               3)*x13)
             f4_rrr_rad(2, 2, 3) = t_f4_rrr_rad_112
             f4_rrr_rad(2, 3, 2) = t_f4_rrr_rad_112
             f4_rrr_rad(3, 2, 2) = t_f4_rrr_rad_112
             t_f4_rrr_rad_122 = &
-               -inv_pd*rd3_rrr(2, 3, 3) + rd0*(-pd1_r(2)*x36 - pd1_r(3)*x34 + pd1_r(3)*(x17*x31 - &
-               x34) + pd3_rrr(2, 3, 3)*x0) + rd1_r(2)*x21 + rd1_r(3)*x40 + rd2_rr(2, 3)*x19 + &
-               rd2_rr(3, 3)*x12
+               lsf_scale*(-inv_pd*rd3_rrr(2, 3, 3) + rd0*(-pd1_r(2)*x36 - pd1_r(3)*x34 + &
+               pd1_r(3)*(x17*x31 - x34) + pd3_rrr(2, 3, 3)*x0) + rd1_r(2)*x21 + rd1_r(3)*x40 + &
+               rd2_rr(2, 3)*x19 + rd2_rr(3, 3)*x12)
             f4_rrr_rad(2, 3, 3) = t_f4_rrr_rad_122
             f4_rrr_rad(3, 2, 3) = t_f4_rrr_rad_122
             f4_rrr_rad(3, 3, 2) = t_f4_rrr_rad_122
             f4_rrr_rad(3, 3, 3) = &
-               -inv_pd*rd3_rrr(3, 3, 3) + rd0*(-pd1_r(3)*pd2_rr(3, 3)*x23 + pd1_r(3)*(x25*x41 - &
-               x36) + pd3_rrr(3, 3, 3)*x0) + rd1_r(3)*(3.0_wp*pd2_rr(3, 3)*x0 - x41*x5) + &
-               3.0_wp*rd2_rr(3, 3)*x16
+               lsf_scale*(-inv_pd*rd3_rrr(3, 3, 3) + rd0*(-pd1_r(3)*pd2_rr(3, 3)*x23 + &
+               pd1_r(3)*(x25*x41 - x36) + pd3_rrr(3, 3, 3)*x0) + rd1_r(3)*(3.0_wp*pd2_rr(3, 3)*x0 &
+               - x41*x5) + 3.0_wp*rd2_rr(3, 3)*x16)
          end block
       end select
 
    end subroutine cfc_radius_eval
 
-   pure module subroutine cfc_radius2_eval(pd0, pd1_r, pd2_rr, ra0, ra1_r, ra2_rr, rb0, rb1_r, rb2_rr, &
-                                    rr0, rr1_r, rr2_rr, max_deriv, f2_radrad, f3_r_radrad, &
-                                    f4_rr_radrad)
+   pure module subroutine cfc_radius2_eval(lsf_scale, pd0, pd1_r, pd2_rr, ra0, ra1_r, ra2_rr, rb0, &
+                                    rb1_r, rb2_rr, rr0, rr1_r, rr2_rr, max_deriv, f2_radrad, &
+                                    f3_r_radrad, f4_rr_radrad)
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated order-0 spatial derivative of PD
       real(wp), intent(in) :: pd0
       !> Accumulated order-1 spatial derivative of PD
@@ -2219,7 +2368,7 @@ contains
       select case (max_deriv)
       case (0)
          block
-            f2_radrad = (inv_pd*inv_pd)*ra0*rb0 - inv_pd*rr0
+            f2_radrad = lsf_scale*((inv_pd*inv_pd)*ra0*rb0 - inv_pd*rr0)
          end block
       case (1)
          block
@@ -2230,13 +2379,16 @@ contains
             x1 = ra0*x0
             x2 = rr0*x0
             x3 = 2.0_wp*(inv_pd*inv_pd*inv_pd)*ra0
-            f2_radrad = -inv_pd*rr0 + rb0*x1
+            f2_radrad = lsf_scale*(-inv_pd*rr0 + rb0*x1)
             f3_r_radrad(1) = &
-               -inv_pd*rr1_r(1) + pd1_r(1)*x2 + rb0*(-pd1_r(1)*x3 + ra1_r(1)*x0) + rb1_r(1)*x1
+               lsf_scale*(-inv_pd*rr1_r(1) + pd1_r(1)*x2 + rb0*(-pd1_r(1)*x3 + ra1_r(1)*x0) + &
+               rb1_r(1)*x1)
             f3_r_radrad(2) = &
-               -inv_pd*rr1_r(2) + pd1_r(2)*x2 + rb0*(-pd1_r(2)*x3 + ra1_r(2)*x0) + rb1_r(2)*x1
+               lsf_scale*(-inv_pd*rr1_r(2) + pd1_r(2)*x2 + rb0*(-pd1_r(2)*x3 + ra1_r(2)*x0) + &
+               rb1_r(2)*x1)
             f3_r_radrad(3) = &
-               -inv_pd*rr1_r(3) + pd1_r(3)*x2 + rb0*(-pd1_r(3)*x3 + ra1_r(3)*x0) + rb1_r(3)*x1
+               lsf_scale*(-inv_pd*rr1_r(3) + pd1_r(3)*x2 + rb0*(-pd1_r(3)*x3 + ra1_r(3)*x0) + &
+               rb1_r(3)*x1)
          end block
       case default
          block
@@ -2271,48 +2423,53 @@ contains
             x23 = pd1_r(2)*x4
             x24 = pd1_r(3)*x10
             x25 = (pd1_r(3)*pd1_r(3))
-            f2_radrad = -inv_pd*rr0 + rb0*x1
-            f3_r_radrad(1) = -inv_pd*rr1_r(1) + pd1_r(1)*x2 + rb0*x6 + rb1_r(1)*x1
-            f3_r_radrad(2) = -inv_pd*rr1_r(2) + pd1_r(2)*x2 + rb0*x7 + rb1_r(2)*x1
-            f3_r_radrad(3) = -inv_pd*rr1_r(3) + pd1_r(3)*x2 + rb0*x8 + rb1_r(3)*x1
+            f2_radrad = lsf_scale*(-inv_pd*rr0 + rb0*x1)
+            f3_r_radrad(1) = lsf_scale*(-inv_pd*rr1_r(1) + pd1_r(1)*x2 + rb0*x6 + rb1_r(1)*x1)
+            f3_r_radrad(2) = lsf_scale*(-inv_pd*rr1_r(2) + pd1_r(2)*x2 + rb0*x7 + rb1_r(2)*x1)
+            f3_r_radrad(3) = lsf_scale*(-inv_pd*rr1_r(3) + pd1_r(3)*x2 + rb0*x8 + rb1_r(3)*x1)
             f4_rr_radrad(1, 1) = &
-               -inv_pd*rr2_rr(1, 1) + rb0*(ra0*(-pd2_rr(1, 1)*x4 + x12*x13) - ra1_r(1)*x11 + &
-               ra2_rr(1, 1)*x0) + rb1_r(1)*(-ra0*x11 + 2.0_wp*ra1_r(1)*x0) + rb2_rr(1, 1)*x1 + &
-               rr0*(pd2_rr(1, 1)*x0 - x12*x4) + 2.0_wp*rr1_r(1)*x9
+               lsf_scale*(-inv_pd*rr2_rr(1, 1) + rb0*(ra0*(-pd2_rr(1, 1)*x4 + x12*x13) - &
+               ra1_r(1)*x11 + ra2_rr(1, 1)*x0) + rb1_r(1)*(-ra0*x11 + 2.0_wp*ra1_r(1)*x0) + &
+               rb2_rr(1, 1)*x1 + rr0*(pd2_rr(1, 1)*x0 - x12*x4) + 2.0_wp*rr1_r(1)*x9)
             t_f4_rr_radrad_01 = &
-               -inv_pd*rr2_rr(1, 2) + pd1_r(2)*x14 + rb0*(-pd1_r(2)*x17 + ra0*(-pd2_rr(1, 2)*x4 + &
-               x13*x15) - ra1_r(2)*x16 + ra2_rr(1, 2)*x0) + rb1_r(1)*x7 + rb1_r(2)*x6 + rb2_rr(1, &
-               2)*x1 + rr0*(pd2_rr(1, 2)*x0 - x15*x4) + rr1_r(2)*x9
+               lsf_scale*(-inv_pd*rr2_rr(1, 2) + pd1_r(2)*x14 + rb0*(-pd1_r(2)*x17 + &
+               ra0*(-pd2_rr(1, 2)*x4 + x13*x15) - ra1_r(2)*x16 + ra2_rr(1, 2)*x0) + rb1_r(1)*x7 + &
+               rb1_r(2)*x6 + rb2_rr(1, 2)*x1 + rr0*(pd2_rr(1, 2)*x0 - x15*x4) + rr1_r(2)*x9)
             f4_rr_radrad(1, 2) = t_f4_rr_radrad_01
             f4_rr_radrad(2, 1) = t_f4_rr_radrad_01
             t_f4_rr_radrad_02 = &
-               -inv_pd*rr2_rr(1, 3) + pd1_r(3)*x14 + rb0*(-pd1_r(3)*x17 + ra0*(pd1_r(1)*x18 - &
-               pd2_rr(1, 3)*x4) - ra1_r(3)*x16 + ra2_rr(1, 3)*x0) + rb1_r(1)*x8 + rb1_r(3)*x6 + &
-               rb2_rr(1, 3)*x1 + rr0*(-pd1_r(3)*x16 + pd2_rr(1, 3)*x0) + rr1_r(3)*x9
+               lsf_scale*(-inv_pd*rr2_rr(1, 3) + pd1_r(3)*x14 + rb0*(-pd1_r(3)*x17 + &
+               ra0*(pd1_r(1)*x18 - pd2_rr(1, 3)*x4) - ra1_r(3)*x16 + ra2_rr(1, 3)*x0) + &
+               rb1_r(1)*x8 + rb1_r(3)*x6 + rb2_rr(1, 3)*x1 + rr0*(-pd1_r(3)*x16 + pd2_rr(1, 3)*x0) &
+               + rr1_r(3)*x9)
             f4_rr_radrad(1, 3) = t_f4_rr_radrad_02
             f4_rr_radrad(3, 1) = t_f4_rr_radrad_02
             f4_rr_radrad(2, 2) = &
-               -inv_pd*rr2_rr(2, 2) + rb0*(ra0*(-pd2_rr(2, 2)*x4 + x13*x21) - ra1_r(2)*x20 + &
-               ra2_rr(2, 2)*x0) + rb1_r(2)*(-ra0*x20 + 2.0_wp*ra1_r(2)*x0) + rb2_rr(2, 2)*x1 + &
-               rr0*(pd2_rr(2, 2)*x0 - x21*x4) + 2.0_wp*rr1_r(2)*x19
+               lsf_scale*(-inv_pd*rr2_rr(2, 2) + rb0*(ra0*(-pd2_rr(2, 2)*x4 + x13*x21) - &
+               ra1_r(2)*x20 + ra2_rr(2, 2)*x0) + rb1_r(2)*(-ra0*x20 + 2.0_wp*ra1_r(2)*x0) + &
+               rb2_rr(2, 2)*x1 + rr0*(pd2_rr(2, 2)*x0 - x21*x4) + 2.0_wp*rr1_r(2)*x19)
             t_f4_rr_radrad_12 = &
-               -inv_pd*rr2_rr(2, 3) + rb0*(-pd1_r(3)*ra1_r(2)*x4 + ra0*(pd1_r(2)*x18 - pd2_rr(2, &
-               3)*x4) - ra1_r(3)*x23 + ra2_rr(2, 3)*x0) + rb1_r(2)*x8 + rb1_r(3)*x7 + rb2_rr(2, &
-               3)*x1 + rr0*(-pd1_r(3)*x23 + pd2_rr(2, 3)*x0) + rr1_r(2)*x22 + rr1_r(3)*x19
+               lsf_scale*(-inv_pd*rr2_rr(2, 3) + rb0*(-pd1_r(3)*ra1_r(2)*x4 + ra0*(pd1_r(2)*x18 - &
+               pd2_rr(2, 3)*x4) - ra1_r(3)*x23 + ra2_rr(2, 3)*x0) + rb1_r(2)*x8 + rb1_r(3)*x7 + &
+               rb2_rr(2, 3)*x1 + rr0*(-pd1_r(3)*x23 + pd2_rr(2, 3)*x0) + rr1_r(2)*x22 + &
+               rr1_r(3)*x19)
             f4_rr_radrad(2, 3) = t_f4_rr_radrad_12
             f4_rr_radrad(3, 2) = t_f4_rr_radrad_12
             f4_rr_radrad(3, 3) = &
-               -inv_pd*rr2_rr(3, 3) + rb0*(ra0*(-pd2_rr(3, 3)*x4 + x13*x25) - ra1_r(3)*x24 + &
-               ra2_rr(3, 3)*x0) + rb1_r(3)*(-ra0*x24 + 2.0_wp*ra1_r(3)*x0) + rb2_rr(3, 3)*x1 + &
-               rr0*(pd2_rr(3, 3)*x0 - x25*x4) + 2.0_wp*rr1_r(3)*x22
+               lsf_scale*(-inv_pd*rr2_rr(3, 3) + rb0*(ra0*(-pd2_rr(3, 3)*x4 + x13*x25) - &
+               ra1_r(3)*x24 + ra2_rr(3, 3)*x0) + rb1_r(3)*(-ra0*x24 + 2.0_wp*ra1_r(3)*x0) + &
+               rb2_rr(3, 3)*x1 + rr0*(pd2_rr(3, 3)*x0 - x25*x4) + 2.0_wp*rr1_r(3)*x22)
          end block
       end select
 
    end subroutine cfc_radius2_eval
 
-   pure module subroutine cfc_nucrad_eval(pd0, pd1_r, pd2_rr, qa0, qa1_r, qa2_rr, rb0, rb1_r, rb2_rr, &
-                                   mx0, mx1_r, mx2_rr, max_deriv, f2_rA_rad, f3_r_rA_rad, &
+   pure module subroutine cfc_nucrad_eval(lsf_scale, pd0, pd1_r, pd2_rr, qa0, qa1_r, qa2_rr, rb0, rb1_r, &
+                                   rb2_rr, mx0, mx1_r, mx2_rr, max_deriv, f2_rA_rad, f3_r_rA_rad, &
                                    f4_rr_rA_rad)
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated order-0 spatial derivative of PD
       real(wp), intent(in) :: pd0
       !> Accumulated order-1 spatial derivative of PD
@@ -2377,9 +2534,9 @@ contains
             real(wp) :: x0
 
             x0 = (inv_pd*inv_pd)*rb0
-            f2_rA_rad(1) = -inv_pd*mx0(1) + qa0(1)*x0
-            f2_rA_rad(2) = -inv_pd*mx0(2) + qa0(2)*x0
-            f2_rA_rad(3) = -inv_pd*mx0(3) + qa0(3)*x0
+            f2_rA_rad(1) = lsf_scale*(-inv_pd*mx0(1) + qa0(1)*x0)
+            f2_rA_rad(2) = lsf_scale*(-inv_pd*mx0(2) + qa0(2)*x0)
+            f2_rA_rad(3) = lsf_scale*(-inv_pd*mx0(3) + qa0(3)*x0)
          end block
       case (1)
          block
@@ -2398,27 +2555,36 @@ contains
             x9 = pd1_r(3)*x0
             x10 = rb1_r(3)*x0
             x11 = pd1_r(3)*x4
-            f2_rA_rad(1) = -inv_pd*mx0(1) + qa0(1)*x1
-            f2_rA_rad(2) = -inv_pd*mx0(2) + qa0(2)*x1
-            f2_rA_rad(3) = -inv_pd*mx0(3) + qa0(3)*x1
+            f2_rA_rad(1) = lsf_scale*(-inv_pd*mx0(1) + qa0(1)*x1)
+            f2_rA_rad(2) = lsf_scale*(-inv_pd*mx0(2) + qa0(2)*x1)
+            f2_rA_rad(3) = lsf_scale*(-inv_pd*mx0(3) + qa0(3)*x1)
             f3_r_rA_rad(1, 1) = &
-               -inv_pd*mx1_r(1, 1) + mx0(1)*x2 + qa0(1)*x3 + rb0*(-qa0(1)*x5 + qa1_r(1, 1)*x0)
+               lsf_scale*(-inv_pd*mx1_r(1, 1) + mx0(1)*x2 + qa0(1)*x3 + rb0*(-qa0(1)*x5 + qa1_r(1, &
+               1)*x0))
             f3_r_rA_rad(1, 2) = &
-               -inv_pd*mx1_r(1, 2) + mx0(2)*x2 + qa0(2)*x3 + rb0*(-qa0(2)*x5 + qa1_r(1, 2)*x0)
+               lsf_scale*(-inv_pd*mx1_r(1, 2) + mx0(2)*x2 + qa0(2)*x3 + rb0*(-qa0(2)*x5 + qa1_r(1, &
+               2)*x0))
             f3_r_rA_rad(1, 3) = &
-               -inv_pd*mx1_r(1, 3) + mx0(3)*x2 + qa0(3)*x3 + rb0*(-qa0(3)*x5 + qa1_r(1, 3)*x0)
+               lsf_scale*(-inv_pd*mx1_r(1, 3) + mx0(3)*x2 + qa0(3)*x3 + rb0*(-qa0(3)*x5 + qa1_r(1, &
+               3)*x0))
             f3_r_rA_rad(2, 1) = &
-               -inv_pd*mx1_r(2, 1) + mx0(1)*x6 + qa0(1)*x7 + rb0*(-qa0(1)*x8 + qa1_r(2, 1)*x0)
+               lsf_scale*(-inv_pd*mx1_r(2, 1) + mx0(1)*x6 + qa0(1)*x7 + rb0*(-qa0(1)*x8 + qa1_r(2, &
+               1)*x0))
             f3_r_rA_rad(2, 2) = &
-               -inv_pd*mx1_r(2, 2) + mx0(2)*x6 + qa0(2)*x7 + rb0*(-qa0(2)*x8 + qa1_r(2, 2)*x0)
+               lsf_scale*(-inv_pd*mx1_r(2, 2) + mx0(2)*x6 + qa0(2)*x7 + rb0*(-qa0(2)*x8 + qa1_r(2, &
+               2)*x0))
             f3_r_rA_rad(2, 3) = &
-               -inv_pd*mx1_r(2, 3) + mx0(3)*x6 + qa0(3)*x7 + rb0*(-qa0(3)*x8 + qa1_r(2, 3)*x0)
+               lsf_scale*(-inv_pd*mx1_r(2, 3) + mx0(3)*x6 + qa0(3)*x7 + rb0*(-qa0(3)*x8 + qa1_r(2, &
+               3)*x0))
             f3_r_rA_rad(3, 1) = &
-               -inv_pd*mx1_r(3, 1) + mx0(1)*x9 + qa0(1)*x10 + rb0*(-qa0(1)*x11 + qa1_r(3, 1)*x0)
+               lsf_scale*(-inv_pd*mx1_r(3, 1) + mx0(1)*x9 + qa0(1)*x10 + rb0*(-qa0(1)*x11 + &
+               qa1_r(3, 1)*x0))
             f3_r_rA_rad(3, 2) = &
-               -inv_pd*mx1_r(3, 2) + mx0(2)*x9 + qa0(2)*x10 + rb0*(-qa0(2)*x11 + qa1_r(3, 2)*x0)
+               lsf_scale*(-inv_pd*mx1_r(3, 2) + mx0(2)*x9 + qa0(2)*x10 + rb0*(-qa0(2)*x11 + &
+               qa1_r(3, 2)*x0))
             f3_r_rA_rad(3, 3) = &
-               -inv_pd*mx1_r(3, 3) + mx0(3)*x9 + qa0(3)*x10 + rb0*(-qa0(3)*x11 + qa1_r(3, 3)*x0)
+               lsf_scale*(-inv_pd*mx1_r(3, 3) + mx0(3)*x9 + qa0(3)*x10 + rb0*(-qa0(3)*x11 + &
+               qa1_r(3, 3)*x0))
          end block
       case default
          block
@@ -2483,116 +2649,119 @@ contains
             x49 = pd2_rr(3, 3)*x0 - x48*x5
             x50 = pd1_r(3)*x26
             x51 = -pd2_rr(3, 3)*x5 + x28*x48
-            f2_rA_rad(1) = -inv_pd*mx0(1) + qa0(1)*x1
-            f2_rA_rad(2) = -inv_pd*mx0(2) + qa0(2)*x1
-            f2_rA_rad(3) = -inv_pd*mx0(3) + qa0(3)*x1
-            f3_r_rA_rad(1, 1) = -inv_pd*mx1_r(1, 1) + mx0(1)*x2 + qa0(1)*x3 + rb0*x7
-            f3_r_rA_rad(1, 2) = -inv_pd*mx1_r(1, 2) + mx0(2)*x2 + qa0(2)*x3 + rb0*x8
-            f3_r_rA_rad(1, 3) = -inv_pd*mx1_r(1, 3) + mx0(3)*x2 + qa0(3)*x3 + rb0*x9
-            f3_r_rA_rad(2, 1) = -inv_pd*mx1_r(2, 1) + mx0(1)*x10 + qa0(1)*x11 + rb0*x13
-            f3_r_rA_rad(2, 2) = -inv_pd*mx1_r(2, 2) + mx0(2)*x10 + qa0(2)*x11 + rb0*x14
-            f3_r_rA_rad(2, 3) = -inv_pd*mx1_r(2, 3) + mx0(3)*x10 + qa0(3)*x11 + rb0*x15
-            f3_r_rA_rad(3, 1) = -inv_pd*mx1_r(3, 1) + mx0(1)*x16 + qa0(1)*x17 + rb0*x19
-            f3_r_rA_rad(3, 2) = -inv_pd*mx1_r(3, 2) + mx0(2)*x16 + qa0(2)*x17 + rb0*x20
-            f3_r_rA_rad(3, 3) = -inv_pd*mx1_r(3, 3) + mx0(3)*x16 + qa0(3)*x17 + rb0*x21
+            f2_rA_rad(1) = lsf_scale*(-inv_pd*mx0(1) + qa0(1)*x1)
+            f2_rA_rad(2) = lsf_scale*(-inv_pd*mx0(2) + qa0(2)*x1)
+            f2_rA_rad(3) = lsf_scale*(-inv_pd*mx0(3) + qa0(3)*x1)
+            f3_r_rA_rad(1, 1) = lsf_scale*(-inv_pd*mx1_r(1, 1) + mx0(1)*x2 + qa0(1)*x3 + rb0*x7)
+            f3_r_rA_rad(1, 2) = lsf_scale*(-inv_pd*mx1_r(1, 2) + mx0(2)*x2 + qa0(2)*x3 + rb0*x8)
+            f3_r_rA_rad(1, 3) = lsf_scale*(-inv_pd*mx1_r(1, 3) + mx0(3)*x2 + qa0(3)*x3 + rb0*x9)
+            f3_r_rA_rad(2, 1) = lsf_scale*(-inv_pd*mx1_r(2, 1) + mx0(1)*x10 + qa0(1)*x11 + rb0*x13)
+            f3_r_rA_rad(2, 2) = lsf_scale*(-inv_pd*mx1_r(2, 2) + mx0(2)*x10 + qa0(2)*x11 + rb0*x14)
+            f3_r_rA_rad(2, 3) = lsf_scale*(-inv_pd*mx1_r(2, 3) + mx0(3)*x10 + qa0(3)*x11 + rb0*x15)
+            f3_r_rA_rad(3, 1) = lsf_scale*(-inv_pd*mx1_r(3, 1) + mx0(1)*x16 + qa0(1)*x17 + rb0*x19)
+            f3_r_rA_rad(3, 2) = lsf_scale*(-inv_pd*mx1_r(3, 2) + mx0(2)*x16 + qa0(2)*x17 + rb0*x20)
+            f3_r_rA_rad(3, 3) = lsf_scale*(-inv_pd*mx1_r(3, 3) + mx0(3)*x16 + qa0(3)*x17 + rb0*x21)
             f4_rr_rA_rad(1, 1, 1) = &
-               -inv_pd*mx2_rr(1, 1, 1) + mx0(1)*x25 + mx1_r(1, 1)*x23 + qa0(1)*x22 + &
+               lsf_scale*(-inv_pd*mx2_rr(1, 1, 1) + mx0(1)*x25 + mx1_r(1, 1)*x23 + qa0(1)*x22 + &
                rb0*(qa0(1)*x29 - qa1_r(1, 1)*x27 + qa2_rr(1, 1, 1)*x0) + rb1_r(1)*(-qa0(1)*x27 + &
-               2.0_wp*qa1_r(1, 1)*x0)
+               2.0_wp*qa1_r(1, 1)*x0))
             f4_rr_rA_rad(1, 1, 2) = &
-               -inv_pd*mx2_rr(1, 1, 2) + mx0(2)*x25 + mx1_r(1, 2)*x23 + qa0(2)*x22 + &
+               lsf_scale*(-inv_pd*mx2_rr(1, 1, 2) + mx0(2)*x25 + mx1_r(1, 2)*x23 + qa0(2)*x22 + &
                rb0*(qa0(2)*x29 - qa1_r(1, 2)*x27 + qa2_rr(1, 1, 2)*x0) + rb1_r(1)*(-qa0(2)*x27 + &
-               2.0_wp*qa1_r(1, 2)*x0)
+               2.0_wp*qa1_r(1, 2)*x0))
             f4_rr_rA_rad(1, 1, 3) = &
-               -inv_pd*mx2_rr(1, 1, 3) + mx0(3)*x25 + mx1_r(1, 3)*x23 + qa0(3)*x22 + &
+               lsf_scale*(-inv_pd*mx2_rr(1, 1, 3) + mx0(3)*x25 + mx1_r(1, 3)*x23 + qa0(3)*x22 + &
                rb0*(qa0(3)*x29 - qa1_r(1, 3)*x27 + qa2_rr(1, 1, 3)*x0) + rb1_r(1)*(-qa0(3)*x27 + &
-               2.0_wp*qa1_r(1, 3)*x0)
+               2.0_wp*qa1_r(1, 3)*x0))
             t_f4_rr_rA_rad_010 = &
-               -inv_pd*mx2_rr(1, 2, 1) + mx0(1)*x31 + mx1_r(1, 1)*x10 + mx1_r(2, 1)*x2 + &
-               qa0(1)*x30 + rb0*(qa0(1)*x33 - qa1_r(1, 1)*x12 - qa1_r(2, 1)*x6 + qa2_rr(1, 2, &
-               1)*x0) + rb1_r(1)*x13 + rb1_r(2)*x7
+               lsf_scale*(-inv_pd*mx2_rr(1, 2, 1) + mx0(1)*x31 + mx1_r(1, 1)*x10 + mx1_r(2, 1)*x2 &
+               + qa0(1)*x30 + rb0*(qa0(1)*x33 - qa1_r(1, 1)*x12 - qa1_r(2, 1)*x6 + qa2_rr(1, 2, &
+               1)*x0) + rb1_r(1)*x13 + rb1_r(2)*x7)
             f4_rr_rA_rad(1, 2, 1) = t_f4_rr_rA_rad_010
             f4_rr_rA_rad(2, 1, 1) = t_f4_rr_rA_rad_010
             t_f4_rr_rA_rad_011 = &
-               -inv_pd*mx2_rr(1, 2, 2) + mx0(2)*x31 + mx1_r(1, 2)*x10 + mx1_r(2, 2)*x2 + &
-               qa0(2)*x30 + rb0*(qa0(2)*x33 - qa1_r(1, 2)*x12 - qa1_r(2, 2)*x6 + qa2_rr(1, 2, &
-               2)*x0) + rb1_r(1)*x14 + rb1_r(2)*x8
+               lsf_scale*(-inv_pd*mx2_rr(1, 2, 2) + mx0(2)*x31 + mx1_r(1, 2)*x10 + mx1_r(2, 2)*x2 &
+               + qa0(2)*x30 + rb0*(qa0(2)*x33 - qa1_r(1, 2)*x12 - qa1_r(2, 2)*x6 + qa2_rr(1, 2, &
+               2)*x0) + rb1_r(1)*x14 + rb1_r(2)*x8)
             f4_rr_rA_rad(1, 2, 2) = t_f4_rr_rA_rad_011
             f4_rr_rA_rad(2, 1, 2) = t_f4_rr_rA_rad_011
             t_f4_rr_rA_rad_012 = &
-               -inv_pd*mx2_rr(1, 2, 3) + mx0(3)*x31 + mx1_r(1, 3)*x10 + mx1_r(2, 3)*x2 + &
-               qa0(3)*x30 + rb0*(qa0(3)*x33 - qa1_r(1, 3)*x12 - qa1_r(2, 3)*x6 + qa2_rr(1, 2, &
-               3)*x0) + rb1_r(1)*x15 + rb1_r(2)*x9
+               lsf_scale*(-inv_pd*mx2_rr(1, 2, 3) + mx0(3)*x31 + mx1_r(1, 3)*x10 + mx1_r(2, 3)*x2 &
+               + qa0(3)*x30 + rb0*(qa0(3)*x33 - qa1_r(1, 3)*x12 - qa1_r(2, 3)*x6 + qa2_rr(1, 2, &
+               3)*x0) + rb1_r(1)*x15 + rb1_r(2)*x9)
             f4_rr_rA_rad(1, 2, 3) = t_f4_rr_rA_rad_012
             f4_rr_rA_rad(2, 1, 3) = t_f4_rr_rA_rad_012
             t_f4_rr_rA_rad_020 = &
-               -inv_pd*mx2_rr(1, 3, 1) + mx0(1)*x35 + mx1_r(1, 1)*x16 + mx1_r(3, 1)*x2 + &
-               qa0(1)*x34 + rb0*(qa0(1)*x36 - qa1_r(1, 1)*x18 - qa1_r(3, 1)*x6 + qa2_rr(1, 3, &
-               1)*x0) + rb1_r(1)*x19 + rb1_r(3)*x7
+               lsf_scale*(-inv_pd*mx2_rr(1, 3, 1) + mx0(1)*x35 + mx1_r(1, 1)*x16 + mx1_r(3, 1)*x2 &
+               + qa0(1)*x34 + rb0*(qa0(1)*x36 - qa1_r(1, 1)*x18 - qa1_r(3, 1)*x6 + qa2_rr(1, 3, &
+               1)*x0) + rb1_r(1)*x19 + rb1_r(3)*x7)
             f4_rr_rA_rad(1, 3, 1) = t_f4_rr_rA_rad_020
             f4_rr_rA_rad(3, 1, 1) = t_f4_rr_rA_rad_020
             t_f4_rr_rA_rad_021 = &
-               -inv_pd*mx2_rr(1, 3, 2) + mx0(2)*x35 + mx1_r(1, 2)*x16 + mx1_r(3, 2)*x2 + &
-               qa0(2)*x34 + rb0*(qa0(2)*x36 - qa1_r(1, 2)*x18 - qa1_r(3, 2)*x6 + qa2_rr(1, 3, &
-               2)*x0) + rb1_r(1)*x20 + rb1_r(3)*x8
+               lsf_scale*(-inv_pd*mx2_rr(1, 3, 2) + mx0(2)*x35 + mx1_r(1, 2)*x16 + mx1_r(3, 2)*x2 &
+               + qa0(2)*x34 + rb0*(qa0(2)*x36 - qa1_r(1, 2)*x18 - qa1_r(3, 2)*x6 + qa2_rr(1, 3, &
+               2)*x0) + rb1_r(1)*x20 + rb1_r(3)*x8)
             f4_rr_rA_rad(1, 3, 2) = t_f4_rr_rA_rad_021
             f4_rr_rA_rad(3, 1, 2) = t_f4_rr_rA_rad_021
             t_f4_rr_rA_rad_022 = &
-               -inv_pd*mx2_rr(1, 3, 3) + mx0(3)*x35 + mx1_r(1, 3)*x16 + mx1_r(3, 3)*x2 + &
-               qa0(3)*x34 + rb0*(qa0(3)*x36 - qa1_r(1, 3)*x18 - qa1_r(3, 3)*x6 + qa2_rr(1, 3, &
-               3)*x0) + rb1_r(1)*x21 + rb1_r(3)*x9
+               lsf_scale*(-inv_pd*mx2_rr(1, 3, 3) + mx0(3)*x35 + mx1_r(1, 3)*x16 + mx1_r(3, 3)*x2 &
+               + qa0(3)*x34 + rb0*(qa0(3)*x36 - qa1_r(1, 3)*x18 - qa1_r(3, 3)*x6 + qa2_rr(1, 3, &
+               3)*x0) + rb1_r(1)*x21 + rb1_r(3)*x9)
             f4_rr_rA_rad(1, 3, 3) = t_f4_rr_rA_rad_022
             f4_rr_rA_rad(3, 1, 3) = t_f4_rr_rA_rad_022
             f4_rr_rA_rad(2, 2, 1) = &
-               -inv_pd*mx2_rr(2, 2, 1) + mx0(1)*x40 + mx1_r(2, 1)*x38 + qa0(1)*x37 + &
+               lsf_scale*(-inv_pd*mx2_rr(2, 2, 1) + mx0(1)*x40 + mx1_r(2, 1)*x38 + qa0(1)*x37 + &
                rb0*(qa0(1)*x42 - qa1_r(2, 1)*x41 + qa2_rr(2, 2, 1)*x0) + rb1_r(2)*(-qa0(1)*x41 + &
-               2.0_wp*qa1_r(2, 1)*x0)
+               2.0_wp*qa1_r(2, 1)*x0))
             f4_rr_rA_rad(2, 2, 2) = &
-               -inv_pd*mx2_rr(2, 2, 2) + mx0(2)*x40 + mx1_r(2, 2)*x38 + qa0(2)*x37 + &
+               lsf_scale*(-inv_pd*mx2_rr(2, 2, 2) + mx0(2)*x40 + mx1_r(2, 2)*x38 + qa0(2)*x37 + &
                rb0*(qa0(2)*x42 - qa1_r(2, 2)*x41 + qa2_rr(2, 2, 2)*x0) + rb1_r(2)*(-qa0(2)*x41 + &
-               2.0_wp*qa1_r(2, 2)*x0)
+               2.0_wp*qa1_r(2, 2)*x0))
             f4_rr_rA_rad(2, 2, 3) = &
-               -inv_pd*mx2_rr(2, 2, 3) + mx0(3)*x40 + mx1_r(2, 3)*x38 + qa0(3)*x37 + &
+               lsf_scale*(-inv_pd*mx2_rr(2, 2, 3) + mx0(3)*x40 + mx1_r(2, 3)*x38 + qa0(3)*x37 + &
                rb0*(qa0(3)*x42 - qa1_r(2, 3)*x41 + qa2_rr(2, 2, 3)*x0) + rb1_r(2)*(-qa0(3)*x41 + &
-               2.0_wp*qa1_r(2, 3)*x0)
+               2.0_wp*qa1_r(2, 3)*x0))
             t_f4_rr_rA_rad_120 = &
-               -inv_pd*mx2_rr(2, 3, 1) + mx0(1)*x44 + mx1_r(2, 1)*x16 + mx1_r(3, 1)*x10 + &
-               qa0(1)*x43 + rb0*(qa0(1)*x45 - qa1_r(2, 1)*x18 - qa1_r(3, 1)*x12 + qa2_rr(2, 3, &
-               1)*x0) + rb1_r(2)*x19 + rb1_r(3)*x13
+               lsf_scale*(-inv_pd*mx2_rr(2, 3, 1) + mx0(1)*x44 + mx1_r(2, 1)*x16 + mx1_r(3, 1)*x10 &
+               + qa0(1)*x43 + rb0*(qa0(1)*x45 - qa1_r(2, 1)*x18 - qa1_r(3, 1)*x12 + qa2_rr(2, 3, &
+               1)*x0) + rb1_r(2)*x19 + rb1_r(3)*x13)
             f4_rr_rA_rad(2, 3, 1) = t_f4_rr_rA_rad_120
             f4_rr_rA_rad(3, 2, 1) = t_f4_rr_rA_rad_120
             t_f4_rr_rA_rad_121 = &
-               -inv_pd*mx2_rr(2, 3, 2) + mx0(2)*x44 + mx1_r(2, 2)*x16 + mx1_r(3, 2)*x10 + &
-               qa0(2)*x43 + rb0*(qa0(2)*x45 - qa1_r(2, 2)*x18 - qa1_r(3, 2)*x12 + qa2_rr(2, 3, &
-               2)*x0) + rb1_r(2)*x20 + rb1_r(3)*x14
+               lsf_scale*(-inv_pd*mx2_rr(2, 3, 2) + mx0(2)*x44 + mx1_r(2, 2)*x16 + mx1_r(3, 2)*x10 &
+               + qa0(2)*x43 + rb0*(qa0(2)*x45 - qa1_r(2, 2)*x18 - qa1_r(3, 2)*x12 + qa2_rr(2, 3, &
+               2)*x0) + rb1_r(2)*x20 + rb1_r(3)*x14)
             f4_rr_rA_rad(2, 3, 2) = t_f4_rr_rA_rad_121
             f4_rr_rA_rad(3, 2, 2) = t_f4_rr_rA_rad_121
             t_f4_rr_rA_rad_122 = &
-               -inv_pd*mx2_rr(2, 3, 3) + mx0(3)*x44 + mx1_r(2, 3)*x16 + mx1_r(3, 3)*x10 + &
-               qa0(3)*x43 + rb0*(qa0(3)*x45 - qa1_r(2, 3)*x18 - qa1_r(3, 3)*x12 + qa2_rr(2, 3, &
-               3)*x0) + rb1_r(2)*x21 + rb1_r(3)*x15
+               lsf_scale*(-inv_pd*mx2_rr(2, 3, 3) + mx0(3)*x44 + mx1_r(2, 3)*x16 + mx1_r(3, 3)*x10 &
+               + qa0(3)*x43 + rb0*(qa0(3)*x45 - qa1_r(2, 3)*x18 - qa1_r(3, 3)*x12 + qa2_rr(2, 3, &
+               3)*x0) + rb1_r(2)*x21 + rb1_r(3)*x15)
             f4_rr_rA_rad(2, 3, 3) = t_f4_rr_rA_rad_122
             f4_rr_rA_rad(3, 2, 3) = t_f4_rr_rA_rad_122
             f4_rr_rA_rad(3, 3, 1) = &
-               -inv_pd*mx2_rr(3, 3, 1) + mx0(1)*x49 + mx1_r(3, 1)*x47 + qa0(1)*x46 + &
+               lsf_scale*(-inv_pd*mx2_rr(3, 3, 1) + mx0(1)*x49 + mx1_r(3, 1)*x47 + qa0(1)*x46 + &
                rb0*(qa0(1)*x51 - qa1_r(3, 1)*x50 + qa2_rr(3, 3, 1)*x0) + rb1_r(3)*(-qa0(1)*x50 + &
-               2.0_wp*qa1_r(3, 1)*x0)
+               2.0_wp*qa1_r(3, 1)*x0))
             f4_rr_rA_rad(3, 3, 2) = &
-               -inv_pd*mx2_rr(3, 3, 2) + mx0(2)*x49 + mx1_r(3, 2)*x47 + qa0(2)*x46 + &
+               lsf_scale*(-inv_pd*mx2_rr(3, 3, 2) + mx0(2)*x49 + mx1_r(3, 2)*x47 + qa0(2)*x46 + &
                rb0*(qa0(2)*x51 - qa1_r(3, 2)*x50 + qa2_rr(3, 3, 2)*x0) + rb1_r(3)*(-qa0(2)*x50 + &
-               2.0_wp*qa1_r(3, 2)*x0)
+               2.0_wp*qa1_r(3, 2)*x0))
             f4_rr_rA_rad(3, 3, 3) = &
-               -inv_pd*mx2_rr(3, 3, 3) + mx0(3)*x49 + mx1_r(3, 3)*x47 + qa0(3)*x46 + &
+               lsf_scale*(-inv_pd*mx2_rr(3, 3, 3) + mx0(3)*x49 + mx1_r(3, 3)*x47 + qa0(3)*x46 + &
                rb0*(qa0(3)*x51 - qa1_r(3, 3)*x50 + qa2_rr(3, 3, 3)*x0) + rb1_r(3)*(-qa0(3)*x50 + &
-               2.0_wp*qa1_r(3, 3)*x0)
+               2.0_wp*qa1_r(3, 3)*x0))
          end block
       end select
 
    end subroutine cfc_nucrad_eval
 
-   pure module subroutine cfc_radius_hvp_eval(pd0, pd1_r, pd2_rr, tg0, tg1_r, tg2_rr, rd0, rd1_r, &
-                                       rd2_rr, rh0, rh1_r, rh2_rr, max_deriv, hvp_f1_rad, &
+   pure module subroutine cfc_radius_hvp_eval(lsf_scale, pd0, pd1_r, pd2_rr, tg0, tg1_r, tg2_rr, rd0, &
+                                       rd1_r, rd2_rr, rh0, rh1_r, rh2_rr, max_deriv, hvp_f1_rad, &
                                        hvp_f2_r_rad, hvp_f3_rr_rad)
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated order-0 spatial derivative of PD
       real(wp), intent(in) :: pd0
       !> Accumulated order-1 spatial derivative of PD
@@ -2647,7 +2816,7 @@ contains
       select case (max_deriv)
       case (0)
          block
-            hvp_f1_rad = (inv_pd*inv_pd)*rd0*tg0 - inv_pd*rh0
+            hvp_f1_rad = lsf_scale*((inv_pd*inv_pd)*rd0*tg0 - inv_pd*rh0)
          end block
       case (1)
          block
@@ -2658,13 +2827,16 @@ contains
             x1 = tg0*x0
             x2 = rh0*x0
             x3 = 2.0_wp*(inv_pd*inv_pd*inv_pd)*tg0
-            hvp_f1_rad = -inv_pd*rh0 + rd0*x1
+            hvp_f1_rad = lsf_scale*(-inv_pd*rh0 + rd0*x1)
             hvp_f2_r_rad(1) = &
-               -inv_pd*rh1_r(1) + pd1_r(1)*x2 + rd0*(-pd1_r(1)*x3 + tg1_r(1)*x0) + rd1_r(1)*x1
+               lsf_scale*(-inv_pd*rh1_r(1) + pd1_r(1)*x2 + rd0*(-pd1_r(1)*x3 + tg1_r(1)*x0) + &
+               rd1_r(1)*x1)
             hvp_f2_r_rad(2) = &
-               -inv_pd*rh1_r(2) + pd1_r(2)*x2 + rd0*(-pd1_r(2)*x3 + tg1_r(2)*x0) + rd1_r(2)*x1
+               lsf_scale*(-inv_pd*rh1_r(2) + pd1_r(2)*x2 + rd0*(-pd1_r(2)*x3 + tg1_r(2)*x0) + &
+               rd1_r(2)*x1)
             hvp_f2_r_rad(3) = &
-               -inv_pd*rh1_r(3) + pd1_r(3)*x2 + rd0*(-pd1_r(3)*x3 + tg1_r(3)*x0) + rd1_r(3)*x1
+               lsf_scale*(-inv_pd*rh1_r(3) + pd1_r(3)*x2 + rd0*(-pd1_r(3)*x3 + tg1_r(3)*x0) + &
+               rd1_r(3)*x1)
          end block
       case default
          block
@@ -2699,47 +2871,52 @@ contains
             x23 = pd1_r(2)*x4
             x24 = pd1_r(3)*x10
             x25 = (pd1_r(3)*pd1_r(3))
-            hvp_f1_rad = -inv_pd*rh0 + rd0*x1
-            hvp_f2_r_rad(1) = -inv_pd*rh1_r(1) + pd1_r(1)*x2 + rd0*x6 + rd1_r(1)*x1
-            hvp_f2_r_rad(2) = -inv_pd*rh1_r(2) + pd1_r(2)*x2 + rd0*x7 + rd1_r(2)*x1
-            hvp_f2_r_rad(3) = -inv_pd*rh1_r(3) + pd1_r(3)*x2 + rd0*x8 + rd1_r(3)*x1
+            hvp_f1_rad = lsf_scale*(-inv_pd*rh0 + rd0*x1)
+            hvp_f2_r_rad(1) = lsf_scale*(-inv_pd*rh1_r(1) + pd1_r(1)*x2 + rd0*x6 + rd1_r(1)*x1)
+            hvp_f2_r_rad(2) = lsf_scale*(-inv_pd*rh1_r(2) + pd1_r(2)*x2 + rd0*x7 + rd1_r(2)*x1)
+            hvp_f2_r_rad(3) = lsf_scale*(-inv_pd*rh1_r(3) + pd1_r(3)*x2 + rd0*x8 + rd1_r(3)*x1)
             hvp_f3_rr_rad(1, 1) = &
-               -inv_pd*rh2_rr(1, 1) + rd0*(tg0*(-pd2_rr(1, 1)*x4 + x12*x13) - tg1_r(1)*x11 + &
-               tg2_rr(1, 1)*x0) + rd1_r(1)*(-tg0*x11 + 2.0_wp*tg1_r(1)*x0) + rd2_rr(1, 1)*x1 + &
-               rh0*(pd2_rr(1, 1)*x0 - x12*x4) + 2.0_wp*rh1_r(1)*x9
+               lsf_scale*(-inv_pd*rh2_rr(1, 1) + rd0*(tg0*(-pd2_rr(1, 1)*x4 + x12*x13) - &
+               tg1_r(1)*x11 + tg2_rr(1, 1)*x0) + rd1_r(1)*(-tg0*x11 + 2.0_wp*tg1_r(1)*x0) + &
+               rd2_rr(1, 1)*x1 + rh0*(pd2_rr(1, 1)*x0 - x12*x4) + 2.0_wp*rh1_r(1)*x9)
             t_hvp_f3_rr_rad_01 = &
-               -inv_pd*rh2_rr(1, 2) + pd1_r(2)*x14 + rd0*(-pd1_r(2)*x17 + tg0*(-pd2_rr(1, 2)*x4 + &
-               x13*x15) - tg1_r(2)*x16 + tg2_rr(1, 2)*x0) + rd1_r(1)*x7 + rd1_r(2)*x6 + rd2_rr(1, &
-               2)*x1 + rh0*(pd2_rr(1, 2)*x0 - x15*x4) + rh1_r(2)*x9
+               lsf_scale*(-inv_pd*rh2_rr(1, 2) + pd1_r(2)*x14 + rd0*(-pd1_r(2)*x17 + &
+               tg0*(-pd2_rr(1, 2)*x4 + x13*x15) - tg1_r(2)*x16 + tg2_rr(1, 2)*x0) + rd1_r(1)*x7 + &
+               rd1_r(2)*x6 + rd2_rr(1, 2)*x1 + rh0*(pd2_rr(1, 2)*x0 - x15*x4) + rh1_r(2)*x9)
             hvp_f3_rr_rad(1, 2) = t_hvp_f3_rr_rad_01
             hvp_f3_rr_rad(2, 1) = t_hvp_f3_rr_rad_01
             t_hvp_f3_rr_rad_02 = &
-               -inv_pd*rh2_rr(1, 3) + pd1_r(3)*x14 + rd0*(-pd1_r(3)*x17 + tg0*(pd1_r(1)*x18 - &
-               pd2_rr(1, 3)*x4) - tg1_r(3)*x16 + tg2_rr(1, 3)*x0) + rd1_r(1)*x8 + rd1_r(3)*x6 + &
-               rd2_rr(1, 3)*x1 + rh0*(-pd1_r(3)*x16 + pd2_rr(1, 3)*x0) + rh1_r(3)*x9
+               lsf_scale*(-inv_pd*rh2_rr(1, 3) + pd1_r(3)*x14 + rd0*(-pd1_r(3)*x17 + &
+               tg0*(pd1_r(1)*x18 - pd2_rr(1, 3)*x4) - tg1_r(3)*x16 + tg2_rr(1, 3)*x0) + &
+               rd1_r(1)*x8 + rd1_r(3)*x6 + rd2_rr(1, 3)*x1 + rh0*(-pd1_r(3)*x16 + pd2_rr(1, 3)*x0) &
+               + rh1_r(3)*x9)
             hvp_f3_rr_rad(1, 3) = t_hvp_f3_rr_rad_02
             hvp_f3_rr_rad(3, 1) = t_hvp_f3_rr_rad_02
             hvp_f3_rr_rad(2, 2) = &
-               -inv_pd*rh2_rr(2, 2) + rd0*(tg0*(-pd2_rr(2, 2)*x4 + x13*x21) - tg1_r(2)*x20 + &
-               tg2_rr(2, 2)*x0) + rd1_r(2)*(-tg0*x20 + 2.0_wp*tg1_r(2)*x0) + rd2_rr(2, 2)*x1 + &
-               rh0*(pd2_rr(2, 2)*x0 - x21*x4) + 2.0_wp*rh1_r(2)*x19
+               lsf_scale*(-inv_pd*rh2_rr(2, 2) + rd0*(tg0*(-pd2_rr(2, 2)*x4 + x13*x21) - &
+               tg1_r(2)*x20 + tg2_rr(2, 2)*x0) + rd1_r(2)*(-tg0*x20 + 2.0_wp*tg1_r(2)*x0) + &
+               rd2_rr(2, 2)*x1 + rh0*(pd2_rr(2, 2)*x0 - x21*x4) + 2.0_wp*rh1_r(2)*x19)
             t_hvp_f3_rr_rad_12 = &
-               -inv_pd*rh2_rr(2, 3) + rd0*(-pd1_r(3)*tg1_r(2)*x4 + tg0*(pd1_r(2)*x18 - pd2_rr(2, &
-               3)*x4) - tg1_r(3)*x23 + tg2_rr(2, 3)*x0) + rd1_r(2)*x8 + rd1_r(3)*x7 + rd2_rr(2, &
-               3)*x1 + rh0*(-pd1_r(3)*x23 + pd2_rr(2, 3)*x0) + rh1_r(2)*x22 + rh1_r(3)*x19
+               lsf_scale*(-inv_pd*rh2_rr(2, 3) + rd0*(-pd1_r(3)*tg1_r(2)*x4 + tg0*(pd1_r(2)*x18 - &
+               pd2_rr(2, 3)*x4) - tg1_r(3)*x23 + tg2_rr(2, 3)*x0) + rd1_r(2)*x8 + rd1_r(3)*x7 + &
+               rd2_rr(2, 3)*x1 + rh0*(-pd1_r(3)*x23 + pd2_rr(2, 3)*x0) + rh1_r(2)*x22 + &
+               rh1_r(3)*x19)
             hvp_f3_rr_rad(2, 3) = t_hvp_f3_rr_rad_12
             hvp_f3_rr_rad(3, 2) = t_hvp_f3_rr_rad_12
             hvp_f3_rr_rad(3, 3) = &
-               -inv_pd*rh2_rr(3, 3) + rd0*(tg0*(-pd2_rr(3, 3)*x4 + x13*x25) - tg1_r(3)*x24 + &
-               tg2_rr(3, 3)*x0) + rd1_r(3)*(-tg0*x24 + 2.0_wp*tg1_r(3)*x0) + rd2_rr(3, 3)*x1 + &
-               rh0*(pd2_rr(3, 3)*x0 - x25*x4) + 2.0_wp*rh1_r(3)*x22
+               lsf_scale*(-inv_pd*rh2_rr(3, 3) + rd0*(tg0*(-pd2_rr(3, 3)*x4 + x13*x25) - &
+               tg1_r(3)*x24 + tg2_rr(3, 3)*x0) + rd1_r(3)*(-tg0*x24 + 2.0_wp*tg1_r(3)*x0) + &
+               rd2_rr(3, 3)*x1 + rh0*(pd2_rr(3, 3)*x0 - x25*x4) + 2.0_wp*rh1_r(3)*x22)
          end block
       end select
 
    end subroutine cfc_radius_hvp_eval
 
-   pure module subroutine cfc_radius_vjp_eval(pd0, pd1_r, pd2_rr, rd0, rd1_r, rd2_rr, w0, w1, w2, &
-                                       vjp_f1_rad)
+   pure module subroutine cfc_radius_vjp_eval(lsf_scale, pd0, pd1_r, pd2_rr, rd0, rd1_r, rd2_rr, w0, w1, &
+                                       w2, vjp_f1_rad)
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated order-0 spatial derivative of PD
       real(wp), intent(in) :: pd0
       !> Accumulated order-1 spatial derivative of PD
@@ -2791,13 +2968,14 @@ contains
          -inv_pd*rd2_rr(2, 3) + rd0*(-pd1_r(2)*pd1_r(3)*x3 + pd2_rr(2, 3)*x0) + rd1_r(2)*x5 + &
          rd1_r(3)*x4
       vjp_f1_rad = &
-         -inv_pd*rd0*w0 + w1(1)*(-inv_pd*rd1_r(1) + pd1_r(1)*x1) + w1(2)*(-inv_pd*rd1_r(2) + &
-         pd1_r(2)*x1) + w1(3)*(-inv_pd*rd1_r(3) + pd1_r(3)*x1) + w2(1, 1)*(-inv_pd*rd2_rr(1, 1) + &
-         rd0*(-(pd1_r(1)*pd1_r(1))*x3 + pd2_rr(1, 1)*x0) + 2.0_wp*rd1_r(1)*x2) + w2(1, 2)*x8 + &
-         w2(1, 3)*x9 + w2(2, 1)*x8 + w2(2, 2)*(-inv_pd*rd2_rr(2, 2) + rd0*(-(pd1_r(2)*pd1_r(2))*x3 &
-         + pd2_rr(2, 2)*x0) + 2.0_wp*rd1_r(2)*x4) + w2(2, 3)*x10 + w2(3, 1)*x9 + w2(3, 2)*x10 + &
-         w2(3, 3)*(-inv_pd*rd2_rr(3, 3) + rd0*(-(pd1_r(3)*pd1_r(3))*x3 + pd2_rr(3, 3)*x0) + &
-         2.0_wp*rd1_r(3)*x5)
+         lsf_scale*(-inv_pd*rd0*w0 + w1(1)*(-inv_pd*rd1_r(1) + pd1_r(1)*x1) + &
+         w1(2)*(-inv_pd*rd1_r(2) + pd1_r(2)*x1) + w1(3)*(-inv_pd*rd1_r(3) + pd1_r(3)*x1) + w2(1, &
+         1)*(-inv_pd*rd2_rr(1, 1) + rd0*(-(pd1_r(1)*pd1_r(1))*x3 + pd2_rr(1, 1)*x0) + &
+         2.0_wp*rd1_r(1)*x2) + w2(1, 2)*x8 + w2(1, 3)*x9 + w2(2, 1)*x8 + w2(2, &
+         2)*(-inv_pd*rd2_rr(2, 2) + rd0*(-(pd1_r(2)*pd1_r(2))*x3 + pd2_rr(2, 2)*x0) + &
+         2.0_wp*rd1_r(2)*x4) + w2(2, 3)*x10 + w2(3, 1)*x9 + w2(3, 2)*x10 + w2(3, &
+         3)*(-inv_pd*rd2_rr(3, 3) + rd0*(-(pd1_r(3)*pd1_r(3))*x3 + pd2_rr(3, 3)*x0) + &
+         2.0_wp*rd1_r(3)*x5))
 
    end subroutine cfc_radius_vjp_eval
 
@@ -3034,9 +3212,12 @@ contains
 
    end subroutine cfc_strip_powersums_o0
 
-   pure module subroutine cfc_strip_lift_o0(np, pd0, lsf0)
+   pure module subroutine cfc_strip_lift_o0(np, lsf_scale, pd0, lsf0)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 pseudo-density jet of the strip, point-first
       real(wp), intent(in) :: pd0(np)
       !> Level-set value S = -log(PD)
@@ -3052,7 +3233,7 @@ contains
 
       ! libm log: kept out of the vectorized loops
       do p = 1, np
-         lsf0(p) = -log(pd0(p))
+         lsf0(p) = lsf_scale*(-log(pd0(p)))
       end do
 
    end subroutine cfc_strip_lift_o0
@@ -3325,9 +3506,12 @@ contains
 
    end subroutine cfc_strip_powersums_o1
 
-   pure module subroutine cfc_strip_lift_o1(np, pd0, pd1, lsf0, lsf1_r)
+   pure module subroutine cfc_strip_lift_o1(np, lsf_scale, pd0, pd1, lsf0, lsf1_r)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 pseudo-density jet of the strip, point-first
       real(wp), intent(in) :: pd0(np)
       !> Order-1 pseudo-density jet of the strip, point-first; second index the Cartesian component
@@ -3351,7 +3535,7 @@ contains
 
       ! libm log: kept out of the vectorized loops
       do p = 1, np
-         lsf0(p) = -log(pd0(p))
+         lsf0(p) = lsf_scale*(-log(pd0(p)))
       end do
 
       do p = 1, np
@@ -3359,9 +3543,9 @@ contains
       end do
 
       do p = 1, np
-         o1(p, 1) = -ipd(p)*pd1(p, 1)
-         o1(p, 2) = -ipd(p)*pd1(p, 2)
-         o1(p, 3) = -ipd(p)*pd1(p, 3)
+         o1(p, 1) = lsf_scale*(-ipd(p)*pd1(p, 1))
+         o1(p, 2) = lsf_scale*(-ipd(p)*pd1(p, 2))
+         o1(p, 3) = lsf_scale*(-ipd(p)*pd1(p, 3))
       end do
 
       do p = 1, np
@@ -3725,9 +3909,12 @@ contains
 
    end subroutine cfc_strip_powersums_o2
 
-   pure module subroutine cfc_strip_lift_o2(np, pd0, pd1, pd2, lsf0, lsf1_r, lsf2_rr)
+   pure module subroutine cfc_strip_lift_o2(np, lsf_scale, pd0, pd1, pd2, lsf0, lsf1_r, lsf2_rr)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 pseudo-density jet of the strip, point-first
       real(wp), intent(in) :: pd0(np)
       !> Order-1 pseudo-density jet of the strip, point-first; second index the Cartesian component
@@ -3758,7 +3945,7 @@ contains
 
       ! libm log: kept out of the vectorized loops
       do p = 1, np
-         lsf0(p) = -log(pd0(p))
+         lsf0(p) = lsf_scale*(-log(pd0(p)))
       end do
 
       do p = 1, np
@@ -3768,15 +3955,15 @@ contains
       do p = 1, np
          cs0 = (ipd(p)*ipd(p))
          cs1 = cs0*pd1(p, 1)
-         o1(p, 1) = -ipd(p)*pd1(p, 1)
-         o1(p, 2) = -ipd(p)*pd1(p, 2)
-         o1(p, 3) = -ipd(p)*pd1(p, 3)
-         o2(p, 1) = cs0*(pd1(p, 1)*pd1(p, 1)) - ipd(p)*pd2(p, 1)
-         o2(p, 2) = cs1*pd1(p, 2) - ipd(p)*pd2(p, 2)
-         o2(p, 4) = cs1*pd1(p, 3) - ipd(p)*pd2(p, 4)
-         o2(p, 3) = cs0*(pd1(p, 2)*pd1(p, 2)) - ipd(p)*pd2(p, 3)
-         o2(p, 5) = cs0*pd1(p, 2)*pd1(p, 3) - ipd(p)*pd2(p, 5)
-         o2(p, 6) = cs0*(pd1(p, 3)*pd1(p, 3)) - ipd(p)*pd2(p, 6)
+         o1(p, 1) = lsf_scale*(-ipd(p)*pd1(p, 1))
+         o1(p, 2) = lsf_scale*(-ipd(p)*pd1(p, 2))
+         o1(p, 3) = lsf_scale*(-ipd(p)*pd1(p, 3))
+         o2(p, 1) = lsf_scale*(cs0*(pd1(p, 1)*pd1(p, 1)) - ipd(p)*pd2(p, 1))
+         o2(p, 2) = lsf_scale*(cs1*pd1(p, 2) - ipd(p)*pd2(p, 2))
+         o2(p, 4) = lsf_scale*(cs1*pd1(p, 3) - ipd(p)*pd2(p, 4))
+         o2(p, 3) = lsf_scale*(cs0*(pd1(p, 2)*pd1(p, 2)) - ipd(p)*pd2(p, 3))
+         o2(p, 5) = lsf_scale*(cs0*pd1(p, 2)*pd1(p, 3) - ipd(p)*pd2(p, 5))
+         o2(p, 6) = lsf_scale*(cs0*(pd1(p, 3)*pd1(p, 3)) - ipd(p)*pd2(p, 6))
       end do
 
       do p = 1, np
@@ -4338,9 +4525,13 @@ contains
 
    end subroutine cfc_strip_powersums_o3
 
-   pure module subroutine cfc_strip_lift_o3(np, pd0, pd1, pd2, pd3, lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
+   pure module subroutine cfc_strip_lift_o3(np, lsf_scale, pd0, pd1, pd2, pd3, lsf0, lsf1_r, lsf2_rr, &
+                                     lsf3_rrr)
       !> Live points in the strip, 1..16
       integer, intent(in) :: np
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 pseudo-density jet of the strip, point-first
       real(wp), intent(in) :: pd0(np)
       !> Order-1 pseudo-density jet of the strip, point-first; second index the Cartesian component
@@ -4377,7 +4568,7 @@ contains
 
       ! libm log: kept out of the vectorized loops
       do p = 1, np
-         lsf0(p) = -log(pd0(p))
+         lsf0(p) = lsf_scale*(-log(pd0(p)))
       end do
 
       do p = 1, np
@@ -4403,29 +4594,31 @@ contains
          cs15 = cs0*pd2(p, 6)
          cs16 = 2.0_wp*pd1(p, 2)
          cs17 = cs0*pd2(p, 3) - cs3*cs7
-         o1(p, 1) = -ipd(p)*pd1(p, 1)
-         o1(p, 2) = -ipd(p)*pd1(p, 2)
-         o1(p, 3) = -ipd(p)*pd1(p, 3)
-         o2(p, 1) = cs0*cs1 - ipd(p)*pd2(p, 1)
-         o2(p, 2) = cs2*pd1(p, 2) - ipd(p)*pd2(p, 2)
-         o2(p, 4) = cs2*pd1(p, 3) - ipd(p)*pd2(p, 4)
-         o2(p, 3) = cs0*cs3 - ipd(p)*pd2(p, 3)
-         o2(p, 5) = cs0*cs4 - ipd(p)*pd2(p, 5)
-         o2(p, 6) = cs0*cs5 - ipd(p)*pd2(p, 6)
-         o3(p, 1) = cs0*cs6*pd2(p, 1) + cs8*pd1(p, 1) - ipd(p)*pd3(p, 1)
-         o3(p, 2) = cs6*cs9 + cs8*pd1(p, 2) - ipd(p)*pd3(p, 2)
-         o3(p, 5) = cs10*cs6 + cs8*pd1(p, 3) - ipd(p)*pd3(p, 5)
-         o3(p, 3) = cs11*pd1(p, 1) + cs13*pd1(p, 2) + cs9*pd1(p, 2) - ipd(p)*pd3(p, 3)
-         o3(p, 6) = cs10*pd1(p, 2) + cs13*pd1(p, 3) + cs14*pd1(p, 1) - ipd(p)*pd3(p, 6)
+         o1(p, 1) = lsf_scale*(-ipd(p)*pd1(p, 1))
+         o1(p, 2) = lsf_scale*(-ipd(p)*pd1(p, 2))
+         o1(p, 3) = lsf_scale*(-ipd(p)*pd1(p, 3))
+         o2(p, 1) = lsf_scale*(cs0*cs1 - ipd(p)*pd2(p, 1))
+         o2(p, 2) = lsf_scale*(cs2*pd1(p, 2) - ipd(p)*pd2(p, 2))
+         o2(p, 4) = lsf_scale*(cs2*pd1(p, 3) - ipd(p)*pd2(p, 4))
+         o2(p, 3) = lsf_scale*(cs0*cs3 - ipd(p)*pd2(p, 3))
+         o2(p, 5) = lsf_scale*(cs0*cs4 - ipd(p)*pd2(p, 5))
+         o2(p, 6) = lsf_scale*(cs0*cs5 - ipd(p)*pd2(p, 6))
+         o3(p, 1) = lsf_scale*(cs0*cs6*pd2(p, 1) + cs8*pd1(p, 1) - ipd(p)*pd3(p, 1))
+         o3(p, 2) = lsf_scale*(cs6*cs9 + cs8*pd1(p, 2) - ipd(p)*pd3(p, 2))
+         o3(p, 5) = lsf_scale*(cs10*cs6 + cs8*pd1(p, 3) - ipd(p)*pd3(p, 5))
+         o3(p, 3) = lsf_scale*(cs11*pd1(p, 1) + cs13*pd1(p, 2) + cs9*pd1(p, 2) - ipd(p)*pd3(p, 3))
+         o3(p, 6) = lsf_scale*(cs10*pd1(p, 2) + cs13*pd1(p, 3) + cs14*pd1(p, 1) - ipd(p)*pd3(p, 6))
          o3(p, 8) = &
-            cs10*pd1(p, 3) + cs15*pd1(p, 1) - ipd(p)*pd3(p, 8) + pd1(p, 3)*(cs0*pd2(p, 4) - &
-            cs12*pd1(p, 3))
-         o3(p, 4) = cs11*cs16 + cs17*pd1(p, 2) - ipd(p)*pd3(p, 4)
-         o3(p, 7) = cs14*cs16 + cs17*pd1(p, 3) - ipd(p)*pd3(p, 7)
+            lsf_scale*(cs10*pd1(p, 3) + cs15*pd1(p, 1) - ipd(p)*pd3(p, 8) + pd1(p, 3)*(cs0*pd2(p, &
+            4) - cs12*pd1(p, 3)))
+         o3(p, 4) = lsf_scale*(cs11*cs16 + cs17*pd1(p, 2) - ipd(p)*pd3(p, 4))
+         o3(p, 7) = lsf_scale*(cs14*cs16 + cs17*pd1(p, 3) - ipd(p)*pd3(p, 7))
          o3(p, 9) = &
-            cs14*pd1(p, 3) + cs15*pd1(p, 2) - ipd(p)*pd3(p, 9) + pd1(p, 3)*(cs0*pd2(p, 5) - &
-            cs4*cs7)
-         o3(p, 10) = 2.0_wp*cs15*pd1(p, 3) - ipd(p)*pd3(p, 10) + pd1(p, 3)*(cs0*pd2(p, 6) - cs5*cs7)
+            lsf_scale*(cs14*pd1(p, 3) + cs15*pd1(p, 2) - ipd(p)*pd3(p, 9) + pd1(p, 3)*(cs0*pd2(p, &
+            5) - cs4*cs7))
+         o3(p, 10) = &
+            lsf_scale*(2.0_wp*cs15*pd1(p, 3) - ipd(p)*pd3(p, 10) + pd1(p, 3)*(cs0*pd2(p, 6) - &
+            cs5*cs7))
       end do
 
       do p = 1, np
@@ -5395,10 +5588,13 @@ contains
 
    end subroutine cfc_strip_powersums_o4
 
-   pure module subroutine cfc_strip_lift_o4(np, pd0, pd1, pd2, pd3, pd4, lsf0, lsf1_r, lsf2_rr, &
-                                     lsf3_rrr, lsf4_rrrr)
+   pure module subroutine cfc_strip_lift_o4(np, lsf_scale, pd0, pd1, pd2, pd3, pd4, lsf0, lsf1_r, &
+                                     lsf2_rr, lsf3_rrr, lsf4_rrrr)
       !> Live points in the strip, 1..8
       integer, intent(in) :: np
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 pseudo-density jet of the strip, point-first
       real(wp), intent(in) :: pd0(np)
       !> Order-1 pseudo-density jet of the strip, point-first; second index the Cartesian component
@@ -5443,7 +5639,7 @@ contains
 
       ! libm log: kept out of the vectorized loops
       do p = 1, np
-         lsf0(p) = -log(pd0(p))
+         lsf0(p) = lsf_scale*(-log(pd0(p)))
       end do
 
       do p = 1, np
@@ -5512,63 +5708,64 @@ contains
          cs58 = cs40 - cs56*pd2(p, 3) + cs57*pd1(p, 2)
          cs59 = 2.0_wp*cs0*pd2(p, 5) - cs27*cs4
          cs60 = 6.0_wp*cs5
-         o1(p, 1) = -ipd(p)*pd1(p, 1)
-         o1(p, 2) = -ipd(p)*pd1(p, 2)
-         o1(p, 3) = -ipd(p)*pd1(p, 3)
-         o2(p, 1) = cs0*cs1 - ipd(p)*pd2(p, 1)
-         o2(p, 2) = cs2*pd1(p, 2) - ipd(p)*pd2(p, 2)
-         o2(p, 4) = cs2*pd1(p, 3) - ipd(p)*pd2(p, 4)
-         o2(p, 3) = cs0*cs3 - ipd(p)*pd2(p, 3)
-         o2(p, 5) = cs0*cs4 - ipd(p)*pd2(p, 5)
-         o2(p, 6) = cs0*cs5 - ipd(p)*pd2(p, 6)
-         o3(p, 1) = cs0*cs6*pd2(p, 1) + cs9*pd1(p, 1) - ipd(p)*pd3(p, 1)
-         o3(p, 2) = 2.0_wp*cs10*pd1(p, 1) + cs9*pd1(p, 2) - ipd(p)*pd3(p, 2)
-         o3(p, 5) = 2.0_wp*cs11*pd1(p, 1) + cs9*pd1(p, 3) - ipd(p)*pd3(p, 5)
-         o3(p, 3) = cs10*pd1(p, 2) + cs12*pd1(p, 1) + cs14*pd1(p, 2) - ipd(p)*pd3(p, 3)
-         o3(p, 6) = cs11*pd1(p, 2) + cs14*pd1(p, 3) + cs15*pd1(p, 1) - ipd(p)*pd3(p, 6)
-         o3(p, 8) = cs11*pd1(p, 3) + cs16*pd1(p, 1) + cs17*pd1(p, 3) - ipd(p)*pd3(p, 8)
-         o3(p, 4) = cs12*cs18 + cs19*pd1(p, 2) - ipd(p)*pd3(p, 4)
-         o3(p, 7) = 2.0_wp*cs15*pd1(p, 2) + cs19*pd1(p, 3) - ipd(p)*pd3(p, 7)
-         o3(p, 9) = cs15*pd1(p, 3) + cs16*pd1(p, 2) + cs20*pd1(p, 3) - ipd(p)*pd3(p, 9)
-         o3(p, 10) = cs16*cs21 + cs22*pd1(p, 3) - ipd(p)*pd3(p, 10)
-         o4(p, 1) = cs23*cs24 + cs26*pd2(p, 1) + cs31*pd1(p, 1) - ipd(p)*pd4(p, 1)
-         o4(p, 2) = cs24*cs32 + cs26*pd2(p, 2) + cs31*pd1(p, 2) - ipd(p)*pd4(p, 2)
-         o4(p, 6) = cs24*cs33 + cs26*pd2(p, 4) + cs31*pd1(p, 3) - ipd(p)*pd4(p, 6)
+         o1(p, 1) = lsf_scale*(-ipd(p)*pd1(p, 1))
+         o1(p, 2) = lsf_scale*(-ipd(p)*pd1(p, 2))
+         o1(p, 3) = lsf_scale*(-ipd(p)*pd1(p, 3))
+         o2(p, 1) = lsf_scale*(cs0*cs1 - ipd(p)*pd2(p, 1))
+         o2(p, 2) = lsf_scale*(cs2*pd1(p, 2) - ipd(p)*pd2(p, 2))
+         o2(p, 4) = lsf_scale*(cs2*pd1(p, 3) - ipd(p)*pd2(p, 4))
+         o2(p, 3) = lsf_scale*(cs0*cs3 - ipd(p)*pd2(p, 3))
+         o2(p, 5) = lsf_scale*(cs0*cs4 - ipd(p)*pd2(p, 5))
+         o2(p, 6) = lsf_scale*(cs0*cs5 - ipd(p)*pd2(p, 6))
+         o3(p, 1) = lsf_scale*(cs0*cs6*pd2(p, 1) + cs9*pd1(p, 1) - ipd(p)*pd3(p, 1))
+         o3(p, 2) = lsf_scale*(2.0_wp*cs10*pd1(p, 1) + cs9*pd1(p, 2) - ipd(p)*pd3(p, 2))
+         o3(p, 5) = lsf_scale*(2.0_wp*cs11*pd1(p, 1) + cs9*pd1(p, 3) - ipd(p)*pd3(p, 5))
+         o3(p, 3) = lsf_scale*(cs10*pd1(p, 2) + cs12*pd1(p, 1) + cs14*pd1(p, 2) - ipd(p)*pd3(p, 3))
+         o3(p, 6) = lsf_scale*(cs11*pd1(p, 2) + cs14*pd1(p, 3) + cs15*pd1(p, 1) - ipd(p)*pd3(p, 6))
+         o3(p, 8) = lsf_scale*(cs11*pd1(p, 3) + cs16*pd1(p, 1) + cs17*pd1(p, 3) - ipd(p)*pd3(p, 8))
+         o3(p, 4) = lsf_scale*(cs12*cs18 + cs19*pd1(p, 2) - ipd(p)*pd3(p, 4))
+         o3(p, 7) = lsf_scale*(2.0_wp*cs15*pd1(p, 2) + cs19*pd1(p, 3) - ipd(p)*pd3(p, 7))
+         o3(p, 9) = lsf_scale*(cs15*pd1(p, 3) + cs16*pd1(p, 2) + cs20*pd1(p, 3) - ipd(p)*pd3(p, 9))
+         o3(p, 10) = lsf_scale*(cs16*cs21 + cs22*pd1(p, 3) - ipd(p)*pd3(p, 10))
+         o4(p, 1) = lsf_scale*(cs23*cs24 + cs26*pd2(p, 1) + cs31*pd1(p, 1) - ipd(p)*pd4(p, 1))
+         o4(p, 2) = lsf_scale*(cs24*cs32 + cs26*pd2(p, 2) + cs31*pd1(p, 2) - ipd(p)*pd4(p, 2))
+         o4(p, 6) = lsf_scale*(cs24*cs33 + cs26*pd2(p, 4) + cs31*pd1(p, 3) - ipd(p)*pd4(p, 6))
          o4(p, 3) = &
-            cs32*pd1(p, 2) + cs34*cs6 + cs35*pd2(p, 2) + cs36*pd1(p, 2) + cs9*pd2(p, 3) - &
-            ipd(p)*pd4(p, 3)
+            lsf_scale*(cs32*pd1(p, 2) + cs34*cs6 + cs35*pd2(p, 2) + cs36*pd1(p, 2) + cs9*pd2(p, 3) &
+            - ipd(p)*pd4(p, 3))
          o4(p, 7) = &
-            cs33*pd1(p, 2) + cs35*pd2(p, 4) + cs36*pd1(p, 3) + cs37*cs6 + cs9*pd2(p, 5) - &
-            ipd(p)*pd4(p, 7)
+            lsf_scale*(cs33*pd1(p, 2) + cs35*pd2(p, 4) + cs36*pd1(p, 3) + cs37*cs6 + cs9*pd2(p, 5) &
+            - ipd(p)*pd4(p, 7))
          o4(p, 10) = &
-            cs33*pd1(p, 3) + cs38*cs6 + cs39*pd2(p, 4) + cs9*pd2(p, 6) - ipd(p)*pd4(p, 10) + &
-            pd1(p, 3)*(-cs28*pd2(p, 4) + cs30*pd1(p, 3) + cs33)
+            lsf_scale*(cs33*pd1(p, 3) + cs38*cs6 + cs39*pd2(p, 4) + cs9*pd2(p, 6) - ipd(p)*pd4(p, &
+            10) + pd1(p, 3)*(-cs28*pd2(p, 4) + cs30*pd1(p, 3) + cs33))
          o4(p, 4) = &
-            cs18*cs34 + cs19*pd2(p, 2) + cs35*pd2(p, 3) + cs40*pd1(p, 1) + cs46*pd1(p, 2) - &
-            ipd(p)*pd4(p, 4)
+            lsf_scale*(cs18*cs34 + cs19*pd2(p, 2) + cs35*pd2(p, 3) + cs40*pd1(p, 1) + cs46*pd1(p, &
+            2) - ipd(p)*pd4(p, 4))
          o4(p, 8) = &
-            cs18*cs37 + cs19*pd2(p, 4) + cs35*pd2(p, 5) + cs46*pd1(p, 3) + cs47*pd1(p, 1) - &
-            ipd(p)*pd4(p, 8)
+            lsf_scale*(cs18*cs37 + cs19*pd2(p, 4) + cs35*pd2(p, 5) + cs46*pd1(p, 3) + cs47*pd1(p, &
+            1) - ipd(p)*pd4(p, 8))
          o4(p, 11) = &
-            cs14*pd2(p, 6) + cs17*pd2(p, 5) + cs20*pd2(p, 4) + cs37*pd1(p, 3) + cs38*pd1(p, 2) + &
-            cs48*pd1(p, 1) - ipd(p)*pd4(p, 11) + pd1(p, 3)*(cs0*pd3(p, 6) + cs45*pd1(p, 3) - &
-            cs49*pd1(p, 1) - cs50*pd1(p, 2))
+            lsf_scale*(cs14*pd2(p, 6) + cs17*pd2(p, 5) + cs20*pd2(p, 4) + cs37*pd1(p, 3) + &
+            cs38*pd1(p, 2) + cs48*pd1(p, 1) - ipd(p)*pd4(p, 11) + pd1(p, 3)*(cs0*pd3(p, 6) + &
+            cs45*pd1(p, 3) - cs49*pd1(p, 1) - cs50*pd1(p, 2)))
          o4(p, 13) = &
-            cs21*cs38 + cs22*pd2(p, 4) + cs39*pd2(p, 6) + cs51*pd1(p, 1) - ipd(p)*pd4(p, 13) + &
-            pd1(p, 3)*(cs0*pd3(p, 8) - cs50*pd1(p, 3) - cs52*pd1(p, 1) + pd1(p, 3)*(cs44*pd1(p, 3) &
-            - cs50))
-         o4(p, 5) = cs40*cs53 + cs55*pd2(p, 3) + cs58*pd1(p, 2) - ipd(p)*pd4(p, 5)
-         o4(p, 9) = cs47*cs53 + cs55*pd2(p, 5) + cs58*pd1(p, 3) - ipd(p)*pd4(p, 9)
+            lsf_scale*(cs21*cs38 + cs22*pd2(p, 4) + cs39*pd2(p, 6) + cs51*pd1(p, 1) - &
+            ipd(p)*pd4(p, 13) + pd1(p, 3)*(cs0*pd3(p, 8) - cs50*pd1(p, 3) - cs52*pd1(p, 1) + &
+            pd1(p, 3)*(cs44*pd1(p, 3) - cs50)))
+         o4(p, 5) = lsf_scale*(cs40*cs53 + cs55*pd2(p, 3) + cs58*pd1(p, 2) - ipd(p)*pd4(p, 5))
+         o4(p, 9) = lsf_scale*(cs47*cs53 + cs55*pd2(p, 5) + cs58*pd1(p, 3) - ipd(p)*pd4(p, 9))
          o4(p, 12) = &
-            cs18*cs48 + cs19*pd2(p, 6) + cs47*pd1(p, 3) + cs59*pd2(p, 5) - ipd(p)*pd4(p, 12) + &
-            pd1(p, 3)*(cs47 - cs56*pd2(p, 5) + cs57*pd1(p, 3))
+            lsf_scale*(cs18*cs48 + cs19*pd2(p, 6) + cs47*pd1(p, 3) + cs59*pd2(p, 5) - &
+            ipd(p)*pd4(p, 12) + pd1(p, 3)*(cs47 - cs56*pd2(p, 5) + cs57*pd1(p, 3)))
          o4(p, 14) = &
-            cs21*cs48 + cs22*pd2(p, 5) + cs51*pd1(p, 2) + cs59*pd2(p, 6) - ipd(p)*pd4(p, 14) + &
-            pd1(p, 3)*(cs0*pd3(p, 9) - cs49*pd1(p, 3) - cs52*pd1(p, 2) + pd1(p, 3)*(cs4*cs43 - &
-            cs49))
+            lsf_scale*(cs21*cs48 + cs22*pd2(p, 5) + cs51*pd1(p, 2) + cs59*pd2(p, 6) - &
+            ipd(p)*pd4(p, 14) + pd1(p, 3)*(cs0*pd3(p, 9) - cs49*pd1(p, 3) - cs52*pd1(p, 2) + &
+            pd1(p, 3)*(cs4*cs43 - cs49)))
          o4(p, 15) = &
-            3.0_wp*cs51*pd1(p, 3) - ipd(p)*pd4(p, 15) + pd1(p, 3)*(-cs27*pd1(p, 3)*pd2(p, 6) + &
-            cs51 + pd1(p, 3)*(cs29*cs60 - cs52)) + pd2(p, 6)*(3.0_wp*cs0*pd2(p, 6) - cs60*cs7)
+            lsf_scale*(3.0_wp*cs51*pd1(p, 3) - ipd(p)*pd4(p, 15) + pd1(p, 3)*(-cs27*pd1(p, &
+            3)*pd2(p, 6) + cs51 + pd1(p, 3)*(cs29*cs60 - cs52)) + pd2(p, 6)*(3.0_wp*cs0*pd2(p, 6) &
+            - cs60*cs7))
       end do
 
       do p = 1, np

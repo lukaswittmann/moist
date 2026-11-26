@@ -35,12 +35,17 @@ module moist_cavity_drop_lsf_svdw_param
       real(wp) :: fade_start = 21.0_wp
       !> Fade band width `b` in e-folds of u, `Delta = 3b/blend_k`
       real(wp) :: fade_width = 3.0_wp
+      !> Constant multiplier of the level set, finite and positive
+      !>
+      !> - one keeps the signed-distance-like `||grad S|| = 1` of a single atom
+      real(wp) :: scale = 1.0_wp
    contains
       !> Restore compiled defaults
       procedure :: init_defaults => init_parameter_defaults
       !> Declare fields for JSON input, output, and printing
       procedure :: register_entries => register_parameter_entries
-      !> Refuse a non-positive or non-finite `blend_k`, or such a fade band while the fade is on
+      !> Refuse a non-positive or non-finite `blend_k` or `scale`, or such a fade band while the
+      !> fade is on
       procedure :: validate => validate_lsf_svdw_param
       !> Override any subset of parameter fields
       procedure, public :: new => new_lsf_svdw_param
@@ -64,6 +69,7 @@ contains
       self%fade_enabled = defaults%fade_enabled
       self%fade_start = defaults%fade_start
       self%fade_width = defaults%fade_width
+      self%scale = defaults%scale
    end subroutine init_parameter_defaults
 
    !> Declare parameter fields for JSON input, output, and printing
@@ -79,24 +85,30 @@ contains
       call self%register_logical("fade_enabled", self%fade_enabled)
       call self%register_real_scalar("fade_start", self%fade_start)
       call self%register_real_scalar("fade_width", self%fade_width)
+      call self%register_real_scalar("scale", self%scale)
    end subroutine register_parameter_entries
 
-   !> Refuse a non-positive or non-finite `blend_k`, or such a fade band while the fade is on
+   !> Refuse a non-positive or non-finite `blend_k` or `scale`, or such a fade band while the
+   !> fade is on
    !>
-   !> - always: finite `blend_k > 0`
+   !> - always: finite `blend_k > 0` and `scale > 0`
    !> - fade off: the band is not read, so not checked
    !> - fade on: the band end is the atom reach, so no band-vs-reach check exists
    !>
    !> @param[inout] self  SvdW parameter instance
-   !> @param[out]   error Invalid `blend_k` or fade band
+   !> @param[out]   error Invalid `blend_k`, `scale` or fade band
    subroutine validate_lsf_svdw_param(self, error)
       !> SvdW parameter instance
       class(moist_cavity_drop_lsf_svdw_param_type), intent(inout) :: self
-      !> Invalid `blend_k` or fade band
+      !> Invalid `blend_k`, `scale` or fade band
       type(error_type), allocatable, intent(out) :: error
 
       if (.not. (ieee_is_finite(self%blend_k) .and. self%blend_k > 0.0_wp)) then
          call fatal_error(error, "SvdW blend_k must be finite and positive")
+         return
+      end if
+      if (.not. (ieee_is_finite(self%scale) .and. self%scale > 0.0_wp)) then
+         call fatal_error(error, "SvdW scale must be finite and positive")
          return
       end if
       if (.not. self%fade_enabled) return
@@ -117,8 +129,9 @@ contains
    !> @param[in]    fade_enabled Fade the atom terms over a finite band (optional)
    !> @param[in]    fade_start   Fade onset in e-folds of u (optional)
    !> @param[in]    fade_width   Fade band width in e-folds of u (optional)
+   !> @param[in]    scale        Constant level-set multiplier (optional)
    subroutine new_lsf_svdw_param(self, blend_k, blend_1b, blend_2b, blend_3b, fade_enabled, &
-                                 fade_start, fade_width)
+                                 fade_start, fade_width, scale)
       class(moist_cavity_drop_lsf_svdw_param_type), intent(inout) :: self
       !> Blending sharpness k (optional override)
       real(wp), intent(in), optional :: blend_k
@@ -134,6 +147,8 @@ contains
       real(wp), intent(in), optional :: fade_start
       !> Fade band width in e-folds (optional override)
       real(wp), intent(in), optional :: fade_width
+      !> Constant level-set multiplier (optional override)
+      real(wp), intent(in), optional :: scale
 
       if (present(blend_k)) self%blend_k = blend_k
       if (present(blend_1b)) self%blend_1b = blend_1b
@@ -142,11 +157,13 @@ contains
       if (present(fade_enabled)) self%fade_enabled = fade_enabled
       if (present(fade_start)) self%fade_start = fade_start
       if (present(fade_width)) self%fade_width = fade_width
+      if (present(scale)) self%scale = scale
    end subroutine new_lsf_svdw_param
 
    !> Print the SvdW shape parameters in the verbose cavity diagnostics
    !>
-   !> - level 2: smoothing `k`; level 3: the 1b/2b/3b smoothing; level 4: the fade
+   !> - level 2: smoothing `k` and field scale; level 3: the 1b/2b/3b smoothing; level 4: the
+   !>   fade
    !>
    !> @param[in] self  SvdW parameter instance
    !> @param[in] unit  Output unit (default `output_unit`); callers holding a run
@@ -175,6 +192,7 @@ contains
          call pp%kv("Smoothing (2b)", self%blend_2b)
          call pp%kv("Smoothing (3b)", self%blend_3b)
       end if
+      call pp%kv("Field scale", self%scale)
       if (lvl >= 4) call pp%kv("Fade", self%fade_enabled)
       if (lvl >= 4 .and. self%fade_enabled) then
          call pp%kv2("Fade start", self%fade_start, "e-folds", 3.0_wp*self%fade_start/self%blend_k, "Bohr")

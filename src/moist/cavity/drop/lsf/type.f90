@@ -225,6 +225,14 @@ module moist_cavity_drop_lsf_base
 
       !> LSF dependency on atomic radii
       logical :: radius_dependent = .true.
+      !> Constant multiplier `alpha` of the level set, `S = alpha S_family`
+      !>
+      !> - every value and derivative an accessor returns carries it; the surface,
+      !>   normals and curvatures do not depend on it
+      !> - DROP's critical-gradient switch and projection tolerances read `S` in
+      !>   absolute terms; `alpha` brings `||grad S||` near one on the surface
+      !> - copied from the family's parameter `scale` by its constructor and `update`
+      real(wp) :: scale = 1.0_wp
 
       !* ------------------------- Spatial sort machinery -------------------------- *!
 
@@ -968,6 +976,7 @@ contains
       worker%max_deriv = self%max_deriv
       worker%candidate_space = self%candidate_space
       worker%radius_dependent = self%radius_dependent
+      worker%scale = self%scale
       if (allocated(self%orig_to_sorted)) worker%orig_to_sorted = self%orig_to_sorted
       if (allocated(self%sorted_to_orig)) worker%sorted_to_orig = self%sorted_to_orig
       if (allocated(self%cand_screen)) worker%cand_screen = self%cand_screen

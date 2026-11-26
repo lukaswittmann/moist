@@ -7,9 +7,9 @@ submodule(moist_cavity_drop_lsf_svdw_kernel) moist_cavity_drop_lsf_svdw_kernel_t
 
 contains
 
-   pure module subroutine svdw_tangent_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, ws0, ws1, ws2, &
-                                     ws3, max_deriv, tangent_f0, tangent_f1_r, tangent_f2_rr, &
-                                     tangent_f3_rrr)
+   pure module subroutine svdw_tangent_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, ws0, &
+                                     ws1, ws2, ws3, max_deriv, tangent_f0, tangent_f1_r, &
+                                     tangent_f2_rr, tangent_f3_rrr)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -18,6 +18,9 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -66,9 +69,9 @@ contains
       case (0)
          block
             tangent_f0 = &
-               -inv_Z*(-1.0_wp/2.0_wp*ps0(1)*s_3*ws0(2) + ps0(4)*s_2*ws0(4) + &
+               lsf_scale*(-inv_Z*(-1.0_wp/2.0_wp*ps0(1)*s_3*ws0(2) + ps0(4)*s_2*ws0(4) + &
                (1.0_wp/6.0_wp)*s_3*ws0(1)*(3.0_wp*(ps0(1)*ps0(1)) - 3.0_wp*ps0(2)) + ws0(3)*(s_1 - &
-               1.0_wp/2.0_wp*s_2 + (1.0_wp/3.0_wp)*s_3))/blend_k
+               1.0_wp/2.0_wp*s_2 + (1.0_wp/3.0_wp)*s_3))/blend_k)
          end block
       case (1)
          block
@@ -93,22 +96,22 @@ contains
             cs14 = (inv_Z*inv_Z)
             cs15 = cs2*ps1(2, 2)
             cs16 = cs2*ps1(3, 2)
-            tangent_f0 = -cs0*cs5*inv_Z
+            tangent_f0 = lsf_scale*(-cs0*cs5*inv_Z)
             tangent_f1_r(1) = &
-               cs0*cs14*cs5*(cs1*ps1(1, 4) - cs10*ps0(1) + cs3*ps1(1, 3) + cs4*ps1(1, 1)) + &
-               (1.0_wp/2.0_wp)*cs0*inv_Z*ps0(1)*s_3*ws1(1, 2) + (1.0_wp/2.0_wp)*cs0*inv_Z*ps1(1, &
-               1)*s_3*ws0(2) - cs12*(-cs10 + cs11*ps1(1, 1)) - cs13*ws1(1, 1) - cs7*ws1(1, 4) - &
-               cs8*ps1(1, 4) - cs9*ws1(1, 3)
+               lsf_scale*(cs0*cs14*cs5*(cs1*ps1(1, 4) - cs10*ps0(1) + cs3*ps1(1, 3) + cs4*ps1(1, &
+               1)) + (1.0_wp/2.0_wp)*cs0*inv_Z*ps0(1)*s_3*ws1(1, 2) + &
+               (1.0_wp/2.0_wp)*cs0*inv_Z*ps1(1, 1)*s_3*ws0(2) - cs12*(-cs10 + cs11*ps1(1, 1)) - &
+               cs13*ws1(1, 1) - cs7*ws1(1, 4) - cs8*ps1(1, 4) - cs9*ws1(1, 3))
             tangent_f1_r(2) = &
-               cs0*cs14*cs5*(cs1*ps1(2, 4) - cs15*ps0(1) + cs3*ps1(2, 3) + cs4*ps1(2, 1)) + &
-               (1.0_wp/2.0_wp)*cs0*inv_Z*ps0(1)*s_3*ws1(2, 2) + (1.0_wp/2.0_wp)*cs0*inv_Z*ps1(2, &
-               1)*s_3*ws0(2) - cs12*(cs11*ps1(2, 1) - cs15) - cs13*ws1(2, 1) - cs7*ws1(2, 4) - &
-               cs8*ps1(2, 4) - cs9*ws1(2, 3)
+               lsf_scale*(cs0*cs14*cs5*(cs1*ps1(2, 4) - cs15*ps0(1) + cs3*ps1(2, 3) + cs4*ps1(2, &
+               1)) + (1.0_wp/2.0_wp)*cs0*inv_Z*ps0(1)*s_3*ws1(2, 2) + &
+               (1.0_wp/2.0_wp)*cs0*inv_Z*ps1(2, 1)*s_3*ws0(2) - cs12*(cs11*ps1(2, 1) - cs15) - &
+               cs13*ws1(2, 1) - cs7*ws1(2, 4) - cs8*ps1(2, 4) - cs9*ws1(2, 3))
             tangent_f1_r(3) = &
-               cs0*cs14*cs5*(cs1*ps1(3, 4) - cs16*ps0(1) + cs3*ps1(3, 3) + cs4*ps1(3, 1)) + &
-               (1.0_wp/2.0_wp)*cs0*inv_Z*ps0(1)*s_3*ws1(3, 2) + (1.0_wp/2.0_wp)*cs0*inv_Z*ps1(3, &
-               1)*s_3*ws0(2) - cs12*(cs11*ps1(3, 1) - cs16) - cs13*ws1(3, 1) - cs7*ws1(3, 4) - &
-               cs8*ps1(3, 4) - cs9*ws1(3, 3)
+               lsf_scale*(cs0*cs14*cs5*(cs1*ps1(3, 4) - cs16*ps0(1) + cs3*ps1(3, 3) + cs4*ps1(3, &
+               1)) + (1.0_wp/2.0_wp)*cs0*inv_Z*ps0(1)*s_3*ws1(3, 2) + &
+               (1.0_wp/2.0_wp)*cs0*inv_Z*ps1(3, 1)*s_3*ws0(2) - cs12*(cs11*ps1(3, 1) - cs16) - &
+               cs13*ws1(3, 1) - cs7*ws1(3, 4) - cs8*ps1(3, 4) - cs9*ws1(3, 3))
          end block
       case (2)
          block
@@ -208,80 +211,82 @@ contains
             cs83 = cs26*cs38
             cs84 = cs49*ps1(3, 4)
             cs85 = cs38*ps1(3, 1)
-            tangent_f0 = -cs7*cs9
+            tangent_f0 = lsf_scale*(-cs7*cs9)
             tangent_f1_r(1) = &
-               -cs10*ws1(1, 4) - cs12*ws0(4) - cs13*ws1(1, 3) - cs18*ws0(1) - cs19*ws1(1, 1) + &
-               cs20*cs21*cs7*cs8 + (1.0_wp/2.0_wp)*cs8*inv_Z*ps0(1)*s_3*ws1(1, 2) + &
-               (1.0_wp/2.0_wp)*cs8*inv_Z*ps1(1, 1)*s_3*ws0(2)
+               lsf_scale*(-cs10*ws1(1, 4) - cs12*ws0(4) - cs13*ws1(1, 3) - cs18*ws0(1) - &
+               cs19*ws1(1, 1) + cs20*cs21*cs7*cs8 + (1.0_wp/2.0_wp)*cs8*inv_Z*ps0(1)*s_3*ws1(1, 2) &
+               + (1.0_wp/2.0_wp)*cs8*inv_Z*ps1(1, 1)*s_3*ws0(2))
             tangent_f1_r(2) = &
-               -cs10*ws1(2, 4) - cs13*ws1(2, 3) - cs19*ws1(2, 1) + cs20*cs28*cs7*cs8 - cs22*ws0(4) &
-               - cs27*ws0(1) + (1.0_wp/2.0_wp)*cs8*inv_Z*ps0(1)*s_3*ws1(2, 2) + &
-               (1.0_wp/2.0_wp)*cs8*inv_Z*ps1(2, 1)*s_3*ws0(2)
+               lsf_scale*(-cs10*ws1(2, 4) - cs13*ws1(2, 3) - cs19*ws1(2, 1) + cs20*cs28*cs7*cs8 - &
+               cs22*ws0(4) - cs27*ws0(1) + (1.0_wp/2.0_wp)*cs8*inv_Z*ps0(1)*s_3*ws1(2, 2) + &
+               (1.0_wp/2.0_wp)*cs8*inv_Z*ps1(2, 1)*s_3*ws0(2))
             tangent_f1_r(3) = &
-               -cs10*ws1(3, 4) - cs13*ws1(3, 3) - cs19*ws1(3, 1) + cs20*cs35*cs7*cs8 - cs29*ws0(4) &
-               - cs34*ws0(1) + (1.0_wp/2.0_wp)*cs8*inv_Z*ps0(1)*s_3*ws1(3, 2) + &
-               (1.0_wp/2.0_wp)*cs8*inv_Z*ps1(3, 1)*s_3*ws0(2)
+               lsf_scale*(-cs10*ws1(3, 4) - cs13*ws1(3, 3) - cs19*ws1(3, 1) + cs20*cs35*cs7*cs8 - &
+               cs29*ws0(4) - cs34*ws0(1) + (1.0_wp/2.0_wp)*cs8*inv_Z*ps0(1)*s_3*ws1(3, 2) + &
+               (1.0_wp/2.0_wp)*cs8*inv_Z*ps1(3, 1)*s_3*ws0(2))
             tangent_f2_rr(1, 1) = &
-               -cs10*ws2(1, 1, 4) - cs13*ws2(1, 1, 3) - cs19*ws2(1, 1, 1) + cs36*ws2(1, 1, 2) + &
-               cs37*cs39*ws1(1, 3) + cs7*(-cs15*cs51 - (cs21*cs21)*cs55 + cs48*ps2(1, 1, 4) + &
-               cs49*(ps1(1, 4)*ps1(1, 4)) - cs50*ps2(1, 1, 2) + cs52*ps2(1, 1, 3) + cs53*ps1(1, 1) &
-               + cs54*ps2(1, 1, 1)) + ws0(1)*(cs39*(-cs14 + 2.0_wp*cs16) - cs43*(ps1(1, 1)*ps1(1, &
-               1)) + cs44*ps2(1, 1, 2) - cs45*ps2(1, 1, 1)) + ws1(1, 1)*(cs15*cs9 - cs16*cs9 + &
-               cs39*cs47 + cs46) + ws0(2)*(-cs39*cs40 + (1.0_wp/2.0_wp)*cs8*inv_Z*ps2(1, 1, &
-               1)*s_3) + ws1(1, 2)*(-cs1*cs39 + cs8*inv_Z*ps1(1, 1)*s_3) + ws0(4)*(-cs11*ps2(1, 1, &
-               4) + 2.0_wp*cs41*ps1(1, 4)) + ws1(1, 4)*(-2.0_wp*cs12 + 2.0_wp*cs42)
+               lsf_scale*(-cs10*ws2(1, 1, 4) - cs13*ws2(1, 1, 3) - cs19*ws2(1, 1, 1) + cs36*ws2(1, &
+               1, 2) + cs37*cs39*ws1(1, 3) + cs7*(-cs15*cs51 - (cs21*cs21)*cs55 + cs48*ps2(1, 1, &
+               4) + cs49*(ps1(1, 4)*ps1(1, 4)) - cs50*ps2(1, 1, 2) + cs52*ps2(1, 1, 3) + &
+               cs53*ps1(1, 1) + cs54*ps2(1, 1, 1)) + ws0(1)*(cs39*(-cs14 + 2.0_wp*cs16) - &
+               cs43*(ps1(1, 1)*ps1(1, 1)) + cs44*ps2(1, 1, 2) - cs45*ps2(1, 1, 1)) + ws1(1, &
+               1)*(cs15*cs9 - cs16*cs9 + cs39*cs47 + cs46) + ws0(2)*(-cs39*cs40 + &
+               (1.0_wp/2.0_wp)*cs8*inv_Z*ps2(1, 1, 1)*s_3) + ws1(1, 2)*(-cs1*cs39 + &
+               cs8*inv_Z*ps1(1, 1)*s_3) + ws0(4)*(-cs11*ps2(1, 1, 4) + 2.0_wp*cs41*ps1(1, 4)) + &
+               ws1(1, 4)*(-2.0_wp*cs12 + 2.0_wp*cs42))
             t_tangent_f2_rr_01 = &
-               -cs10*ws2(1, 2, 4) - cs13*ws2(1, 2, 3) - cs19*ws2(1, 2, 1) + cs28*cs56 + &
+               lsf_scale*(-cs10*ws2(1, 2, 4) - cs13*ws2(1, 2, 3) - cs19*ws2(1, 2, 1) + cs28*cs56 + &
                cs36*ws2(1, 2, 2) + cs57*ws1(2, 3) + cs60*ws1(1, 4) + cs61*ws1(2, 4) + cs62*ws1(1, &
                2) + cs63*ws1(2, 2) + cs64*ws1(2, 1) + cs7*(-cs24*cs51 - cs28*cs72 + cs48*ps2(1, 2, &
                4) - cs50*ps2(1, 2, 2) + cs52*ps2(1, 2, 3) + cs53*ps1(2, 1) + cs54*ps2(1, 2, 1) + &
                cs67*ps1(2, 4)) + ws0(1)*(cs26*cs39 + cs28*cs53 + cs44*ps2(1, 2, 2) - cs45*ps2(1, &
                2, 1) - cs71*ps1(2, 1)) + ws1(1, 1)*(cs65 + cs66) + ws0(2)*(-cs58*cs68 - cs69*cs70 &
                + (1.0_wp/2.0_wp)*cs8*inv_Z*ps2(1, 2, 1)*s_3) + ws0(4)*(-cs11*ps2(1, 2, 4) + &
-               cs28*cs67 + cs41*ps1(2, 4))
+               cs28*cs67 + cs41*ps1(2, 4)))
             tangent_f2_rr(1, 2) = t_tangent_f2_rr_01
             tangent_f2_rr(2, 1) = t_tangent_f2_rr_01
             t_tangent_f2_rr_02 = &
-               -cs10*ws2(1, 3, 4) - cs13*ws2(1, 3, 3) - cs19*ws2(1, 3, 1) + cs35*cs56 + &
+               lsf_scale*(-cs10*ws2(1, 3, 4) - cs13*ws2(1, 3, 3) - cs19*ws2(1, 3, 1) + cs35*cs56 + &
                cs36*ws2(1, 3, 2) + cs57*ws1(3, 3) + cs61*ws1(3, 4) + cs63*ws1(3, 2) + cs64*ws1(3, &
                1) + cs7*(-cs31*cs51 - cs35*cs72 + cs48*ps2(1, 3, 4) - cs50*ps2(1, 3, 2) + &
                cs52*ps2(1, 3, 3) + cs53*ps1(3, 1) + cs54*ps2(1, 3, 1) + cs67*ps1(3, 4)) + &
                cs75*ws1(1, 4) + cs76*ws1(1, 2) + cs78*ws1(1, 1) + ws0(1)*(cs33*cs39 + cs35*cs53 + &
                cs44*ps2(1, 3, 2) - cs45*ps2(1, 3, 1) - cs71*ps1(3, 1)) + ws0(2)*(-cs68*cs73 - &
                cs70*cs79 + (1.0_wp/2.0_wp)*cs8*inv_Z*ps2(1, 3, 1)*s_3) + ws0(4)*(-cs11*ps2(1, 3, &
-               4) + cs35*cs67 + cs41*ps1(3, 4))
+               4) + cs35*cs67 + cs41*ps1(3, 4)))
             tangent_f2_rr(1, 3) = t_tangent_f2_rr_02
             tangent_f2_rr(3, 1) = t_tangent_f2_rr_02
             tangent_f2_rr(2, 2) = &
-               -cs10*ws2(2, 2, 4) - cs13*ws2(2, 2, 3) - cs19*ws2(2, 2, 1) + cs36*ws2(2, 2, 2) + &
-               cs37*cs58*ws1(2, 3) + cs7*(-cs24*cs82 - (cs28*cs28)*cs55 + cs48*ps2(2, 2, 4) + &
-               cs49*(ps1(2, 4)*ps1(2, 4)) - cs50*ps2(2, 2, 2) + cs52*ps2(2, 2, 3) + cs54*ps2(2, 2, &
-               1) + cs83*ps1(2, 1)) + ws0(1)*(-cs43*(ps1(2, 1)*ps1(2, 1)) + cs44*ps2(2, 2, 2) - &
-               cs45*ps2(2, 2, 1) + cs58*(-cs23 + 2.0_wp*cs25)) + ws1(2, 1)*(cs47*cs58 + cs66 + &
-               cs81) + ws0(2)*(-cs58*cs69 + (1.0_wp/2.0_wp)*cs8*inv_Z*ps2(2, 2, 1)*s_3) + ws1(2, &
-               2)*(-cs1*cs58 + cs8*inv_Z*ps1(2, 1)*s_3) + ws0(4)*(-cs11*ps2(2, 2, 4) + &
-               2.0_wp*cs28*cs80) + ws1(2, 4)*(-2.0_wp*cs22 + 2.0_wp*cs59)
+               lsf_scale*(-cs10*ws2(2, 2, 4) - cs13*ws2(2, 2, 3) - cs19*ws2(2, 2, 1) + cs36*ws2(2, &
+               2, 2) + cs37*cs58*ws1(2, 3) + cs7*(-cs24*cs82 - (cs28*cs28)*cs55 + cs48*ps2(2, 2, &
+               4) + cs49*(ps1(2, 4)*ps1(2, 4)) - cs50*ps2(2, 2, 2) + cs52*ps2(2, 2, 3) + &
+               cs54*ps2(2, 2, 1) + cs83*ps1(2, 1)) + ws0(1)*(-cs43*(ps1(2, 1)*ps1(2, 1)) + &
+               cs44*ps2(2, 2, 2) - cs45*ps2(2, 2, 1) + cs58*(-cs23 + 2.0_wp*cs25)) + ws1(2, &
+               1)*(cs47*cs58 + cs66 + cs81) + ws0(2)*(-cs58*cs69 + &
+               (1.0_wp/2.0_wp)*cs8*inv_Z*ps2(2, 2, 1)*s_3) + ws1(2, 2)*(-cs1*cs58 + &
+               cs8*inv_Z*ps1(2, 1)*s_3) + ws0(4)*(-cs11*ps2(2, 2, 4) + 2.0_wp*cs28*cs80) + ws1(2, &
+               4)*(-2.0_wp*cs22 + 2.0_wp*cs59))
             t_tangent_f2_rr_12 = &
-               -cs10*ws2(2, 3, 4) - cs13*ws2(2, 3, 3) - cs19*ws2(2, 3, 1) + cs28*cs52*ws1(3, 3) + &
-               cs35*cs52*ws1(2, 3) + cs36*ws2(2, 3, 2) + cs60*ws1(3, 4) + cs62*ws1(3, 2) + &
-               cs7*(-cs28*cs35*cs55 - cs31*cs82 + cs48*ps2(2, 3, 4) - cs50*ps2(2, 3, 2) + &
-               cs52*ps2(2, 3, 3) + cs54*ps2(2, 3, 1) + cs80*ps1(3, 4) + cs83*ps1(3, 1)) + &
+               lsf_scale*(-cs10*ws2(2, 3, 4) - cs13*ws2(2, 3, 3) - cs19*ws2(2, 3, 1) + &
+               cs28*cs52*ws1(3, 3) + cs35*cs52*ws1(2, 3) + cs36*ws2(2, 3, 2) + cs60*ws1(3, 4) + &
+               cs62*ws1(3, 2) + cs7*(-cs28*cs35*cs55 - cs31*cs82 + cs48*ps2(2, 3, 4) - cs50*ps2(2, &
+               3, 2) + cs52*ps2(2, 3, 3) + cs54*ps2(2, 3, 1) + cs80*ps1(3, 4) + cs83*ps1(3, 1)) + &
                cs75*ws1(2, 4) + cs76*ws1(2, 2) + cs78*ws1(2, 1) + ws0(1)*(cs33*cs58 + cs35*cs83 - &
                cs43*ps1(2, 1)*ps1(3, 1) + cs44*ps2(2, 3, 2) - cs45*ps2(2, 3, 1)) + ws1(3, 1)*(cs65 &
                + cs81) + ws0(2)*(-1.0_wp/2.0_wp*cs58*cs79 - 1.0_wp/2.0_wp*cs69*cs73 + &
                (1.0_wp/2.0_wp)*cs8*inv_Z*ps2(2, 3, 1)*s_3) + ws0(4)*(-cs11*ps2(2, 3, 4) + &
-               cs28*cs84 + cs35*cs80)
+               cs28*cs84 + cs35*cs80))
             tangent_f2_rr(2, 3) = t_tangent_f2_rr_12
             tangent_f2_rr(3, 2) = t_tangent_f2_rr_12
             tangent_f2_rr(3, 3) = &
-               -cs10*ws2(3, 3, 4) - cs13*ws2(3, 3, 3) - cs19*ws2(3, 3, 1) + cs36*ws2(3, 3, 2) + &
-               cs37*cs73*ws1(3, 3) + cs7*(-cs31*cs85 + cs33*cs85 - (cs35*cs35)*cs55 + cs48*ps2(3, &
-               3, 4) + cs49*(ps1(3, 4)*ps1(3, 4)) - cs50*ps2(3, 3, 2) + cs52*ps2(3, 3, 3) + &
-               cs54*ps2(3, 3, 1)) + ws0(1)*(-cs43*(ps1(3, 1)*ps1(3, 1)) + cs44*ps2(3, 3, 2) - &
+               lsf_scale*(-cs10*ws2(3, 3, 4) - cs13*ws2(3, 3, 3) - cs19*ws2(3, 3, 1) + cs36*ws2(3, &
+               3, 2) + cs37*cs73*ws1(3, 3) + cs7*(-cs31*cs85 + cs33*cs85 - (cs35*cs35)*cs55 + &
+               cs48*ps2(3, 3, 4) + cs49*(ps1(3, 4)*ps1(3, 4)) - cs50*ps2(3, 3, 2) + cs52*ps2(3, 3, &
+               3) + cs54*ps2(3, 3, 1)) + ws0(1)*(-cs43*(ps1(3, 1)*ps1(3, 1)) + cs44*ps2(3, 3, 2) - &
                cs45*ps2(3, 3, 1) + cs73*(-cs30 + 2.0_wp*cs32)) + ws1(3, 1)*(-cs34 + cs47*cs73 + &
                cs77) + ws0(2)*(-cs73*cs79 + (1.0_wp/2.0_wp)*cs8*inv_Z*ps2(3, 3, 1)*s_3) + ws1(3, &
                2)*(-cs1*cs73 + cs8*inv_Z*ps1(3, 1)*s_3) + ws0(4)*(-cs11*ps2(3, 3, 4) + &
-               2.0_wp*cs35*cs84) + ws1(3, 4)*(-2.0_wp*cs29 + 2.0_wp*cs74)
+               2.0_wp*cs35*cs84) + ws1(3, 4)*(-2.0_wp*cs29 + 2.0_wp*cs74))
          end block
       case default
          block
@@ -876,56 +881,56 @@ contains
                cs11*cs187*cs24*s_3 + cs11*cs24*ps0(1)*ps2(3, 3, 1)*s_3 - cs189*cs400 - &
                cs231*ps2(3, 3, 2)
             cs486 = cs11*cs24*cs37 - cs258*cs411 - cs412
-            tangent_f0 = -cs10*cs12
+            tangent_f0 = lsf_scale*(-cs10*cs12)
             tangent_f1_r(1) = &
-               cs10*cs11*cs24*cs25 + (1.0_wp/2.0_wp)*cs11*inv_Z*ps0(1)*s_3*ws1(1, 2) + &
+               lsf_scale*(cs10*cs11*cs24*cs25 + (1.0_wp/2.0_wp)*cs11*inv_Z*ps0(1)*s_3*ws1(1, 2) + &
                (1.0_wp/2.0_wp)*cs11*inv_Z*ps1(1, 1)*s_3*ws0(2) - cs13*ws1(1, 4) - cs15*ws0(4) - &
-               cs16*ws1(1, 3) - cs21*ws0(1) - cs23*ws1(1, 1)
+               cs16*ws1(1, 3) - cs21*ws0(1) - cs23*ws1(1, 1))
             tangent_f1_r(2) = &
-               cs10*cs11*cs24*cs32 + (1.0_wp/2.0_wp)*cs11*inv_Z*ps0(1)*s_3*ws1(2, 2) + &
+               lsf_scale*(cs10*cs11*cs24*cs32 + (1.0_wp/2.0_wp)*cs11*inv_Z*ps0(1)*s_3*ws1(2, 2) + &
                (1.0_wp/2.0_wp)*cs11*inv_Z*ps1(2, 1)*s_3*ws0(2) - cs13*ws1(2, 4) - cs16*ws1(2, 3) - &
-               cs23*ws1(2, 1) - cs26*ws0(4) - cs31*ws0(1)
+               cs23*ws1(2, 1) - cs26*ws0(4) - cs31*ws0(1))
             tangent_f1_r(3) = &
-               cs10*cs11*cs24*cs39 + (1.0_wp/2.0_wp)*cs11*inv_Z*ps0(1)*s_3*ws1(3, 2) + &
+               lsf_scale*(cs10*cs11*cs24*cs39 + (1.0_wp/2.0_wp)*cs11*inv_Z*ps0(1)*s_3*ws1(3, 2) + &
                (1.0_wp/2.0_wp)*cs11*inv_Z*ps1(3, 1)*s_3*ws0(2) - cs13*ws1(3, 4) - cs16*ws1(3, 3) - &
-               cs23*ws1(3, 1) - cs33*ws0(4) - cs38*ws0(1)
+               cs23*ws1(3, 1) - cs33*ws0(4) - cs38*ws0(1))
             tangent_f2_rr(1, 1) = &
-               cs10*cs83 - cs13*ws2(1, 1, 4) - cs16*ws2(1, 1, 3) - cs23*ws2(1, 1, 1) + cs40*ws2(1, &
-               1, 2) + cs45*ws1(1, 3) + cs49*ws1(1, 2) - cs52*ws0(2) + cs55*ws0(4) + cs57*ws1(1, &
-               4) + cs63*ws0(1) + cs66*ws1(1, 1)
+               lsf_scale*(cs10*cs83 - cs13*ws2(1, 1, 4) - cs16*ws2(1, 1, 3) - cs23*ws2(1, 1, 1) + &
+               cs40*ws2(1, 1, 2) + cs45*ws1(1, 3) + cs49*ws1(1, 2) - cs52*ws0(2) + cs55*ws0(4) + &
+               cs57*ws1(1, 4) + cs63*ws0(1) + cs66*ws1(1, 1))
             t_tangent_f2_rr_01 = &
-               cs10*cs114 - cs102*ws0(2) + cs104*ws0(1) - cs13*ws2(1, 2, 4) - cs16*ws2(1, 2, 3) - &
-               cs23*ws2(1, 2, 1) + cs40*ws2(1, 2, 2) + cs84*ws1(1, 3) + cs85*ws1(2, 3) + &
-               cs88*ws1(1, 4) + cs89*ws1(2, 4) + cs90*ws1(1, 2) + cs91*ws1(2, 2) + cs92*ws1(2, 1) &
-               + cs95*ws1(1, 1) + cs98*ws0(4)
+               lsf_scale*(cs10*cs114 - cs102*ws0(2) + cs104*ws0(1) - cs13*ws2(1, 2, 4) - &
+               cs16*ws2(1, 2, 3) - cs23*ws2(1, 2, 1) + cs40*ws2(1, 2, 2) + cs84*ws1(1, 3) + &
+               cs85*ws1(2, 3) + cs88*ws1(1, 4) + cs89*ws1(2, 4) + cs90*ws1(1, 2) + cs91*ws1(2, 2) &
+               + cs92*ws1(2, 1) + cs95*ws1(1, 1) + cs98*ws0(4))
             tangent_f2_rr(1, 2) = t_tangent_f2_rr_01
             tangent_f2_rr(2, 1) = t_tangent_f2_rr_01
             t_tangent_f2_rr_02 = &
-               cs10*cs137 + cs115*ws1(1, 3) + cs118*ws1(1, 4) + cs119*ws1(1, 2) + cs121*ws1(1, 1) &
-               + cs124*ws0(4) - cs127*ws0(2) + cs129*ws0(1) - cs13*ws2(1, 3, 4) - cs16*ws2(1, 3, &
-               3) - cs23*ws2(1, 3, 1) + cs40*ws2(1, 3, 2) + cs85*ws1(3, 3) + cs89*ws1(3, 4) + &
-               cs91*ws1(3, 2) + cs92*ws1(3, 1)
+               lsf_scale*(cs10*cs137 + cs115*ws1(1, 3) + cs118*ws1(1, 4) + cs119*ws1(1, 2) + &
+               cs121*ws1(1, 1) + cs124*ws0(4) - cs127*ws0(2) + cs129*ws0(1) - cs13*ws2(1, 3, 4) - &
+               cs16*ws2(1, 3, 3) - cs23*ws2(1, 3, 1) + cs40*ws2(1, 3, 2) + cs85*ws1(3, 3) + &
+               cs89*ws1(3, 4) + cs91*ws1(3, 2) + cs92*ws1(3, 1))
             tangent_f2_rr(1, 3) = t_tangent_f2_rr_02
             tangent_f2_rr(3, 1) = t_tangent_f2_rr_02
             tangent_f2_rr(2, 2) = &
-               cs10*cs163 - cs13*ws2(2, 2, 4) + cs138*ws1(2, 3) + cs142*ws1(2, 2) - cs145*ws0(2) + &
-               cs147*ws0(4) + cs148*ws1(2, 4) + cs152*ws0(1) + cs155*ws1(2, 1) - cs16*ws2(2, 2, 3) &
-               - cs23*ws2(2, 2, 1) + cs40*ws2(2, 2, 2)
+               lsf_scale*(cs10*cs163 - cs13*ws2(2, 2, 4) + cs138*ws1(2, 3) + cs142*ws1(2, 2) - &
+               cs145*ws0(2) + cs147*ws0(4) + cs148*ws1(2, 4) + cs152*ws0(1) + cs155*ws1(2, 1) - &
+               cs16*ws2(2, 2, 3) - cs23*ws2(2, 2, 1) + cs40*ws2(2, 2, 2))
             t_tangent_f2_rr_12 = &
-               cs10*cs176 + cs115*ws1(2, 3) + cs118*ws1(2, 4) + cs119*ws1(2, 2) + cs121*ws1(2, 1) &
-               - cs13*ws2(2, 3, 4) - cs16*ws2(2, 3, 3) + cs164*ws1(3, 1) + cs165*ws0(4) - &
-               cs168*ws0(2) + cs169*ws0(1) - cs23*ws2(2, 3, 1) + cs40*ws2(2, 3, 2) + cs84*ws1(3, &
-               3) + cs88*ws1(3, 4) + cs90*ws1(3, 2)
+               lsf_scale*(cs10*cs176 + cs115*ws1(2, 3) + cs118*ws1(2, 4) + cs119*ws1(2, 2) + &
+               cs121*ws1(2, 1) - cs13*ws2(2, 3, 4) - cs16*ws2(2, 3, 3) + cs164*ws1(3, 1) + &
+               cs165*ws0(4) - cs168*ws0(2) + cs169*ws0(1) - cs23*ws2(2, 3, 1) + cs40*ws2(2, 3, 2) &
+               + cs84*ws1(3, 3) + cs88*ws1(3, 4) + cs90*ws1(3, 2))
             tangent_f2_rr(2, 3) = t_tangent_f2_rr_12
             tangent_f2_rr(3, 2) = t_tangent_f2_rr_12
             tangent_f2_rr(3, 3) = &
-               cs10*cs200 - cs13*ws2(3, 3, 4) - cs16*ws2(3, 3, 3) + cs177*ws1(3, 3) + cs181*ws1(3, &
-               2) + cs185*ws0(4) + cs186*ws1(3, 4) + cs190*ws0(1) - cs23*ws2(3, 3, 1) + &
-               cs40*ws2(3, 3, 2) + ws1(3, 1)*(cs120 + cs191 + cs192) + &
-               ws0(2)*((1.0_wp/2.0_wp)*cs11*inv_Z*ps2(3, 3, 1)*s_3 - cs183)
+               lsf_scale*(cs10*cs200 - cs13*ws2(3, 3, 4) - cs16*ws2(3, 3, 3) + cs177*ws1(3, 3) + &
+               cs181*ws1(3, 2) + cs185*ws0(4) + cs186*ws1(3, 4) + cs190*ws0(1) - cs23*ws2(3, 3, 1) &
+               + cs40*ws2(3, 3, 2) + ws1(3, 1)*(cs120 + cs191 + cs192) + &
+               ws0(2)*((1.0_wp/2.0_wp)*cs11*inv_Z*ps2(3, 3, 1)*s_3 - cs183))
             tangent_f3_rrr(1, 1, 1) = &
-               cs10*(-cs112*cs212 + cs220*ps1(1, 4) + cs232*ps1(1, 2) + cs236*ps2(1, 1, 4) + &
-               cs245*ps2(1, 1, 2) + cs25*cs267 + cs253*ps1(1, 1) + cs259*ps2(1, 1, 1) + &
+               lsf_scale*(cs10*(-cs112*cs212 + cs220*ps1(1, 4) + cs232*ps1(1, 2) + cs236*ps2(1, 1, &
+               4) + cs245*ps2(1, 1, 2) + cs25*cs267 + cs253*ps1(1, 1) + cs259*ps2(1, 1, 1) + &
                cs67*ps3(1, 1, 1, 4) - cs72*ps3(1, 1, 1, 2) + cs74*ps3(1, 1, 1, 3) + cs78*ps3(1, 1, &
                1, 1)) - cs13*ws3(1, 1, 1, 4) - cs16*ws3(1, 1, 1, 3) - cs23*ws3(1, 1, 1, 1) + &
                cs40*ws3(1, 1, 1, 2) + ws0(1)*(-cs17*cs77 + cs20*cs83 + cs203*cs247 + &
@@ -948,10 +953,10 @@ contains
                4)*ps1(1, 4)*ps1(1, 4)) + cs215*ps2(1, 1, 4) + cs220*cs25 + cs221*ps1(1, 4)) + &
                ws1(1, 4)*(-cs201*cs67 - cs208*cs67 + cs211*cs67 + cs212*cs67 + cs213*cs67 + &
                cs215*ps1(1, 4) + cs235*ps2(1, 1, 4) + cs236*cs25 + cs237) + ws2(1, 1, &
-               4)*(-3.0_wp*cs15 + 3.0_wp*cs56)
+               4)*(-3.0_wp*cs15 + 3.0_wp*cs56))
             t_tangent_f3_rrr_001 = &
-               cs10*(-cs112*cs276 + cs220*ps1(2, 4) + cs232*ps1(2, 2) + cs236*ps2(1, 2, 4) + &
-               cs245*ps2(1, 2, 2) + cs253*ps1(2, 1) + cs259*ps2(1, 2, 1) + cs267*cs32 + &
+               lsf_scale*(cs10*(-cs112*cs276 + cs220*ps1(2, 4) + cs232*ps1(2, 2) + cs236*ps2(1, 2, &
+               4) + cs245*ps2(1, 2, 2) + cs253*ps1(2, 1) + cs259*ps2(1, 2, 1) + cs267*cs32 + &
                cs67*ps3(1, 1, 2, 4) - cs72*ps3(1, 1, 2, 2) + cs74*ps3(1, 1, 2, 3) + cs78*ps3(1, 1, &
                2, 1)) - cs13*ws3(1, 1, 2, 4) - cs16*ws3(1, 1, 2, 3) + cs207*ws1(2, 3) - &
                cs23*ws3(1, 1, 2, 1) + cs237*ws1(2, 4) + cs260*ws1(2, 1) + cs268*ws1(2, 2) + &
@@ -971,13 +976,13 @@ contains
                cs122*cs274 + cs122*cs275 + cs122*cs276 + cs122*cs277 - cs14*ps3(1, 1, 2, 4) + &
                cs215*ps2(1, 2, 4) + cs220*cs32 + cs221*ps1(2, 4) + cs278*ps1(2, 4)) + ws1(1, &
                4)*(cs215*ps1(2, 4) + cs235*ps2(1, 2, 4) + cs236*cs32 - cs273*cs67 - cs274*cs67 + &
-               cs275*cs67 + cs276*cs67 + cs277*cs67)
+               cs275*cs67 + cs276*cs67 + cs277*cs67))
             tangent_f3_rrr(1, 1, 2) = t_tangent_f3_rrr_001
             tangent_f3_rrr(1, 2, 1) = t_tangent_f3_rrr_001
             tangent_f3_rrr(2, 1, 1) = t_tangent_f3_rrr_001
             t_tangent_f3_rrr_002 = &
-               cs10*(-cs112*cs286 + cs220*ps1(3, 4) + cs232*ps1(3, 2) + cs236*ps2(1, 3, 4) + &
-               cs245*ps2(1, 3, 2) + cs253*ps1(3, 1) + cs259*ps2(1, 3, 1) + cs267*cs39 + &
+               lsf_scale*(cs10*(-cs112*cs286 + cs220*ps1(3, 4) + cs232*ps1(3, 2) + cs236*ps2(1, 3, &
+               4) + cs245*ps2(1, 3, 2) + cs253*ps1(3, 1) + cs259*ps2(1, 3, 1) + cs267*cs39 + &
                cs67*ps3(1, 1, 3, 4) - cs72*ps3(1, 1, 3, 2) + cs74*ps3(1, 1, 3, 3) + cs78*ps3(1, 1, &
                3, 1)) + cs115*ws2(1, 1, 3) + cs118*ws2(1, 1, 4) + cs119*ws2(1, 1, 2) + &
                cs121*ws2(1, 1, 1) - cs13*ws3(1, 1, 3, 4) - cs16*ws3(1, 1, 3, 3) + cs207*ws1(3, 3) &
@@ -996,21 +1001,21 @@ contains
                2) + 2.0_wp*cs282) + ws0(4)*(-cs122*cs283 - cs122*cs284 + cs122*cs285 + cs122*cs286 &
                + cs122*cs287 - cs14*ps3(1, 1, 3, 4) + cs215*ps2(1, 3, 4) + cs220*cs39 + &
                cs221*ps1(3, 4) + cs278*ps1(3, 4)) + ws1(1, 4)*(cs215*ps1(3, 4) + cs235*ps2(1, 3, &
-               4) + cs236*cs39 - cs283*cs67 - cs284*cs67 + cs285*cs67 + cs286*cs67 + cs287*cs67)
+               4) + cs236*cs39 - cs283*cs67 - cs284*cs67 + cs285*cs67 + cs286*cs67 + cs287*cs67))
             tangent_f3_rrr(1, 1, 3) = t_tangent_f3_rrr_002
             tangent_f3_rrr(1, 3, 1) = t_tangent_f3_rrr_002
             tangent_f3_rrr(3, 1, 1) = t_tangent_f3_rrr_002
             t_tangent_f3_rrr_011 = &
-               cs10*(cs307*ps2(1, 2, 4) + cs32*cs365 + cs320*ps2(1, 2, 2) + cs327*ps2(1, 2, 1) + &
-               cs330*ps2(2, 2, 4) + cs335*ps2(2, 2, 2) + cs343*ps1(2, 4) + cs354*ps1(2, 2) + &
-               cs357*ps2(2, 2, 1) + cs362*ps1(2, 1) - cs363*ps2(1, 2, 3) - cs364*ps2(2, 2, 3) + &
-               cs67*ps3(1, 2, 2, 4) - cs72*ps3(1, 2, 2, 2) + cs74*ps3(1, 2, 2, 3) + cs78*ps3(1, 2, &
-               2, 1)) - cs13*ws3(1, 2, 2, 4) + cs142*ws2(1, 2, 2) + cs148*ws2(1, 2, 4) - &
-               cs16*ws3(1, 2, 2, 3) - cs23*ws3(1, 2, 2, 1) + cs40*ws3(1, 2, 2, 2) + &
-               2.0_wp*cs84*ws2(1, 2, 3) + cs85*ws2(2, 2, 3) + cs89*ws2(2, 2, 4) + cs91*ws2(2, 2, &
-               2) + cs92*ws2(2, 2, 1) + ws0(1)*(cs103*cs270 + cs114*cs30 + cs292*cs76 + &
-               cs316*ps2(1, 2, 2) + cs32*cs362 + cs323*ps2(1, 2, 1) + cs334*ps2(2, 2, 2) + &
-               cs342*ps1(2, 4) + cs350*ps1(2, 2) + cs356*ps2(2, 2, 1) + cs359*ps2(1, 2, 3) + &
+               lsf_scale*(cs10*(cs307*ps2(1, 2, 4) + cs32*cs365 + cs320*ps2(1, 2, 2) + &
+               cs327*ps2(1, 2, 1) + cs330*ps2(2, 2, 4) + cs335*ps2(2, 2, 2) + cs343*ps1(2, 4) + &
+               cs354*ps1(2, 2) + cs357*ps2(2, 2, 1) + cs362*ps1(2, 1) - cs363*ps2(1, 2, 3) - &
+               cs364*ps2(2, 2, 3) + cs67*ps3(1, 2, 2, 4) - cs72*ps3(1, 2, 2, 2) + cs74*ps3(1, 2, &
+               2, 3) + cs78*ps3(1, 2, 2, 1)) - cs13*ws3(1, 2, 2, 4) + cs142*ws2(1, 2, 2) + &
+               cs148*ws2(1, 2, 4) - cs16*ws3(1, 2, 2, 3) - cs23*ws3(1, 2, 2, 1) + cs40*ws3(1, 2, &
+               2, 2) + 2.0_wp*cs84*ws2(1, 2, 3) + cs85*ws2(2, 2, 3) + cs89*ws2(2, 2, 4) + &
+               cs91*ws2(2, 2, 2) + cs92*ws2(2, 2, 1) + ws0(1)*(cs103*cs270 + cs114*cs30 + &
+               cs292*cs76 + cs316*ps2(1, 2, 2) + cs32*cs362 + cs323*ps2(1, 2, 1) + cs334*ps2(2, 2, &
+               2) + cs342*ps1(2, 4) + cs350*ps1(2, 2) + cs356*ps2(2, 2, 1) + cs359*ps2(1, 2, 3) + &
                cs360*ps2(2, 2, 3) + cs361*ps1(2, 1) + cs58*ps3(1, 2, 2, 2) - cs59*ps3(1, 2, 2, 1)) &
                + ws1(1, 1)*(cs156*cs9 + cs158*cs9 + cs159*cs9 + cs315*ps2(2, 2, 2) + cs32*cs327 + &
                cs321*ps2(2, 2, 1) + cs322*ps1(2, 2) + cs323*ps1(2, 1)) + ws2(1, 2, 1)*(cs154 + &
@@ -1033,18 +1038,18 @@ contains
                cs342*ps1(2, 1) + cs344*ps1(2, 4)) + ws1(1, 4)*(cs0*cs159 + cs0*cs160 - &
                cs300*ps2(2, 2, 2) - cs301*cs302 + cs303*cs67 + cs304*ps2(2, 2, 4) + cs306*ps1(2, &
                4) + cs307*cs32) + ws1(2, 4)*(cs0*cs109 + cs0*cs110 - cs274*cs302 + cs304*ps2(1, 2, &
-               4) + cs32*cs330 + cs329*ps1(2, 4) - cs331*ps0(4) + cs332*cs67 + cs333)
+               4) + cs32*cs330 + cs329*ps1(2, 4) - cs331*ps0(4) + cs332*cs67 + cs333))
             tangent_f3_rrr(1, 2, 2) = t_tangent_f3_rrr_011
             tangent_f3_rrr(2, 1, 2) = t_tangent_f3_rrr_011
             tangent_f3_rrr(2, 2, 1) = t_tangent_f3_rrr_011
             t_tangent_f3_rrr_012 = &
-               cs10*(cs307*ps2(1, 3, 4) + cs320*ps2(1, 3, 2) + cs327*ps2(1, 3, 1) + cs330*ps2(2, &
-               3, 4) + cs335*ps2(2, 3, 2) + cs343*ps1(3, 4) + cs354*ps1(3, 2) + cs357*ps2(2, 3, 1) &
-               + cs362*ps1(3, 1) - cs363*ps2(1, 3, 3) - cs364*ps2(2, 3, 3) + cs365*cs39 + &
-               cs67*ps3(1, 2, 3, 4) - cs72*ps3(1, 2, 3, 2) + cs74*ps3(1, 2, 3, 3) + cs78*ps3(1, 2, &
-               3, 1)) + cs115*ws2(1, 2, 3) + cs118*ws2(1, 2, 4) + cs119*ws2(1, 2, 2) + &
-               cs121*ws2(1, 2, 1) - cs13*ws3(1, 2, 3, 4) - cs16*ws3(1, 2, 3, 3) - cs23*ws3(1, 2, &
-               3, 1) + cs328*ws1(3, 3) + cs333*ws1(3, 4) - cs339*ws1(3, 2) + cs358*ws1(3, 1) + &
+               lsf_scale*(cs10*(cs307*ps2(1, 3, 4) + cs320*ps2(1, 3, 2) + cs327*ps2(1, 3, 1) + &
+               cs330*ps2(2, 3, 4) + cs335*ps2(2, 3, 2) + cs343*ps1(3, 4) + cs354*ps1(3, 2) + &
+               cs357*ps2(2, 3, 1) + cs362*ps1(3, 1) - cs363*ps2(1, 3, 3) - cs364*ps2(2, 3, 3) + &
+               cs365*cs39 + cs67*ps3(1, 2, 3, 4) - cs72*ps3(1, 2, 3, 2) + cs74*ps3(1, 2, 3, 3) + &
+               cs78*ps3(1, 2, 3, 1)) + cs115*ws2(1, 2, 3) + cs118*ws2(1, 2, 4) + cs119*ws2(1, 2, &
+               2) + cs121*ws2(1, 2, 1) - cs13*ws3(1, 2, 3, 4) - cs16*ws3(1, 2, 3, 3) - cs23*ws3(1, &
+               2, 3, 1) + cs328*ws1(3, 3) + cs333*ws1(3, 4) - cs339*ws1(3, 2) + cs358*ws1(3, 1) + &
                cs369*ws1(1, 3) + cs370*ws1(2, 3) + cs373*ws1(1, 4) + cs375*ws1(2, 4) + &
                cs383*ws1(2, 1) + cs40*ws3(1, 2, 3, 2) + cs84*ws2(1, 3, 3) + cs85*ws2(2, 3, 3) + &
                cs88*ws2(1, 3, 4) + cs89*ws2(2, 3, 4) + cs90*ws2(1, 3, 2) + cs91*ws2(2, 3, 2) + &
@@ -1061,7 +1066,8 @@ contains
                3, 1) + cs334*ps1(3, 1) + cs335*cs39 + cs346*ps1(3, 2) - cs380 - cs381 - cs382) + &
                ws0(4)*(cs106*cs374 + cs122*cs372 + cs134*cs97 - cs14*ps3(1, 2, 3, 4) + cs172*cs216 &
                + cs214*cs377 + cs306*ps2(1, 3, 4) + cs329*ps2(2, 3, 4) - cs338*ps2(2, 3, 2) + &
-               cs341*ps1(3, 2) + cs342*ps1(3, 1) + cs343*cs39 + cs344*ps1(3, 4) - cs385*ps1(2, 4))
+               cs341*ps1(3, 2) + cs342*ps1(3, 1) + cs343*cs39 + cs344*ps1(3, 4) - cs385*ps1(2, &
+               4)))
             tangent_f3_rrr(1, 2, 3) = t_tangent_f3_rrr_012
             tangent_f3_rrr(1, 3, 2) = t_tangent_f3_rrr_012
             tangent_f3_rrr(2, 1, 3) = t_tangent_f3_rrr_012
@@ -1069,42 +1075,43 @@ contains
             tangent_f3_rrr(3, 1, 2) = t_tangent_f3_rrr_012
             tangent_f3_rrr(3, 2, 1) = t_tangent_f3_rrr_012
             t_tangent_f3_rrr_022 = &
-               cs10*(cs330*ps2(3, 3, 4) + cs335*ps2(3, 3, 2) + cs357*ps2(3, 3, 1) - cs364*ps2(3, &
-               3, 3) - cs39*cs425 + cs39*(6.0_wp*cs11*cs25*cs266*cs39 + cs11*cs80*ps0(1)*ps2(1, 3, &
-               2)*s_3 + cs11*cs80*ps1(1, 1)*ps1(3, 2)*s_3 - cs261*ps2(1, 3, 4) - cs264*ps1(3, 1) - &
-               cs265*ps2(1, 3, 1) - cs425 - cs426*ps1(1, 4)) + cs401*ps2(1, 3, 4) + cs407*ps2(1, &
-               3, 2) + cs413*ps2(1, 3, 1) + cs417*ps1(3, 4) + cs422*ps1(3, 2) + cs424*ps1(3, 1) + &
-               cs67*ps3(1, 3, 3, 4) - cs72*ps3(1, 3, 3, 2) + cs74*ps3(1, 3, 3, 3) + cs78*ps3(1, 3, &
-               3, 1)) - cs13*ws3(1, 3, 3, 4) - cs16*ws3(1, 3, 3, 3) + cs181*ws2(1, 3, 2) + &
-               cs186*ws2(1, 3, 4) - cs23*ws3(1, 3, 3, 1) + cs388*ws2(1, 3, 3) + cs390*ws2(1, 3, 1) &
-               + cs395*ws1(1, 3) + cs40*ws3(1, 3, 3, 2) + cs402*ws1(1, 4) + cs408*ws1(1, 2) + &
-               cs414*ws1(1, 1) + cs85*ws2(3, 3, 3) + cs89*ws2(3, 3, 4) + cs91*ws2(3, 3, 2) + &
-               cs92*ws2(3, 3, 1) + ws0(1)*(cs128*cs281 + cs137*cs37 + cs334*ps2(3, 3, 2) + &
-               cs356*ps2(3, 3, 1) + cs360*ps2(3, 3, 3) + cs39*cs424 + cs391*cs76 + cs404*ps2(1, 3, &
-               2) + cs410*ps2(1, 3, 1) + cs416*ps1(3, 4) + cs420*ps1(3, 2) + cs423*ps2(1, 3, 3) + &
-               cs58*ps3(1, 3, 3, 2) - cs59*ps3(1, 3, 3, 1) + ps1(3, 1)*(cs182*ps1(1, 1) - &
-               cs22*ps2(1, 3, 1) + cs247*cs37 + cs50*ps1(3, 1))) + ws1(3, 1)*(cs129 + cs137*cs9 + &
-               cs383) + ws0(2)*(-cs134*cs167 - cs137*cs167 - cs196*cs349 + cs346*ps2(3, 3, 2) + &
-               cs351*ps2(3, 3, 1) - cs386*ps2(3, 3, 4) - cs387*cs418 + cs39*cs422 + cs403*ps2(1, &
-               3, 2) + cs409*ps2(1, 3, 1) + cs415*ps1(3, 4) + cs419*ps1(1, 1) + cs420*ps1(3, 1) + &
-               cs58*ps3(1, 3, 3, 1)) + ws1(3, 2)*((1.0_wp/4.0_wp)*cs11*cs225*cs24*cs6*ps2(1, 3, 2) &
-               + (1.0_wp/4.0_wp)*cs11*cs225*cs24*ps0(1)*ps1(1, 1)*ps1(3, 2) - cs127 - cs137*cs2 + &
+               lsf_scale*(cs10*(cs330*ps2(3, 3, 4) + cs335*ps2(3, 3, 2) + cs357*ps2(3, 3, 1) - &
+               cs364*ps2(3, 3, 3) - cs39*cs425 + cs39*(6.0_wp*cs11*cs25*cs266*cs39 + &
+               cs11*cs80*ps0(1)*ps2(1, 3, 2)*s_3 + cs11*cs80*ps1(1, 1)*ps1(3, 2)*s_3 - &
+               cs261*ps2(1, 3, 4) - cs264*ps1(3, 1) - cs265*ps2(1, 3, 1) - cs425 - cs426*ps1(1, &
+               4)) + cs401*ps2(1, 3, 4) + cs407*ps2(1, 3, 2) + cs413*ps2(1, 3, 1) + cs417*ps1(3, &
+               4) + cs422*ps1(3, 2) + cs424*ps1(3, 1) + cs67*ps3(1, 3, 3, 4) - cs72*ps3(1, 3, 3, &
+               2) + cs74*ps3(1, 3, 3, 3) + cs78*ps3(1, 3, 3, 1)) - cs13*ws3(1, 3, 3, 4) - &
+               cs16*ws3(1, 3, 3, 3) + cs181*ws2(1, 3, 2) + cs186*ws2(1, 3, 4) - cs23*ws3(1, 3, 3, &
+               1) + cs388*ws2(1, 3, 3) + cs390*ws2(1, 3, 1) + cs395*ws1(1, 3) + cs40*ws3(1, 3, 3, &
+               2) + cs402*ws1(1, 4) + cs408*ws1(1, 2) + cs414*ws1(1, 1) + cs85*ws2(3, 3, 3) + &
+               cs89*ws2(3, 3, 4) + cs91*ws2(3, 3, 2) + cs92*ws2(3, 3, 1) + ws0(1)*(cs128*cs281 + &
+               cs137*cs37 + cs334*ps2(3, 3, 2) + cs356*ps2(3, 3, 1) + cs360*ps2(3, 3, 3) + &
+               cs39*cs424 + cs391*cs76 + cs404*ps2(1, 3, 2) + cs410*ps2(1, 3, 1) + cs416*ps1(3, 4) &
+               + cs420*ps1(3, 2) + cs423*ps2(1, 3, 3) + cs58*ps3(1, 3, 3, 2) - cs59*ps3(1, 3, 3, &
+               1) + ps1(3, 1)*(cs182*ps1(1, 1) - cs22*ps2(1, 3, 1) + cs247*cs37 + cs50*ps1(3, 1))) &
+               + ws1(3, 1)*(cs129 + cs137*cs9 + cs383) + ws0(2)*(-cs134*cs167 - cs137*cs167 - &
+               cs196*cs349 + cs346*ps2(3, 3, 2) + cs351*ps2(3, 3, 1) - cs386*ps2(3, 3, 4) - &
+               cs387*cs418 + cs39*cs422 + cs403*ps2(1, 3, 2) + cs409*ps2(1, 3, 1) + cs415*ps1(3, &
+               4) + cs419*ps1(1, 1) + cs420*ps1(3, 1) + cs58*ps3(1, 3, 3, 1)) + ws1(3, &
+               2)*((1.0_wp/4.0_wp)*cs11*cs225*cs24*cs6*ps2(1, 3, 2) + &
+               (1.0_wp/4.0_wp)*cs11*cs225*cs24*ps0(1)*ps1(1, 1)*ps1(3, 2) - cs127 - cs137*cs2 + &
                cs315*ps2(1, 3, 1) + cs334*ps1(3, 1) + cs335*cs39 - cs380 - cs381 - cs382) + ws1(3, &
                3)*(cs137*cs5 + cs370) + ws0(4)*(cs122*cs397 + cs123*cs134 + cs123*cs137 + &
                cs131*cs374 - cs14*ps3(1, 3, 3, 4) + cs194*cs214 + cs196*cs216 + cs329*ps2(3, 3, 4) &
                - cs338*ps2(3, 3, 2) - cs385*ps1(3, 4) + cs39*cs417 + cs399*ps2(1, 3, 4) + &
-               cs415*ps1(3, 2) + cs416*ps1(3, 1)) + ws1(3, 4)*(cs0*cs137 + cs124 + cs375)
+               cs415*ps1(3, 2) + cs416*ps1(3, 1)) + ws1(3, 4)*(cs0*cs137 + cs124 + cs375))
             tangent_f3_rrr(1, 3, 3) = t_tangent_f3_rrr_022
             tangent_f3_rrr(3, 1, 3) = t_tangent_f3_rrr_022
             tangent_f3_rrr(3, 3, 1) = t_tangent_f3_rrr_022
             tangent_f3_rrr(2, 2, 2) = &
-               cs10*(-cs174*cs431 + cs32*cs457 + cs436*ps1(2, 4) + cs438*ps1(2, 2) + cs439*ps2(2, &
-               2, 4) + cs443*ps2(2, 2, 2) + cs451*ps1(2, 1) + cs454*ps2(2, 2, 1) + cs67*ps3(2, 2, &
-               2, 4) - cs72*ps3(2, 2, 2, 2) + cs74*ps3(2, 2, 2, 3) + cs78*ps3(2, 2, 2, 1)) - &
-               cs13*ws3(2, 2, 2, 4) - cs16*ws3(2, 2, 2, 3) - cs23*ws3(2, 2, 2, 1) + cs40*ws3(2, 2, &
-               2, 2) + ws0(1)*(cs157*cs445*s_2 - cs160*cs27 + cs163*cs30 + cs292*cs445 + &
-               cs32*cs451 + cs446*ps2(2, 2, 3) + cs447*ps2(2, 2, 2) + cs448*ps1(2, 1) + &
-               cs450*ps2(2, 2, 1) + cs58*ps3(2, 2, 2, 2) - cs59*ps3(2, 2, 2, 1)) + ws1(2, &
+               lsf_scale*(cs10*(-cs174*cs431 + cs32*cs457 + cs436*ps1(2, 4) + cs438*ps1(2, 2) + &
+               cs439*ps2(2, 2, 4) + cs443*ps2(2, 2, 2) + cs451*ps1(2, 1) + cs454*ps2(2, 2, 1) + &
+               cs67*ps3(2, 2, 2, 4) - cs72*ps3(2, 2, 2, 2) + cs74*ps3(2, 2, 2, 3) + cs78*ps3(2, 2, &
+               2, 1)) - cs13*ws3(2, 2, 2, 4) - cs16*ws3(2, 2, 2, 3) - cs23*ws3(2, 2, 2, 1) + &
+               cs40*ws3(2, 2, 2, 2) + ws0(1)*(cs157*cs445*s_2 - cs160*cs27 + cs163*cs30 + &
+               cs292*cs445 + cs32*cs451 + cs446*ps2(2, 2, 3) + cs447*ps2(2, 2, 2) + cs448*ps1(2, &
+               1) + cs450*ps2(2, 2, 1) + cs58*ps3(2, 2, 2, 2) - cs59*ps3(2, 2, 2, 1)) + ws1(2, &
                1)*(cs156*cs65 + cs158*cs65 + cs243*ps2(2, 2, 2) + cs256*ps2(2, 2, 1) + cs32*cs454 &
                + cs431*cs78 + cs437*ps1(2, 2) + cs452*ps1(2, 1) + cs455) + ws2(2, 2, 1)*(cs100*cs7 &
                + cs153 + cs290) + ws0(2)*((1.0_wp/2.0_wp)*cs11*cs149*cs225*cs24*ps1(2, 2) + &
@@ -1121,36 +1128,37 @@ contains
                cs210*(ps1(2, 4)*ps1(2, 4)*ps1(2, 4)) + cs32*cs436 + cs434*ps2(2, 2, 4)) + ws1(2, &
                4)*(cs235*ps2(2, 2, 4) - cs301*cs67 + cs32*cs439 - cs429*cs67 + cs430*cs67 + &
                cs431*cs67 + cs432*cs67 + cs434*ps1(2, 4) + cs440) + ws2(2, 2, 4)*(-3.0_wp*cs26 + &
-               3.0_wp*cs87)
+               3.0_wp*cs87))
             t_tangent_f3_rrr_112 = &
-               cs10*(-cs174*cs460 + cs39*cs457 + cs436*ps1(3, 4) + cs438*ps1(3, 2) + cs439*ps2(2, &
-               3, 4) + cs443*ps2(2, 3, 2) + cs451*ps1(3, 1) + cs454*ps2(2, 3, 1) + cs67*ps3(2, 2, &
-               3, 4) - cs72*ps3(2, 2, 3, 2) + cs74*ps3(2, 2, 3, 3) + cs78*ps3(2, 2, 3, 1)) + &
-               cs115*ws2(2, 2, 3) + cs118*ws2(2, 2, 4) + cs119*ws2(2, 2, 2) + cs121*ws2(2, 2, 1) - &
-               cs13*ws3(2, 2, 3, 4) + cs138*ws2(2, 3, 3) + cs142*ws2(2, 3, 2) + cs148*ws2(2, 3, 4) &
-               + cs155*ws2(2, 3, 1) - cs16*ws3(2, 2, 3, 3) - cs23*ws3(2, 2, 3, 1) + cs40*ws3(2, 2, &
-               3, 2) + cs428*ws1(3, 3) + cs440*ws1(3, 4) + cs455*ws1(3, 1) + ws0(1)*(-cs160*cs34 + &
-               cs163*cs37 + cs366*cs445 + cs39*cs451 + cs445*cs463 + cs446*ps2(2, 3, 3) + &
-               cs447*ps2(2, 3, 2) + cs448*ps1(3, 1) + cs450*ps2(2, 3, 1) + cs58*ps3(2, 2, 3, 2) - &
-               cs59*ps3(2, 2, 3, 1)) + ws1(2, 1)*(cs170*cs65 + cs171*cs65 + cs243*ps2(2, 3, 2) + &
-               cs256*ps2(2, 3, 1) + cs39*cs454 + cs437*ps1(3, 2) + cs452*ps1(3, 1) + cs460*cs78) + &
-               ws0(2)*(cs149*cs239*ps1(3, 2) - cs163*cs167 + cs239*cs441*ps2(2, 3, 2) - &
-               cs317*cs366 - cs317*cs463 - cs318*cs459 - cs318*cs460 + cs39*cs438 + cs437*ps2(2, &
-               3, 1) + cs58*ps3(2, 2, 3, 1)) + ws1(2, 2)*(-cs1*cs170 - cs1*cs171 + cs242*ps2(2, 3, &
-               2) + cs243*ps2(2, 3, 1) + cs288*cs441 + cs39*cs443 + cs442*ps1(3, 1) - cs460*cs72) &
-               + ws1(3, 2)*(-cs145 - cs444) + ws1(2, 3)*(cs172*cs42 - cs175*cs42 + &
-               cs184*cs74*ps1(2, 4) + cs206*ps2(2, 3, 1) - cs269*ps2(2, 3, 2) - cs296*cs34 + &
-               2.0_wp*cs367 + cs427*ps1(3, 1)) + ws0(4)*(-cs106*cs371 - cs106*cs458 + cs106*cs459 &
-               + cs106*cs460 + cs106*cs461 + cs123*cs163 - cs14*ps3(2, 2, 3, 4) + cs157*cs462 + &
-               cs39*cs436 + cs434*ps2(2, 3, 4)) + ws1(2, 4)*(cs235*ps2(2, 3, 4) - cs371*cs67 + &
-               cs39*cs439 + cs434*ps1(3, 4) - cs458*cs67 + cs459*cs67 + cs460*cs67 + cs461*cs67)
+               lsf_scale*(cs10*(-cs174*cs460 + cs39*cs457 + cs436*ps1(3, 4) + cs438*ps1(3, 2) + &
+               cs439*ps2(2, 3, 4) + cs443*ps2(2, 3, 2) + cs451*ps1(3, 1) + cs454*ps2(2, 3, 1) + &
+               cs67*ps3(2, 2, 3, 4) - cs72*ps3(2, 2, 3, 2) + cs74*ps3(2, 2, 3, 3) + cs78*ps3(2, 2, &
+               3, 1)) + cs115*ws2(2, 2, 3) + cs118*ws2(2, 2, 4) + cs119*ws2(2, 2, 2) + &
+               cs121*ws2(2, 2, 1) - cs13*ws3(2, 2, 3, 4) + cs138*ws2(2, 3, 3) + cs142*ws2(2, 3, 2) &
+               + cs148*ws2(2, 3, 4) + cs155*ws2(2, 3, 1) - cs16*ws3(2, 2, 3, 3) - cs23*ws3(2, 2, &
+               3, 1) + cs40*ws3(2, 2, 3, 2) + cs428*ws1(3, 3) + cs440*ws1(3, 4) + cs455*ws1(3, 1) &
+               + ws0(1)*(-cs160*cs34 + cs163*cs37 + cs366*cs445 + cs39*cs451 + cs445*cs463 + &
+               cs446*ps2(2, 3, 3) + cs447*ps2(2, 3, 2) + cs448*ps1(3, 1) + cs450*ps2(2, 3, 1) + &
+               cs58*ps3(2, 2, 3, 2) - cs59*ps3(2, 2, 3, 1)) + ws1(2, 1)*(cs170*cs65 + cs171*cs65 + &
+               cs243*ps2(2, 3, 2) + cs256*ps2(2, 3, 1) + cs39*cs454 + cs437*ps1(3, 2) + &
+               cs452*ps1(3, 1) + cs460*cs78) + ws0(2)*(cs149*cs239*ps1(3, 2) - cs163*cs167 + &
+               cs239*cs441*ps2(2, 3, 2) - cs317*cs366 - cs317*cs463 - cs318*cs459 - cs318*cs460 + &
+               cs39*cs438 + cs437*ps2(2, 3, 1) + cs58*ps3(2, 2, 3, 1)) + ws1(2, 2)*(-cs1*cs170 - &
+               cs1*cs171 + cs242*ps2(2, 3, 2) + cs243*ps2(2, 3, 1) + cs288*cs441 + cs39*cs443 + &
+               cs442*ps1(3, 1) - cs460*cs72) + ws1(3, 2)*(-cs145 - cs444) + ws1(2, 3)*(cs172*cs42 &
+               - cs175*cs42 + cs184*cs74*ps1(2, 4) + cs206*ps2(2, 3, 1) - cs269*ps2(2, 3, 2) - &
+               cs296*cs34 + 2.0_wp*cs367 + cs427*ps1(3, 1)) + ws0(4)*(-cs106*cs371 - cs106*cs458 + &
+               cs106*cs459 + cs106*cs460 + cs106*cs461 + cs123*cs163 - cs14*ps3(2, 2, 3, 4) + &
+               cs157*cs462 + cs39*cs436 + cs434*ps2(2, 3, 4)) + ws1(2, 4)*(cs235*ps2(2, 3, 4) - &
+               cs371*cs67 + cs39*cs439 + cs434*ps1(3, 4) - cs458*cs67 + cs459*cs67 + cs460*cs67 + &
+               cs461*cs67))
             tangent_f3_rrr(2, 2, 3) = t_tangent_f3_rrr_112
             tangent_f3_rrr(2, 3, 2) = t_tangent_f3_rrr_112
             tangent_f3_rrr(3, 2, 2) = t_tangent_f3_rrr_112
             t_tangent_f3_rrr_122 = &
-               cs10*(cs307*ps2(3, 3, 4) + cs320*ps2(3, 3, 2) - cs363*ps2(3, 3, 3) - cs39*cs471 + &
-               cs39*(6.0_wp*cs11*cs266*cs32*cs39 + cs11*cs80*ps0(1)*ps2(2, 3, 2)*s_3 + &
-               cs11*cs80*ps1(2, 1)*ps1(3, 2)*s_3 - cs261*ps2(2, 3, 4) - cs265*ps2(2, 3, 1) - &
+               lsf_scale*(cs10*(cs307*ps2(3, 3, 4) + cs320*ps2(3, 3, 2) - cs363*ps2(3, 3, 3) - &
+               cs39*cs471 + cs39*(6.0_wp*cs11*cs266*cs32*cs39 + cs11*cs80*ps0(1)*ps2(2, 3, 2)*s_3 &
+               + cs11*cs80*ps1(2, 1)*ps1(3, 2)*s_3 - cs261*ps2(2, 3, 4) - cs265*ps2(2, 3, 1) - &
                cs426*ps1(2, 4) - cs456*ps1(3, 1) - cs471) + cs401*ps2(2, 3, 4) + cs407*ps2(2, 3, &
                2) + cs413*ps2(2, 3, 1) + cs466*ps1(3, 4) + cs468*ps1(3, 2) + cs469*ps2(3, 3, 1) + &
                cs470*ps1(3, 1) + cs67*ps3(2, 3, 3, 4) - cs72*ps3(2, 3, 3, 2) + cs74*ps3(2, 3, 3, &
@@ -1174,13 +1182,13 @@ contains
                cs131*cs372 - cs14*ps3(2, 3, 3, 4) + cs194*cs433 + cs196*cs97 - cs299*ps2(2, 3, &
                2)*ps1(3, 4) - cs299*ps2(3, 3, 2)*ps1(2, 4) + cs306*ps2(3, 3, 4) + cs39*cs466 + &
                cs399*ps2(2, 3, 4) + cs464*ps1(3, 2) + cs465*ps1(3, 1)) + ws1(3, 4)*(cs0*cs176 + &
-               cs165 + cs373)
+               cs165 + cs373))
             tangent_f3_rrr(2, 3, 3) = t_tangent_f3_rrr_122
             tangent_f3_rrr(3, 2, 3) = t_tangent_f3_rrr_122
             tangent_f3_rrr(3, 3, 2) = t_tangent_f3_rrr_122
             tangent_f3_rrr(3, 3, 3) = &
-               cs10*(cs39*(6.0_wp*cs11*cs198*cs266 + cs11*cs80*ps0(1)*ps2(3, 3, 2)*s_3 + &
-               cs11*cs80*ps1(3, 1)*ps1(3, 2)*s_3 - cs111*cs37*ps1(3, 1) - cs194*cs262 - &
+               lsf_scale*(cs10*(cs39*(6.0_wp*cs11*cs198*cs266 + cs11*cs80*ps0(1)*ps2(3, 3, 2)*s_3 &
+               + cs11*cs80*ps1(3, 1)*ps1(3, 2)*s_3 - cs111*cs37*ps1(3, 1) - cs194*cs262 - &
                cs261*ps2(3, 3, 4) - cs263*ps2(3, 3, 3) - cs265*ps2(3, 3, 1)) - cs400*cs474 + &
                cs478*ps1(3, 4) + cs480*ps1(3, 2) + cs481*ps2(3, 3, 4) + cs482*ps2(3, 3, 2) + &
                cs485*ps1(3, 1) + cs486*ps2(3, 3, 1) + cs67*ps3(3, 3, 3, 4) - cs72*ps3(3, 3, 3, 2) &
@@ -1206,15 +1214,15 @@ contains
                + cs131*cs474 + cs131*cs475 - cs14*ps3(3, 3, 3, 4) + cs210*(ps1(3, 4)*ps1(3, &
                4)*ps1(3, 4)) + cs39*cs478 + cs476*ps2(3, 3, 4)) + ws1(3, 4)*(cs0*cs200 + cs185 + &
                cs235*ps2(3, 3, 4) + cs39*cs481 - cs396*cs67 - cs472*cs67 + cs473*cs67 + cs474*cs67 &
-               + cs475*cs67 + cs476*ps1(3, 4)) + ws2(3, 3, 4)*(3.0_wp*cs117 - 3.0_wp*cs33)
+               + cs475*cs67 + cs476*ps1(3, 4)) + ws2(3, 3, 4)*(3.0_wp*cs117 - 3.0_wp*cs33))
          end block
       end select
 
    end subroutine svdw_tangent_eval
 
-   pure module subroutine svdw_hvp_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ws0, ws1, ws2, at0, at1, &
-                                 at2, at3, aw0, aw1, aw2, aw3, max_deriv, hvp_f1_rA, hvp_f2_r_rA, &
-                                 hvp_f3_rr_rA)
+   pure module subroutine svdw_hvp_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ws0, ws1, ws2, &
+                                 at0, at1, at2, at3, aw0, aw1, aw2, aw3, max_deriv, hvp_f1_rA, &
+                                 hvp_f2_r_rA, hvp_f3_rr_rA)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -1223,6 +1231,9 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -1304,17 +1315,17 @@ contains
             cs15 = cs1*cs14
             cs16 = cs0*(inv_Z*inv_Z)*(-cs10*ps0(1) + cs11*cs13 + cs3*ws0(4) + cs8*ws0(3))
             hvp_f1_rA(1) = &
-               at1(1, 1)*cs12 - at1(1, 2)*cs6 + at1(1, 4)*cs2 + aw1(1, 1)*cs15 - aw1(1, 2)*cs7 + &
-               aw1(1, 3)*cs9 + aw1(1, 4)*cs4 + cs16*(-at1(1, 1)*cs14 + (1.0_wp/2.0_wp)*at1(1, &
-               2)*ps0(1)*s_3 - at1(1, 3)*cs8 - at1(1, 4)*cs3)
+               lsf_scale*(at1(1, 1)*cs12 - at1(1, 2)*cs6 + at1(1, 4)*cs2 + aw1(1, 1)*cs15 - aw1(1, &
+               2)*cs7 + aw1(1, 3)*cs9 + aw1(1, 4)*cs4 + cs16*(-at1(1, 1)*cs14 + &
+               (1.0_wp/2.0_wp)*at1(1, 2)*ps0(1)*s_3 - at1(1, 3)*cs8 - at1(1, 4)*cs3))
             hvp_f1_rA(2) = &
-               at1(2, 1)*cs12 - at1(2, 2)*cs6 + at1(2, 4)*cs2 + aw1(2, 1)*cs15 - aw1(2, 2)*cs7 + &
-               aw1(2, 3)*cs9 + aw1(2, 4)*cs4 + cs16*(-at1(2, 1)*cs14 + (1.0_wp/2.0_wp)*at1(2, &
-               2)*ps0(1)*s_3 - at1(2, 3)*cs8 - at1(2, 4)*cs3)
+               lsf_scale*(at1(2, 1)*cs12 - at1(2, 2)*cs6 + at1(2, 4)*cs2 + aw1(2, 1)*cs15 - aw1(2, &
+               2)*cs7 + aw1(2, 3)*cs9 + aw1(2, 4)*cs4 + cs16*(-at1(2, 1)*cs14 + &
+               (1.0_wp/2.0_wp)*at1(2, 2)*ps0(1)*s_3 - at1(2, 3)*cs8 - at1(2, 4)*cs3))
             hvp_f1_rA(3) = &
-               at1(3, 1)*cs12 - at1(3, 2)*cs6 + at1(3, 4)*cs2 + aw1(3, 1)*cs15 - aw1(3, 2)*cs7 + &
-               aw1(3, 3)*cs9 + aw1(3, 4)*cs4 + cs16*(-at1(3, 1)*cs14 + (1.0_wp/2.0_wp)*at1(3, &
-               2)*ps0(1)*s_3 - at1(3, 3)*cs8 - at1(3, 4)*cs3)
+               lsf_scale*(at1(3, 1)*cs12 - at1(3, 2)*cs6 + at1(3, 4)*cs2 + aw1(3, 1)*cs15 - aw1(3, &
+               2)*cs7 + aw1(3, 3)*cs9 + aw1(3, 4)*cs4 + cs16*(-at1(3, 1)*cs14 + &
+               (1.0_wp/2.0_wp)*at1(3, 2)*ps0(1)*s_3 - at1(3, 3)*cs8 - at1(3, 4)*cs3))
          end block
       case (1)
          block
@@ -1434,50 +1445,50 @@ contains
                + cs49*cs75 - cs56*ps1(3, 1) - cs57*cs76
             cs84 = cs32*cs76
             hvp_f1_rA(1) = &
-               at1(1, 1)*cs17 - at1(1, 2)*cs8 + at1(1, 4)*cs3 + aw1(1, 1)*cs21 - aw1(1, 2)*cs10 + &
-               aw1(1, 3)*cs12 + aw1(1, 4)*cs5 + cs22*cs26
+               lsf_scale*(at1(1, 1)*cs17 - at1(1, 2)*cs8 + at1(1, 4)*cs3 + aw1(1, 1)*cs21 - aw1(1, &
+               2)*cs10 + aw1(1, 3)*cs12 + aw1(1, 4)*cs5 + cs22*cs26)
             hvp_f1_rA(2) = &
-               at1(2, 1)*cs17 - at1(2, 2)*cs8 + at1(2, 4)*cs3 + aw1(2, 1)*cs21 - aw1(2, 2)*cs10 + &
-               aw1(2, 3)*cs12 + aw1(2, 4)*cs5 + cs26*cs27
+               lsf_scale*(at1(2, 1)*cs17 - at1(2, 2)*cs8 + at1(2, 4)*cs3 + aw1(2, 1)*cs21 - aw1(2, &
+               2)*cs10 + aw1(2, 3)*cs12 + aw1(2, 4)*cs5 + cs26*cs27)
             hvp_f1_rA(3) = &
-               at1(3, 1)*cs17 - at1(3, 2)*cs8 + at1(3, 4)*cs3 + aw1(3, 1)*cs21 - aw1(3, 2)*cs10 + &
-               aw1(3, 3)*cs12 + aw1(3, 4)*cs5 + cs26*cs28
+               lsf_scale*(at1(3, 1)*cs17 - at1(3, 2)*cs8 + at1(3, 4)*cs3 + aw1(3, 1)*cs21 - aw1(3, &
+               2)*cs10 + aw1(3, 3)*cs12 + aw1(3, 4)*cs5 + cs26*cs28)
             hvp_f2_r_rA(1, 1) = &
-               -at1(1, 1)*cs55 - at2(1, 1, 1)*cs43 - at1(1, 2)*cs51 - at2(1, 1, 2)*cs37 - at2(1, &
-               1, 3)*cs29 - at1(1, 4)*cs47 - at2(1, 1, 4)*cs34 - aw1(1, 1)*cs42 + &
+               lsf_scale*(-at1(1, 1)*cs55 - at2(1, 1, 1)*cs43 - at1(1, 2)*cs51 - at2(1, 1, 2)*cs37 &
+               - at2(1, 1, 3)*cs29 - at1(1, 4)*cs47 - at2(1, 1, 4)*cs34 - aw1(1, 1)*cs42 + &
                (1.0_wp/6.0_wp)*aw2(1, 1, 1)*cs0*cs18*inv_Z*s_3 - aw1(1, 2)*cs39 - aw2(1, 1, &
                2)*cs10 - aw1(1, 3)*cs33 + aw2(1, 1, 3)*cs0*cs11*inv_Z - aw1(1, 4)*cs36 + aw2(1, 1, &
-               4)*cs0*inv_Z*ps0(4)*s_2 + cs22*cs58
+               4)*cs0*inv_Z*ps0(4)*s_2 + cs22*cs58)
             hvp_f2_r_rA(1, 2) = &
-               -at1(2, 1)*cs55 - at1(2, 2)*cs51 - at1(2, 4)*cs47 - aw1(2, 1)*cs42 - aw1(2, 2)*cs39 &
-               - aw1(2, 3)*cs33 - aw1(2, 4)*cs36 + cs27*cs58 - cs59
+               lsf_scale*(-at1(2, 1)*cs55 - at1(2, 2)*cs51 - at1(2, 4)*cs47 - aw1(2, 1)*cs42 - &
+               aw1(2, 2)*cs39 - aw1(2, 3)*cs33 - aw1(2, 4)*cs36 + cs27*cs58 - cs59)
             hvp_f2_r_rA(1, 3) = &
-               -at1(3, 1)*cs55 - at1(3, 2)*cs51 - at1(3, 4)*cs47 - aw1(3, 1)*cs42 - aw1(3, 2)*cs39 &
-               - aw1(3, 3)*cs33 - aw1(3, 4)*cs36 + cs28*cs58 - cs60
+               lsf_scale*(-at1(3, 1)*cs55 - at1(3, 2)*cs51 - at1(3, 4)*cs47 - aw1(3, 1)*cs42 - &
+               aw1(3, 2)*cs39 - aw1(3, 3)*cs33 - aw1(3, 4)*cs36 + cs28*cs58 - cs60)
             hvp_f2_r_rA(2, 1) = &
-               -at1(1, 1)*cs64 - at1(1, 2)*cs65 - at1(1, 4)*cs67 - aw1(1, 1)*cs68 - aw1(1, 2)*cs69 &
-               - aw1(1, 3)*cs72 - aw1(1, 4)*cs70 + cs22*cs71 - cs59
+               lsf_scale*(-at1(1, 1)*cs64 - at1(1, 2)*cs65 - at1(1, 4)*cs67 - aw1(1, 1)*cs68 - &
+               aw1(1, 2)*cs69 - aw1(1, 3)*cs72 - aw1(1, 4)*cs70 + cs22*cs71 - cs59)
             hvp_f2_r_rA(2, 2) = &
-               -at1(2, 1)*cs64 - at2(2, 2, 1)*cs43 - at1(2, 2)*cs65 - at2(2, 2, 2)*cs37 - at2(2, &
-               2, 3)*cs29 - at1(2, 4)*cs67 - at2(2, 2, 4)*cs34 - aw1(2, 1)*cs68 + &
+               lsf_scale*(-at1(2, 1)*cs64 - at2(2, 2, 1)*cs43 - at1(2, 2)*cs65 - at2(2, 2, 2)*cs37 &
+               - at2(2, 2, 3)*cs29 - at1(2, 4)*cs67 - at2(2, 2, 4)*cs34 - aw1(2, 1)*cs68 + &
                (1.0_wp/6.0_wp)*aw2(2, 2, 1)*cs0*cs18*inv_Z*s_3 - aw1(2, 2)*cs69 - aw2(2, 2, &
                2)*cs10 - aw1(2, 3)*cs72 + aw2(2, 2, 3)*cs0*cs11*inv_Z - aw1(2, 4)*cs70 + aw2(2, 2, &
-               4)*cs0*inv_Z*ps0(4)*s_2 + cs27*cs71
+               4)*cs0*inv_Z*ps0(4)*s_2 + cs27*cs71)
             hvp_f2_r_rA(2, 3) = &
-               -at1(3, 1)*cs64 - at1(3, 2)*cs65 - at1(3, 4)*cs67 - aw1(3, 1)*cs68 - aw1(3, 2)*cs69 &
-               - aw1(3, 3)*cs72 - aw1(3, 4)*cs70 + cs28*cs71 - cs73
+               lsf_scale*(-at1(3, 1)*cs64 - at1(3, 2)*cs65 - at1(3, 4)*cs67 - aw1(3, 1)*cs68 - &
+               aw1(3, 2)*cs69 - aw1(3, 3)*cs72 - aw1(3, 4)*cs70 + cs28*cs71 - cs73)
             hvp_f2_r_rA(3, 1) = &
-               -at1(1, 1)*cs77 - at1(1, 2)*cs78 - at1(1, 4)*cs79 - aw1(1, 1)*cs80 - aw1(1, 2)*cs81 &
-               - aw1(1, 3)*cs84 - aw1(1, 4)*cs82 + cs22*cs83 - cs60
+               lsf_scale*(-at1(1, 1)*cs77 - at1(1, 2)*cs78 - at1(1, 4)*cs79 - aw1(1, 1)*cs80 - &
+               aw1(1, 2)*cs81 - aw1(1, 3)*cs84 - aw1(1, 4)*cs82 + cs22*cs83 - cs60)
             hvp_f2_r_rA(3, 2) = &
-               -at1(2, 1)*cs77 - at1(2, 2)*cs78 - at1(2, 4)*cs79 - aw1(2, 1)*cs80 - aw1(2, 2)*cs81 &
-               - aw1(2, 3)*cs84 - aw1(2, 4)*cs82 + cs27*cs83 - cs73
+               lsf_scale*(-at1(2, 1)*cs77 - at1(2, 2)*cs78 - at1(2, 4)*cs79 - aw1(2, 1)*cs80 - &
+               aw1(2, 2)*cs81 - aw1(2, 3)*cs84 - aw1(2, 4)*cs82 + cs27*cs83 - cs73)
             hvp_f2_r_rA(3, 3) = &
-               -at1(3, 1)*cs77 - at2(3, 3, 1)*cs43 - at1(3, 2)*cs78 - at2(3, 3, 2)*cs37 - at2(3, &
-               3, 3)*cs29 - at1(3, 4)*cs79 - at2(3, 3, 4)*cs34 - aw1(3, 1)*cs80 + &
+               lsf_scale*(-at1(3, 1)*cs77 - at2(3, 3, 1)*cs43 - at1(3, 2)*cs78 - at2(3, 3, 2)*cs37 &
+               - at2(3, 3, 3)*cs29 - at1(3, 4)*cs79 - at2(3, 3, 4)*cs34 - aw1(3, 1)*cs80 + &
                (1.0_wp/6.0_wp)*aw2(3, 3, 1)*cs0*cs18*inv_Z*s_3 - aw1(3, 2)*cs81 - aw2(3, 3, &
                2)*cs10 - aw1(3, 3)*cs84 + aw2(3, 3, 3)*cs0*cs11*inv_Z - aw1(3, 4)*cs82 + aw2(3, 3, &
-               4)*cs0*inv_Z*ps0(4)*s_2 + cs28*cs83
+               4)*cs0*inv_Z*ps0(4)*s_2 + cs28*cs83)
          end block
       case default
          block
@@ -2259,183 +2270,195 @@ contains
             cs504 = cs13*cs476
             cs505 = cs113*cs131
             hvp_f1_rA(1) = &
-               at1(1, 1)*cs19 - at1(1, 2)*cs8 + at1(1, 4)*cs3 + aw1(1, 1)*cs24 - aw1(1, 2)*cs10 + &
-               aw1(1, 3)*cs14 + aw1(1, 4)*cs5 + cs26*cs30
+               lsf_scale*(at1(1, 1)*cs19 - at1(1, 2)*cs8 + at1(1, 4)*cs3 + aw1(1, 1)*cs24 - aw1(1, &
+               2)*cs10 + aw1(1, 3)*cs14 + aw1(1, 4)*cs5 + cs26*cs30)
             hvp_f1_rA(2) = &
-               at1(2, 1)*cs19 - at1(2, 2)*cs8 + at1(2, 4)*cs3 + aw1(2, 1)*cs24 - aw1(2, 2)*cs10 + &
-               aw1(2, 3)*cs14 + aw1(2, 4)*cs5 + cs30*cs31
+               lsf_scale*(at1(2, 1)*cs19 - at1(2, 2)*cs8 + at1(2, 4)*cs3 + aw1(2, 1)*cs24 - aw1(2, &
+               2)*cs10 + aw1(2, 3)*cs14 + aw1(2, 4)*cs5 + cs30*cs31)
             hvp_f1_rA(3) = &
-               at1(3, 1)*cs19 - at1(3, 2)*cs8 + at1(3, 4)*cs3 + aw1(3, 1)*cs24 - aw1(3, 2)*cs10 + &
-               aw1(3, 3)*cs14 + aw1(3, 4)*cs5 + cs30*cs32
+               lsf_scale*(at1(3, 1)*cs19 - at1(3, 2)*cs8 + at1(3, 4)*cs3 + aw1(3, 1)*cs24 - aw1(3, &
+               2)*cs10 + aw1(3, 3)*cs14 + aw1(3, 4)*cs5 + cs30*cs32)
             hvp_f2_r_rA(1, 1) = &
-               -at1(1, 1)*cs61 - at2(1, 1, 1)*cs51 - at1(1, 2)*cs55 - at2(1, 1, 2)*cs45 - at2(1, &
-               1, 3)*cs33 - at1(1, 4)*cs53 - at2(1, 1, 4)*cs39 - aw1(1, 1)*cs50 + &
+               lsf_scale*(-at1(1, 1)*cs61 - at2(1, 1, 1)*cs51 - at1(1, 2)*cs55 - at2(1, 1, 2)*cs45 &
+               - at2(1, 1, 3)*cs33 - at1(1, 4)*cs53 - at2(1, 1, 4)*cs39 - aw1(1, 1)*cs50 + &
                (1.0_wp/6.0_wp)*aw2(1, 1, 1)*cs0*cs22*inv_Z*s_3 - aw1(1, 2)*cs46 - aw2(1, 1, &
                2)*cs10 - aw1(1, 3)*cs38 + aw2(1, 1, 3)*cs0*cs13*inv_Z - aw1(1, 4)*cs44 + aw2(1, 1, &
-               4)*cs0*inv_Z*ps0(4)*s_2 + cs26*cs76
+               4)*cs0*inv_Z*ps0(4)*s_2 + cs26*cs76)
             hvp_f2_r_rA(1, 2) = &
-               -at1(2, 1)*cs61 - at1(2, 2)*cs55 - at1(2, 4)*cs53 - aw1(2, 1)*cs50 - aw1(2, 2)*cs46 &
-               - aw1(2, 3)*cs38 - aw1(2, 4)*cs44 + cs31*cs76 - cs77
+               lsf_scale*(-at1(2, 1)*cs61 - at1(2, 2)*cs55 - at1(2, 4)*cs53 - aw1(2, 1)*cs50 - &
+               aw1(2, 2)*cs46 - aw1(2, 3)*cs38 - aw1(2, 4)*cs44 + cs31*cs76 - cs77)
             hvp_f2_r_rA(1, 3) = &
-               -at1(3, 1)*cs61 - at1(3, 2)*cs55 - at1(3, 4)*cs53 - aw1(3, 1)*cs50 - aw1(3, 2)*cs46 &
-               - aw1(3, 3)*cs38 - aw1(3, 4)*cs44 + cs32*cs76 - cs78
+               lsf_scale*(-at1(3, 1)*cs61 - at1(3, 2)*cs55 - at1(3, 4)*cs53 - aw1(3, 1)*cs50 - &
+               aw1(3, 2)*cs46 - aw1(3, 3)*cs38 - aw1(3, 4)*cs44 + cs32*cs76 - cs78)
             hvp_f2_r_rA(2, 1) = &
-               -at1(1, 1)*cs86 - at1(1, 2)*cs88 - at1(1, 4)*cs89 - aw1(1, 1)*cs92 - aw1(1, 2)*cs93 &
-               - aw1(1, 3)*cs103 - aw1(1, 4)*cs96 + cs102*cs26 - cs77
+               lsf_scale*(-at1(1, 1)*cs86 - at1(1, 2)*cs88 - at1(1, 4)*cs89 - aw1(1, 1)*cs92 - &
+               aw1(1, 2)*cs93 - aw1(1, 3)*cs103 - aw1(1, 4)*cs96 + cs102*cs26 - cs77)
             hvp_f2_r_rA(2, 2) = &
-               -at1(2, 1)*cs86 - at2(2, 2, 1)*cs51 - at1(2, 2)*cs88 - at2(2, 2, 2)*cs45 - at2(2, &
-               2, 3)*cs33 - at1(2, 4)*cs89 - at2(2, 2, 4)*cs39 - aw1(2, 1)*cs92 + &
+               lsf_scale*(-at1(2, 1)*cs86 - at2(2, 2, 1)*cs51 - at1(2, 2)*cs88 - at2(2, 2, 2)*cs45 &
+               - at2(2, 2, 3)*cs33 - at1(2, 4)*cs89 - at2(2, 2, 4)*cs39 - aw1(2, 1)*cs92 + &
                (1.0_wp/6.0_wp)*aw2(2, 2, 1)*cs0*cs22*inv_Z*s_3 - aw1(2, 2)*cs93 - aw2(2, 2, &
                2)*cs10 - aw1(2, 3)*cs103 + aw2(2, 2, 3)*cs0*cs13*inv_Z - aw1(2, 4)*cs96 + aw2(2, &
-               2, 4)*cs0*inv_Z*ps0(4)*s_2 + cs102*cs31
+               2, 4)*cs0*inv_Z*ps0(4)*s_2 + cs102*cs31)
             hvp_f2_r_rA(2, 3) = &
-               -at1(3, 1)*cs86 - at1(3, 2)*cs88 - at1(3, 4)*cs89 - aw1(3, 1)*cs92 - aw1(3, 2)*cs93 &
-               - aw1(3, 3)*cs103 - aw1(3, 4)*cs96 + cs102*cs32 - cs104
+               lsf_scale*(-at1(3, 1)*cs86 - at1(3, 2)*cs88 - at1(3, 4)*cs89 - aw1(3, 1)*cs92 - &
+               aw1(3, 2)*cs93 - aw1(3, 3)*cs103 - aw1(3, 4)*cs96 + cs102*cs32 - cs104)
             hvp_f2_r_rA(3, 1) = &
-               -at1(1, 1)*cs112 - at1(1, 2)*cs114 - at1(1, 4)*cs115 - aw1(1, 1)*cs118 - aw1(1, &
-               2)*cs119 - aw1(1, 3)*cs129 - aw1(1, 4)*cs122 + cs128*cs26 - cs78
+               lsf_scale*(-at1(1, 1)*cs112 - at1(1, 2)*cs114 - at1(1, 4)*cs115 - aw1(1, 1)*cs118 - &
+               aw1(1, 2)*cs119 - aw1(1, 3)*cs129 - aw1(1, 4)*cs122 + cs128*cs26 - cs78)
             hvp_f2_r_rA(3, 2) = &
-               -at1(2, 1)*cs112 - at1(2, 2)*cs114 - at1(2, 4)*cs115 - aw1(2, 1)*cs118 - aw1(2, &
-               2)*cs119 - aw1(2, 3)*cs129 - aw1(2, 4)*cs122 - cs104 + cs128*cs31
+               lsf_scale*(-at1(2, 1)*cs112 - at1(2, 2)*cs114 - at1(2, 4)*cs115 - aw1(2, 1)*cs118 - &
+               aw1(2, 2)*cs119 - aw1(2, 3)*cs129 - aw1(2, 4)*cs122 - cs104 + cs128*cs31)
             hvp_f2_r_rA(3, 3) = &
-               -at1(3, 1)*cs112 - at2(3, 3, 1)*cs51 - at1(3, 2)*cs114 - at2(3, 3, 2)*cs45 - at2(3, &
-               3, 3)*cs33 - at1(3, 4)*cs115 - at2(3, 3, 4)*cs39 - aw1(3, 1)*cs118 + &
-               (1.0_wp/6.0_wp)*aw2(3, 3, 1)*cs0*cs22*inv_Z*s_3 - aw1(3, 2)*cs119 - aw2(3, 3, &
+               lsf_scale*(-at1(3, 1)*cs112 - at2(3, 3, 1)*cs51 - at1(3, 2)*cs114 - at2(3, 3, &
+               2)*cs45 - at2(3, 3, 3)*cs33 - at1(3, 4)*cs115 - at2(3, 3, 4)*cs39 - aw1(3, 1)*cs118 &
+               + (1.0_wp/6.0_wp)*aw2(3, 3, 1)*cs0*cs22*inv_Z*s_3 - aw1(3, 2)*cs119 - aw2(3, 3, &
                2)*cs10 - aw1(3, 3)*cs129 + aw2(3, 3, 3)*cs0*cs13*inv_Z - aw1(3, 4)*cs122 + aw2(3, &
-               3, 4)*cs0*inv_Z*ps0(4)*s_2 + cs128*cs32
+               3, 4)*cs0*inv_Z*ps0(4)*s_2 + cs128*cs32)
             hvp_f3_rr_rA(1, 1, 1) = &
-               -at1(1, 1)*cs214 - at2(1, 1, 1)*cs210 - at3(1, 1, 1, 1)*cs51 - at1(1, 2)*cs203 - &
-               at2(1, 1, 2)*cs192 - at3(1, 1, 1, 2)*cs45 - at2(1, 1, 3)*cs163 - at3(1, 1, 1, &
-               3)*cs33 - at1(1, 4)*cs196 - at2(1, 1, 4)*cs180 - at3(1, 1, 1, 4)*cs39 - aw1(1, &
-               1)*cs154 - aw2(1, 1, 1)*cs138 + (1.0_wp/6.0_wp)*aw3(1, 1, 1, 1)*cs0*cs22*inv_Z*s_3 &
-               - aw1(1, 2)*cs151 - aw2(1, 1, 2)*cs135 - aw3(1, 1, 1, 2)*cs10 - aw1(1, 3)*cs145 - &
-               aw2(1, 1, 3)*cs132 + aw3(1, 1, 1, 3)*cs0*cs13*inv_Z - aw1(1, 4)*cs147 - aw2(1, 1, &
-               4)*cs136 + aw3(1, 1, 1, 4)*cs0*inv_Z*ps0(4)*s_2 + cs221*cs26
+               lsf_scale*(-at1(1, 1)*cs214 - at2(1, 1, 1)*cs210 - at3(1, 1, 1, 1)*cs51 - at1(1, &
+               2)*cs203 - at2(1, 1, 2)*cs192 - at3(1, 1, 1, 2)*cs45 - at2(1, 1, 3)*cs163 - at3(1, &
+               1, 1, 3)*cs33 - at1(1, 4)*cs196 - at2(1, 1, 4)*cs180 - at3(1, 1, 1, 4)*cs39 - &
+               aw1(1, 1)*cs154 - aw2(1, 1, 1)*cs138 + (1.0_wp/6.0_wp)*aw3(1, 1, 1, &
+               1)*cs0*cs22*inv_Z*s_3 - aw1(1, 2)*cs151 - aw2(1, 1, 2)*cs135 - aw3(1, 1, 1, 2)*cs10 &
+               - aw1(1, 3)*cs145 - aw2(1, 1, 3)*cs132 + aw3(1, 1, 1, 3)*cs0*cs13*inv_Z - aw1(1, &
+               4)*cs147 - aw2(1, 1, 4)*cs136 + aw3(1, 1, 1, 4)*cs0*inv_Z*ps0(4)*s_2 + cs221*cs26)
             hvp_f3_rr_rA(1, 1, 2) = &
-               -at2(1, 2, 1)*cs210 - at1(2, 1)*cs214 - at2(1, 2, 2)*cs192 - at1(2, 2)*cs203 - &
-               at2(1, 2, 3)*cs163 - at2(1, 2, 4)*cs180 - at1(2, 4)*cs196 - aw2(1, 2, 1)*cs138 - &
-               aw1(2, 1)*cs154 - aw2(1, 2, 2)*cs135 - aw1(2, 2)*cs151 - aw2(1, 2, 3)*cs132 - &
-               aw1(2, 3)*cs145 - aw2(1, 2, 4)*cs136 - aw1(2, 4)*cs147 + cs221*cs31 - cs222
+               lsf_scale*(-at2(1, 2, 1)*cs210 - at1(2, 1)*cs214 - at2(1, 2, 2)*cs192 - at1(2, &
+               2)*cs203 - at2(1, 2, 3)*cs163 - at2(1, 2, 4)*cs180 - at1(2, 4)*cs196 - aw2(1, 2, &
+               1)*cs138 - aw1(2, 1)*cs154 - aw2(1, 2, 2)*cs135 - aw1(2, 2)*cs151 - aw2(1, 2, &
+               3)*cs132 - aw1(2, 3)*cs145 - aw2(1, 2, 4)*cs136 - aw1(2, 4)*cs147 + cs221*cs31 - &
+               cs222)
             hvp_f3_rr_rA(1, 1, 3) = &
-               -at2(1, 3, 1)*cs210 - at1(3, 1)*cs214 - at2(1, 3, 2)*cs192 - at1(3, 2)*cs203 - &
-               at2(1, 3, 3)*cs163 - at2(1, 3, 4)*cs180 - at1(3, 4)*cs196 - aw2(1, 3, 1)*cs138 - &
-               aw1(3, 1)*cs154 - aw2(1, 3, 2)*cs135 - aw1(3, 2)*cs151 - aw2(1, 3, 3)*cs132 - &
-               aw1(3, 3)*cs145 - aw2(1, 3, 4)*cs136 - aw1(3, 4)*cs147 + cs221*cs32 - cs223
+               lsf_scale*(-at2(1, 3, 1)*cs210 - at1(3, 1)*cs214 - at2(1, 3, 2)*cs192 - at1(3, &
+               2)*cs203 - at2(1, 3, 3)*cs163 - at2(1, 3, 4)*cs180 - at1(3, 4)*cs196 - aw2(1, 3, &
+               1)*cs138 - aw1(3, 1)*cs154 - aw2(1, 3, 2)*cs135 - aw1(3, 2)*cs151 - aw2(1, 3, &
+               3)*cs132 - aw1(3, 3)*cs145 - aw2(1, 3, 4)*cs136 - aw1(3, 4)*cs147 + cs221*cs32 - &
+               cs223)
             t_hvp_f3_rr_rA_010 = &
-               -at1(1, 1)*cs244 - at2(1, 1, 1)*cs255 - at2(1, 2, 1)*cs258 - at1(1, 2)*cs276 - &
-               at2(1, 1, 2)*cs286 - at2(1, 2, 2)*cs288 - at2(1, 1, 3)*cs295 - at2(1, 2, 3)*cs296 - &
-               at1(1, 4)*cs309 - at2(1, 1, 4)*cs316 - at2(1, 2, 4)*cs318 - aw1(1, 1)*cs319 - &
-               aw2(1, 1, 1)*cs321 - aw2(1, 2, 1)*cs50 - aw1(1, 2)*cs322 - aw2(1, 1, 2)*cs93 - &
-               aw2(1, 2, 2)*cs46 - aw1(1, 3)*cs327 - aw2(1, 1, 3)*cs103 - aw2(1, 2, 3)*cs38 - &
-               aw1(1, 4)*cs323 - aw2(1, 1, 4)*cs96 - aw2(1, 2, 4)*cs44 - cs222 + cs26*cs326
+               lsf_scale*(-at1(1, 1)*cs244 - at2(1, 1, 1)*cs255 - at2(1, 2, 1)*cs258 - at1(1, &
+               2)*cs276 - at2(1, 1, 2)*cs286 - at2(1, 2, 2)*cs288 - at2(1, 1, 3)*cs295 - at2(1, 2, &
+               3)*cs296 - at1(1, 4)*cs309 - at2(1, 1, 4)*cs316 - at2(1, 2, 4)*cs318 - aw1(1, &
+               1)*cs319 - aw2(1, 1, 1)*cs321 - aw2(1, 2, 1)*cs50 - aw1(1, 2)*cs322 - aw2(1, 1, &
+               2)*cs93 - aw2(1, 2, 2)*cs46 - aw1(1, 3)*cs327 - aw2(1, 1, 3)*cs103 - aw2(1, 2, &
+               3)*cs38 - aw1(1, 4)*cs323 - aw2(1, 1, 4)*cs96 - aw2(1, 2, 4)*cs44 - cs222 + &
+               cs26*cs326)
             hvp_f3_rr_rA(1, 2, 1) = t_hvp_f3_rr_rA_010
             hvp_f3_rr_rA(2, 1, 1) = t_hvp_f3_rr_rA_010
             t_hvp_f3_rr_rA_011 = &
-               -at2(1, 2, 1)*cs255 - at1(2, 1)*cs244 - at2(2, 2, 1)*cs258 - at2(1, 2, 2)*cs286 - &
-               at1(2, 2)*cs276 - at2(2, 2, 2)*cs288 - at2(1, 2, 3)*cs295 - at2(2, 2, 3)*cs296 - &
-               at2(1, 2, 4)*cs316 - at1(2, 4)*cs309 - at2(2, 2, 4)*cs318 - aw2(1, 2, 1)*cs321 - &
-               aw1(2, 1)*cs319 - aw2(2, 2, 1)*cs50 - aw2(1, 2, 2)*cs93 - aw1(2, 2)*cs322 - aw2(2, &
-               2, 2)*cs46 - aw2(1, 2, 3)*cs103 - aw1(2, 3)*cs327 - aw2(2, 2, 3)*cs38 - aw2(1, 2, &
-               4)*cs96 - aw1(2, 4)*cs323 - aw2(2, 2, 4)*cs44 + cs31*cs326 - cs328
+               lsf_scale*(-at2(1, 2, 1)*cs255 - at1(2, 1)*cs244 - at2(2, 2, 1)*cs258 - at2(1, 2, &
+               2)*cs286 - at1(2, 2)*cs276 - at2(2, 2, 2)*cs288 - at2(1, 2, 3)*cs295 - at2(2, 2, &
+               3)*cs296 - at2(1, 2, 4)*cs316 - at1(2, 4)*cs309 - at2(2, 2, 4)*cs318 - aw2(1, 2, &
+               1)*cs321 - aw1(2, 1)*cs319 - aw2(2, 2, 1)*cs50 - aw2(1, 2, 2)*cs93 - aw1(2, &
+               2)*cs322 - aw2(2, 2, 2)*cs46 - aw2(1, 2, 3)*cs103 - aw1(2, 3)*cs327 - aw2(2, 2, &
+               3)*cs38 - aw2(1, 2, 4)*cs96 - aw1(2, 4)*cs323 - aw2(2, 2, 4)*cs44 + cs31*cs326 - &
+               cs328)
             hvp_f3_rr_rA(1, 2, 2) = t_hvp_f3_rr_rA_011
             hvp_f3_rr_rA(2, 1, 2) = t_hvp_f3_rr_rA_011
             t_hvp_f3_rr_rA_012 = &
-               -at2(1, 3, 1)*cs255 - at1(3, 1)*cs244 - at1(3, 2)*cs276 - at1(3, 4)*cs309 - aw2(1, &
-               3, 1)*cs321 - aw1(3, 1)*cs319 - aw1(3, 2)*cs322 - aw1(3, 3)*cs327 - aw1(3, 4)*cs323 &
-               + cs32*cs326 - cs337 - cs338
+               lsf_scale*(-at2(1, 3, 1)*cs255 - at1(3, 1)*cs244 - at1(3, 2)*cs276 - at1(3, &
+               4)*cs309 - aw2(1, 3, 1)*cs321 - aw1(3, 1)*cs319 - aw1(3, 2)*cs322 - aw1(3, 3)*cs327 &
+               - aw1(3, 4)*cs323 + cs32*cs326 - cs337 - cs338)
             hvp_f3_rr_rA(1, 2, 3) = t_hvp_f3_rr_rA_012
             hvp_f3_rr_rA(2, 1, 3) = t_hvp_f3_rr_rA_012
             t_hvp_f3_rr_rA_020 = &
-               -at1(1, 1)*cs351 - at2(1, 1, 1)*cs355 - at2(1, 3, 1)*cs258 - at1(1, 2)*cs364 - &
-               at2(1, 1, 2)*cs369 - at2(1, 3, 2)*cs288 - at2(1, 1, 3)*cs372 - at2(1, 3, 3)*cs296 - &
-               at1(1, 4)*cs380 - at2(1, 1, 4)*cs384 - at2(1, 3, 4)*cs318 - aw1(1, 1)*cs385 - &
-               aw2(1, 1, 1)*cs387 - aw2(1, 3, 1)*cs50 - aw1(1, 2)*cs388 - aw2(1, 1, 2)*cs119 - &
-               aw2(1, 3, 2)*cs46 - aw1(1, 3)*cs392 - aw2(1, 1, 3)*cs129 - aw2(1, 3, 3)*cs38 - &
-               aw1(1, 4)*cs389 - aw2(1, 1, 4)*cs122 - aw2(1, 3, 4)*cs44 - cs223 + cs26*cs391
+               lsf_scale*(-at1(1, 1)*cs351 - at2(1, 1, 1)*cs355 - at2(1, 3, 1)*cs258 - at1(1, &
+               2)*cs364 - at2(1, 1, 2)*cs369 - at2(1, 3, 2)*cs288 - at2(1, 1, 3)*cs372 - at2(1, 3, &
+               3)*cs296 - at1(1, 4)*cs380 - at2(1, 1, 4)*cs384 - at2(1, 3, 4)*cs318 - aw1(1, &
+               1)*cs385 - aw2(1, 1, 1)*cs387 - aw2(1, 3, 1)*cs50 - aw1(1, 2)*cs388 - aw2(1, 1, &
+               2)*cs119 - aw2(1, 3, 2)*cs46 - aw1(1, 3)*cs392 - aw2(1, 1, 3)*cs129 - aw2(1, 3, &
+               3)*cs38 - aw1(1, 4)*cs389 - aw2(1, 1, 4)*cs122 - aw2(1, 3, 4)*cs44 - cs223 + &
+               cs26*cs391)
             hvp_f3_rr_rA(1, 3, 1) = t_hvp_f3_rr_rA_020
             hvp_f3_rr_rA(3, 1, 1) = t_hvp_f3_rr_rA_020
             t_hvp_f3_rr_rA_021 = &
-               -at1(2, 1)*cs351 - at1(2, 2)*cs364 - at1(2, 4)*cs380 - aw1(2, 1)*cs385 - aw1(2, &
-               2)*cs388 - aw1(2, 3)*cs392 - aw1(2, 4)*cs389 + cs31*cs391 - cs329 - cs330 - cs331 - &
-               cs332 - cs333 - cs334 - cs335 - cs336 - cs338 - cs393
+               lsf_scale*(-at1(2, 1)*cs351 - at1(2, 2)*cs364 - at1(2, 4)*cs380 - aw1(2, 1)*cs385 - &
+               aw1(2, 2)*cs388 - aw1(2, 3)*cs392 - aw1(2, 4)*cs389 + cs31*cs391 - cs329 - cs330 - &
+               cs331 - cs332 - cs333 - cs334 - cs335 - cs336 - cs338 - cs393)
             hvp_f3_rr_rA(1, 3, 2) = t_hvp_f3_rr_rA_021
             hvp_f3_rr_rA(3, 1, 2) = t_hvp_f3_rr_rA_021
             t_hvp_f3_rr_rA_022 = &
-               -at2(1, 3, 1)*cs355 - at1(3, 1)*cs351 - at2(3, 3, 1)*cs258 - at2(1, 3, 2)*cs369 - &
-               at1(3, 2)*cs364 - at2(3, 3, 2)*cs288 - at2(1, 3, 3)*cs372 - at2(3, 3, 3)*cs296 - &
-               at2(1, 3, 4)*cs384 - at1(3, 4)*cs380 - at2(3, 3, 4)*cs318 - aw2(1, 3, 1)*cs387 - &
-               aw1(3, 1)*cs385 - aw2(3, 3, 1)*cs50 - aw2(1, 3, 2)*cs119 - aw1(3, 2)*cs388 - aw2(3, &
-               3, 2)*cs46 - aw2(1, 3, 3)*cs129 - aw1(3, 3)*cs392 - aw2(3, 3, 3)*cs38 - aw2(1, 3, &
-               4)*cs122 - aw1(3, 4)*cs389 - aw2(3, 3, 4)*cs44 + cs32*cs391 - cs394
+               lsf_scale*(-at2(1, 3, 1)*cs355 - at1(3, 1)*cs351 - at2(3, 3, 1)*cs258 - at2(1, 3, &
+               2)*cs369 - at1(3, 2)*cs364 - at2(3, 3, 2)*cs288 - at2(1, 3, 3)*cs372 - at2(3, 3, &
+               3)*cs296 - at2(1, 3, 4)*cs384 - at1(3, 4)*cs380 - at2(3, 3, 4)*cs318 - aw2(1, 3, &
+               1)*cs387 - aw1(3, 1)*cs385 - aw2(3, 3, 1)*cs50 - aw2(1, 3, 2)*cs119 - aw1(3, &
+               2)*cs388 - aw2(3, 3, 2)*cs46 - aw2(1, 3, 3)*cs129 - aw1(3, 3)*cs392 - aw2(3, 3, &
+               3)*cs38 - aw2(1, 3, 4)*cs122 - aw1(3, 4)*cs389 - aw2(3, 3, 4)*cs44 + cs32*cs391 - &
+               cs394)
             hvp_f3_rr_rA(1, 3, 3) = t_hvp_f3_rr_rA_022
             hvp_f3_rr_rA(3, 1, 3) = t_hvp_f3_rr_rA_022
             hvp_f3_rr_rA(2, 2, 1) = &
-               -at1(1, 1)*cs408 - at2(1, 2, 1)*cs414 - at1(1, 2)*cs416 - at2(1, 2, 2)*cs418 - &
-               at2(1, 2, 3)*cs421 - at1(1, 4)*cs428 - at2(1, 2, 4)*cs430 - aw1(1, 1)*cs431 - &
-               aw2(1, 2, 1)*cs432 - aw1(1, 2)*cs433 - aw2(1, 2, 2)*cs434 - aw1(1, 3)*cs439 - &
-               aw2(1, 2, 3)*cs440 - aw1(1, 4)*cs435 - aw2(1, 2, 4)*cs436 + cs26*cs438 - cs328
+               lsf_scale*(-at1(1, 1)*cs408 - at2(1, 2, 1)*cs414 - at1(1, 2)*cs416 - at2(1, 2, &
+               2)*cs418 - at2(1, 2, 3)*cs421 - at1(1, 4)*cs428 - at2(1, 2, 4)*cs430 - aw1(1, &
+               1)*cs431 - aw2(1, 2, 1)*cs432 - aw1(1, 2)*cs433 - aw2(1, 2, 2)*cs434 - aw1(1, &
+               3)*cs439 - aw2(1, 2, 3)*cs440 - aw1(1, 4)*cs435 - aw2(1, 2, 4)*cs436 + cs26*cs438 - &
+               cs328)
             hvp_f3_rr_rA(2, 2, 2) = &
-               -at1(2, 1)*cs408 - at2(2, 2, 1)*cs414 - at3(2, 2, 2, 1)*cs51 - at1(2, 2)*cs416 - &
-               at2(2, 2, 2)*cs418 - at3(2, 2, 2, 2)*cs45 - at2(2, 2, 3)*cs421 - at3(2, 2, 2, &
-               3)*cs33 - at1(2, 4)*cs428 - at2(2, 2, 4)*cs430 - at3(2, 2, 2, 4)*cs39 - aw1(2, &
-               1)*cs431 - aw2(2, 2, 1)*cs432 + (1.0_wp/6.0_wp)*aw3(2, 2, 2, 1)*cs0*cs22*inv_Z*s_3 &
-               - aw1(2, 2)*cs433 - aw2(2, 2, 2)*cs434 - aw3(2, 2, 2, 2)*cs10 - aw1(2, 3)*cs439 - &
-               aw2(2, 2, 3)*cs440 + aw3(2, 2, 2, 3)*cs0*cs13*inv_Z - aw1(2, 4)*cs435 - aw2(2, 2, &
-               4)*cs436 + aw3(2, 2, 2, 4)*cs0*inv_Z*ps0(4)*s_2 + cs31*cs438
+               lsf_scale*(-at1(2, 1)*cs408 - at2(2, 2, 1)*cs414 - at3(2, 2, 2, 1)*cs51 - at1(2, &
+               2)*cs416 - at2(2, 2, 2)*cs418 - at3(2, 2, 2, 2)*cs45 - at2(2, 2, 3)*cs421 - at3(2, &
+               2, 2, 3)*cs33 - at1(2, 4)*cs428 - at2(2, 2, 4)*cs430 - at3(2, 2, 2, 4)*cs39 - &
+               aw1(2, 1)*cs431 - aw2(2, 2, 1)*cs432 + (1.0_wp/6.0_wp)*aw3(2, 2, 2, &
+               1)*cs0*cs22*inv_Z*s_3 - aw1(2, 2)*cs433 - aw2(2, 2, 2)*cs434 - aw3(2, 2, 2, 2)*cs10 &
+               - aw1(2, 3)*cs439 - aw2(2, 2, 3)*cs440 + aw3(2, 2, 2, 3)*cs0*cs13*inv_Z - aw1(2, &
+               4)*cs435 - aw2(2, 2, 4)*cs436 + aw3(2, 2, 2, 4)*cs0*inv_Z*ps0(4)*s_2 + cs31*cs438)
             hvp_f3_rr_rA(2, 2, 3) = &
-               -at2(2, 3, 1)*cs414 - at1(3, 1)*cs408 - at2(2, 3, 2)*cs418 - at1(3, 2)*cs416 - &
-               at2(2, 3, 3)*cs421 - at2(2, 3, 4)*cs430 - at1(3, 4)*cs428 - aw2(2, 3, 1)*cs432 - &
-               aw1(3, 1)*cs431 - aw2(2, 3, 2)*cs434 - aw1(3, 2)*cs433 - aw2(2, 3, 3)*cs440 - &
-               aw1(3, 3)*cs439 - aw2(2, 3, 4)*cs436 - aw1(3, 4)*cs435 + cs32*cs438 - cs441
+               lsf_scale*(-at2(2, 3, 1)*cs414 - at1(3, 1)*cs408 - at2(2, 3, 2)*cs418 - at1(3, &
+               2)*cs416 - at2(2, 3, 3)*cs421 - at2(2, 3, 4)*cs430 - at1(3, 4)*cs428 - aw2(2, 3, &
+               1)*cs432 - aw1(3, 1)*cs431 - aw2(2, 3, 2)*cs434 - aw1(3, 2)*cs433 - aw2(2, 3, &
+               3)*cs440 - aw1(3, 3)*cs439 - aw2(2, 3, 4)*cs436 - aw1(3, 4)*cs435 + cs32*cs438 - &
+               cs441)
             t_hvp_f3_rr_rA_120 = &
-               -at1(1, 1)*cs447 - at2(1, 3, 1)*cs449 - at1(1, 2)*cs454 - at1(1, 4)*cs457 - aw1(1, &
-               1)*cs458 - aw2(1, 3, 1)*cs92 - aw1(1, 2)*cs459 - aw1(1, 3)*cs462 - aw1(1, 4)*cs460 &
-               + cs26*cs461 - cs337 - cs393
+               lsf_scale*(-at1(1, 1)*cs447 - at2(1, 3, 1)*cs449 - at1(1, 2)*cs454 - at1(1, &
+               4)*cs457 - aw1(1, 1)*cs458 - aw2(1, 3, 1)*cs92 - aw1(1, 2)*cs459 - aw1(1, 3)*cs462 &
+               - aw1(1, 4)*cs460 + cs26*cs461 - cs337 - cs393)
             hvp_f3_rr_rA(2, 3, 1) = t_hvp_f3_rr_rA_120
             hvp_f3_rr_rA(3, 2, 1) = t_hvp_f3_rr_rA_120
             t_hvp_f3_rr_rA_121 = &
-               -at1(2, 1)*cs447 - at2(2, 2, 1)*cs355 - at2(2, 3, 1)*cs449 - at1(2, 2)*cs454 - &
-               at2(2, 2, 2)*cs369 - at2(2, 3, 2)*cs286 - at2(2, 2, 3)*cs372 - at2(2, 3, 3)*cs295 - &
-               at1(2, 4)*cs457 - at2(2, 2, 4)*cs384 - at2(2, 3, 4)*cs316 - aw1(2, 1)*cs458 - &
-               aw2(2, 2, 1)*cs387 - aw2(2, 3, 1)*cs92 - aw1(2, 2)*cs459 - aw2(2, 2, 2)*cs119 - &
-               aw2(2, 3, 2)*cs93 - aw1(2, 3)*cs462 - aw2(2, 2, 3)*cs129 - aw2(2, 3, 3)*cs103 - &
-               aw1(2, 4)*cs460 - aw2(2, 2, 4)*cs122 - aw2(2, 3, 4)*cs96 + cs31*cs461 - cs441
+               lsf_scale*(-at1(2, 1)*cs447 - at2(2, 2, 1)*cs355 - at2(2, 3, 1)*cs449 - at1(2, &
+               2)*cs454 - at2(2, 2, 2)*cs369 - at2(2, 3, 2)*cs286 - at2(2, 2, 3)*cs372 - at2(2, 3, &
+               3)*cs295 - at1(2, 4)*cs457 - at2(2, 2, 4)*cs384 - at2(2, 3, 4)*cs316 - aw1(2, &
+               1)*cs458 - aw2(2, 2, 1)*cs387 - aw2(2, 3, 1)*cs92 - aw1(2, 2)*cs459 - aw2(2, 2, &
+               2)*cs119 - aw2(2, 3, 2)*cs93 - aw1(2, 3)*cs462 - aw2(2, 2, 3)*cs129 - aw2(2, 3, &
+               3)*cs103 - aw1(2, 4)*cs460 - aw2(2, 2, 4)*cs122 - aw2(2, 3, 4)*cs96 + cs31*cs461 - &
+               cs441)
             hvp_f3_rr_rA(2, 3, 2) = t_hvp_f3_rr_rA_121
             hvp_f3_rr_rA(3, 2, 2) = t_hvp_f3_rr_rA_121
             t_hvp_f3_rr_rA_122 = &
-               -at2(2, 3, 1)*cs355 - at1(3, 1)*cs447 - at2(3, 3, 1)*cs449 - at2(2, 3, 2)*cs369 - &
-               at1(3, 2)*cs454 - at2(3, 3, 2)*cs286 - at2(2, 3, 3)*cs372 - at2(3, 3, 3)*cs295 - &
-               at2(2, 3, 4)*cs384 - at1(3, 4)*cs457 - at2(3, 3, 4)*cs316 - aw2(2, 3, 1)*cs387 - &
-               aw1(3, 1)*cs458 - aw2(3, 3, 1)*cs92 - aw2(2, 3, 2)*cs119 - aw1(3, 2)*cs459 - aw2(3, &
-               3, 2)*cs93 - aw2(2, 3, 3)*cs129 - aw1(3, 3)*cs462 - aw2(3, 3, 3)*cs103 - aw2(2, 3, &
-               4)*cs122 - aw1(3, 4)*cs460 - aw2(3, 3, 4)*cs96 + cs32*cs461 - cs463
+               lsf_scale*(-at2(2, 3, 1)*cs355 - at1(3, 1)*cs447 - at2(3, 3, 1)*cs449 - at2(2, 3, &
+               2)*cs369 - at1(3, 2)*cs454 - at2(3, 3, 2)*cs286 - at2(2, 3, 3)*cs372 - at2(3, 3, &
+               3)*cs295 - at2(2, 3, 4)*cs384 - at1(3, 4)*cs457 - at2(3, 3, 4)*cs316 - aw2(2, 3, &
+               1)*cs387 - aw1(3, 1)*cs458 - aw2(3, 3, 1)*cs92 - aw2(2, 3, 2)*cs119 - aw1(3, &
+               2)*cs459 - aw2(3, 3, 2)*cs93 - aw2(2, 3, 3)*cs129 - aw1(3, 3)*cs462 - aw2(3, 3, &
+               3)*cs103 - aw2(2, 3, 4)*cs122 - aw1(3, 4)*cs460 - aw2(3, 3, 4)*cs96 + cs32*cs461 - &
+               cs463)
             hvp_f3_rr_rA(2, 3, 3) = t_hvp_f3_rr_rA_122
             hvp_f3_rr_rA(3, 2, 3) = t_hvp_f3_rr_rA_122
             hvp_f3_rr_rA(3, 3, 1) = &
-               -at1(1, 1)*cs477 - at2(1, 3, 1)*cs481 - at1(1, 2)*cs484 - at2(1, 3, 2)*cs486 - &
-               at2(1, 3, 3)*cs487 - at1(1, 4)*cs494 - at2(1, 3, 4)*cs496 - aw1(1, 1)*cs497 - &
-               aw2(1, 3, 1)*cs498 - aw1(1, 2)*cs499 - aw2(1, 3, 2)*cs500 - aw1(1, 3)*cs504 - &
-               aw2(1, 3, 3)*cs505 - aw1(1, 4)*cs501 - aw2(1, 3, 4)*cs502 + cs26*cs503 - cs394
+               lsf_scale*(-at1(1, 1)*cs477 - at2(1, 3, 1)*cs481 - at1(1, 2)*cs484 - at2(1, 3, &
+               2)*cs486 - at2(1, 3, 3)*cs487 - at1(1, 4)*cs494 - at2(1, 3, 4)*cs496 - aw1(1, &
+               1)*cs497 - aw2(1, 3, 1)*cs498 - aw1(1, 2)*cs499 - aw2(1, 3, 2)*cs500 - aw1(1, &
+               3)*cs504 - aw2(1, 3, 3)*cs505 - aw1(1, 4)*cs501 - aw2(1, 3, 4)*cs502 + cs26*cs503 - &
+               cs394)
             hvp_f3_rr_rA(3, 3, 2) = &
-               -at1(2, 1)*cs477 - at2(2, 3, 1)*cs481 - at1(2, 2)*cs484 - at2(2, 3, 2)*cs486 - &
-               at2(2, 3, 3)*cs487 - at1(2, 4)*cs494 - at2(2, 3, 4)*cs496 - aw1(2, 1)*cs497 - &
-               aw2(2, 3, 1)*cs498 - aw1(2, 2)*cs499 - aw2(2, 3, 2)*cs500 - aw1(2, 3)*cs504 - &
-               aw2(2, 3, 3)*cs505 - aw1(2, 4)*cs501 - aw2(2, 3, 4)*cs502 + cs31*cs503 - cs463
+               lsf_scale*(-at1(2, 1)*cs477 - at2(2, 3, 1)*cs481 - at1(2, 2)*cs484 - at2(2, 3, &
+               2)*cs486 - at2(2, 3, 3)*cs487 - at1(2, 4)*cs494 - at2(2, 3, 4)*cs496 - aw1(2, &
+               1)*cs497 - aw2(2, 3, 1)*cs498 - aw1(2, 2)*cs499 - aw2(2, 3, 2)*cs500 - aw1(2, &
+               3)*cs504 - aw2(2, 3, 3)*cs505 - aw1(2, 4)*cs501 - aw2(2, 3, 4)*cs502 + cs31*cs503 - &
+               cs463)
             hvp_f3_rr_rA(3, 3, 3) = &
-               -at1(3, 1)*cs477 - at2(3, 3, 1)*cs481 - at3(3, 3, 3, 1)*cs51 - at1(3, 2)*cs484 - &
-               at2(3, 3, 2)*cs486 - at3(3, 3, 3, 2)*cs45 - at2(3, 3, 3)*cs487 - at3(3, 3, 3, &
-               3)*cs33 - at1(3, 4)*cs494 - at2(3, 3, 4)*cs496 - at3(3, 3, 3, 4)*cs39 - aw1(3, &
-               1)*cs497 - aw2(3, 3, 1)*cs498 + (1.0_wp/6.0_wp)*aw3(3, 3, 3, 1)*cs0*cs22*inv_Z*s_3 &
-               - aw1(3, 2)*cs499 - aw2(3, 3, 2)*cs500 - aw3(3, 3, 3, 2)*cs10 - aw1(3, 3)*cs504 - &
-               aw2(3, 3, 3)*cs505 + aw3(3, 3, 3, 3)*cs0*cs13*inv_Z - aw1(3, 4)*cs501 - aw2(3, 3, &
-               4)*cs502 + aw3(3, 3, 3, 4)*cs0*inv_Z*ps0(4)*s_2 + cs32*cs503
+               lsf_scale*(-at1(3, 1)*cs477 - at2(3, 3, 1)*cs481 - at3(3, 3, 3, 1)*cs51 - at1(3, &
+               2)*cs484 - at2(3, 3, 2)*cs486 - at3(3, 3, 3, 2)*cs45 - at2(3, 3, 3)*cs487 - at3(3, &
+               3, 3, 3)*cs33 - at1(3, 4)*cs494 - at2(3, 3, 4)*cs496 - at3(3, 3, 3, 4)*cs39 - &
+               aw1(3, 1)*cs497 - aw2(3, 3, 1)*cs498 + (1.0_wp/6.0_wp)*aw3(3, 3, 3, &
+               1)*cs0*cs22*inv_Z*s_3 - aw1(3, 2)*cs499 - aw2(3, 3, 2)*cs500 - aw3(3, 3, 3, 2)*cs10 &
+               - aw1(3, 3)*cs504 - aw2(3, 3, 3)*cs505 + aw3(3, 3, 3, 3)*cs0*cs13*inv_Z - aw1(3, &
+               4)*cs501 - aw2(3, 3, 4)*cs502 + aw3(3, 3, 3, 4)*cs0*inv_Z*ps0(4)*s_2 + cs32*cs503)
          end block
       end select
 
    end subroutine svdw_hvp_eval
 
-   pure module subroutine svdw_radius_hvp_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ws0, ws1, ws2, &
-                                        atd0, atd1, atd2, awd0, awd1, awd2, max_deriv, &
+   pure module subroutine svdw_radius_hvp_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ws0, &
+                                        ws1, ws2, atd0, atd1, atd2, awd0, awd1, awd2, max_deriv, &
                                         hvp_f1_rad, hvp_f2_r_rad, hvp_f3_rr_rad)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
@@ -2445,6 +2468,9 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -2515,11 +2541,11 @@ contains
             cs7 = (1.0_wp/2.0_wp)*(ps0(1)*ps0(1)) - 1.0_wp/2.0_wp*ps0(2)
             cs8 = cs7*s_3
             hvp_f1_rad = &
-               -atd0(1)*cs1*(-cs5 + cs6*ps0(1)) + (1.0_wp/2.0_wp)*atd0(2)*cs0*inv_Z*s_3*ws0(1) - &
-               atd0(4)*cs1*s_2*ws0(4) - awd0(1)*cs1*cs8 + &
-               (1.0_wp/2.0_wp)*awd0(2)*cs0*inv_Z*ps0(1)*s_3 - awd0(3)*cs1*cs3 - awd0(4)*cs1*cs2 + &
-               cs0*(inv_Z*inv_Z)*(atd0(1)*cs8 - atd0(2)*cs4*ps0(1) + atd0(3)*cs3 + &
-               atd0(4)*cs2)*(cs2*ws0(4) + cs3*ws0(3) - cs5*ps0(1) + cs6*cs7)
+               lsf_scale*(-atd0(1)*cs1*(-cs5 + cs6*ps0(1)) + &
+               (1.0_wp/2.0_wp)*atd0(2)*cs0*inv_Z*s_3*ws0(1) - atd0(4)*cs1*s_2*ws0(4) - &
+               awd0(1)*cs1*cs8 + (1.0_wp/2.0_wp)*awd0(2)*cs0*inv_Z*ps0(1)*s_3 - awd0(3)*cs1*cs3 - &
+               awd0(4)*cs1*cs2 + cs0*(inv_Z*inv_Z)*(atd0(1)*cs8 - atd0(2)*cs4*ps0(1) + atd0(3)*cs3 &
+               + atd0(4)*cs2)*(cs2*ws0(4) + cs3*ws0(3) - cs5*ps0(1) + cs6*cs7))
          end block
       case (1)
          block
@@ -2585,36 +2611,39 @@ contains
             cs52 = cs13*ps1(3, 1) + cs4*ps1(3, 4) - cs51*ps0(1) + cs6*ps1(3, 3)
             cs53 = cs10*ps1(3, 1) - cs51
             hvp_f1_rad = &
-               -atd0(1)*cs1*cs12 + (1.0_wp/2.0_wp)*atd0(2)*cs0*inv_Z*s_3*ws0(1) - atd0(4)*cs3 - &
-               awd0(1)*cs14 + (1.0_wp/2.0_wp)*awd0(2)*cs0*inv_Z*ps0(1)*s_3 - awd0(3)*cs7 - &
-               awd0(4)*cs5 + cs0*cs15*cs16*cs17
+               lsf_scale*(-atd0(1)*cs1*cs12 + (1.0_wp/2.0_wp)*atd0(2)*cs0*inv_Z*s_3*ws0(1) - &
+               atd0(4)*cs3 - awd0(1)*cs14 + (1.0_wp/2.0_wp)*awd0(2)*cs0*inv_Z*ps0(1)*s_3 - &
+               awd0(3)*cs7 - awd0(4)*cs5 + cs0*cs15*cs16*cs17)
             hvp_f2_r_rad(1) = &
-               atd0(1)*(cs18*ws1(1, 2) + cs21*cs32 + cs24*cs40 - cs38*ws1(1, 1) - cs39*ps1(1, 1)) &
-               + atd1(1, 1)*cs33 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(1, 1) - cs24*cs37 - &
-               cs29*ps1(1, 1)) + atd1(1, 2)*cs30 + atd1(1, 3)*cs22 + atd0(4)*(-cs2*ws1(1, 4) + &
-               cs21*cs34 + cs28*cs35) + atd1(1, 4)*cs27 + awd0(1)*(-cs1*cs32 + cs13*cs28) - &
-               awd1(1, 1)*cs14 + awd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*ps1(1, 1)*s_3 - cs28*cs31) + &
-               awd1(1, 2)*cs19 - awd1(1, 3)*cs7 + awd0(4)*(-cs2*ps1(1, 4) + cs28*cs4) - awd1(1, &
-               4)*cs5 + cs16*(cs20*cs34*ws0(4) - cs24*cs45 + cs25*ws1(1, 3) + cs32*cs36 + &
-               cs41*ws1(1, 4) - cs42*ws1(1, 2) - cs43*ps1(1, 1) + cs44*ws1(1, 1)) + cs24*cs26
+               lsf_scale*(atd0(1)*(cs18*ws1(1, 2) + cs21*cs32 + cs24*cs40 - cs38*ws1(1, 1) - &
+               cs39*ps1(1, 1)) + atd1(1, 1)*cs33 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(1, &
+               1) - cs24*cs37 - cs29*ps1(1, 1)) + atd1(1, 2)*cs30 + atd1(1, 3)*cs22 + &
+               atd0(4)*(-cs2*ws1(1, 4) + cs21*cs34 + cs28*cs35) + atd1(1, 4)*cs27 + &
+               awd0(1)*(-cs1*cs32 + cs13*cs28) - awd1(1, 1)*cs14 + &
+               awd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*ps1(1, 1)*s_3 - cs28*cs31) + awd1(1, 2)*cs19 - &
+               awd1(1, 3)*cs7 + awd0(4)*(-cs2*ps1(1, 4) + cs28*cs4) - awd1(1, 4)*cs5 + &
+               cs16*(cs20*cs34*ws0(4) - cs24*cs45 + cs25*ws1(1, 3) + cs32*cs36 + cs41*ws1(1, 4) - &
+               cs42*ws1(1, 2) - cs43*ps1(1, 1) + cs44*ws1(1, 1)) + cs24*cs26)
             hvp_f2_r_rad(2) = &
-               atd0(1)*(cs18*ws1(2, 2) + cs21*cs48 - cs38*ws1(2, 1) - cs39*ps1(2, 1) + cs40*cs47) &
-               + atd1(2, 1)*cs33 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(2, 1) - cs29*ps1(2, &
-               1) - cs37*cs47) + atd1(2, 2)*cs30 + atd1(2, 3)*cs22 + atd0(4)*(-cs2*ws1(2, 4) + &
-               cs47*cs50 + cs49*ps1(2, 4)) + atd1(2, 4)*cs27 + awd0(1)*(-cs1*cs48 + cs44*cs47) - &
-               awd1(2, 1)*cs14 + awd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*ps1(2, 1)*s_3 - cs42*cs47) + &
-               awd1(2, 2)*cs19 - awd1(2, 3)*cs7 + awd0(4)*(-cs2*ps1(2, 4) + cs41*cs47) - awd1(2, &
-               4)*cs5 + cs16*(cs25*ws1(2, 3) + cs36*cs48 + cs41*ws1(2, 4) - cs42*ws1(2, 2) - &
-               cs43*ps1(2, 1) + cs44*ws1(2, 1) - cs45*cs47 + cs50*ps1(2, 4)) + cs26*cs47
+               lsf_scale*(atd0(1)*(cs18*ws1(2, 2) + cs21*cs48 - cs38*ws1(2, 1) - cs39*ps1(2, 1) + &
+               cs40*cs47) + atd1(2, 1)*cs33 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(2, 1) - &
+               cs29*ps1(2, 1) - cs37*cs47) + atd1(2, 2)*cs30 + atd1(2, 3)*cs22 + &
+               atd0(4)*(-cs2*ws1(2, 4) + cs47*cs50 + cs49*ps1(2, 4)) + atd1(2, 4)*cs27 + &
+               awd0(1)*(-cs1*cs48 + cs44*cs47) - awd1(2, 1)*cs14 + &
+               awd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*ps1(2, 1)*s_3 - cs42*cs47) + awd1(2, 2)*cs19 - &
+               awd1(2, 3)*cs7 + awd0(4)*(-cs2*ps1(2, 4) + cs41*cs47) - awd1(2, 4)*cs5 + &
+               cs16*(cs25*ws1(2, 3) + cs36*cs48 + cs41*ws1(2, 4) - cs42*ws1(2, 2) - cs43*ps1(2, 1) &
+               + cs44*ws1(2, 1) - cs45*cs47 + cs50*ps1(2, 4)) + cs26*cs47)
             hvp_f2_r_rad(3) = &
-               atd0(1)*(cs18*ws1(3, 2) + cs21*cs53 - cs38*ws1(3, 1) - cs39*ps1(3, 1) + cs40*cs52) &
-               + atd1(3, 1)*cs33 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(3, 1) - cs29*ps1(3, &
-               1) - cs37*cs52) + atd1(3, 2)*cs30 + atd1(3, 3)*cs22 + atd0(4)*(-cs2*ws1(3, 4) + &
-               cs49*ps1(3, 4) + cs50*cs52) + atd1(3, 4)*cs27 + awd0(1)*(-cs1*cs53 + cs44*cs52) - &
-               awd1(3, 1)*cs14 + awd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*ps1(3, 1)*s_3 - cs42*cs52) + &
-               awd1(3, 2)*cs19 - awd1(3, 3)*cs7 + awd0(4)*(-cs2*ps1(3, 4) + cs41*cs52) - awd1(3, &
-               4)*cs5 + cs16*(cs25*ws1(3, 3) + cs36*cs53 + cs41*ws1(3, 4) - cs42*ws1(3, 2) - &
-               cs43*ps1(3, 1) + cs44*ws1(3, 1) - cs45*cs52 + cs50*ps1(3, 4)) + cs26*cs52
+               lsf_scale*(atd0(1)*(cs18*ws1(3, 2) + cs21*cs53 - cs38*ws1(3, 1) - cs39*ps1(3, 1) + &
+               cs40*cs52) + atd1(3, 1)*cs33 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(3, 1) - &
+               cs29*ps1(3, 1) - cs37*cs52) + atd1(3, 2)*cs30 + atd1(3, 3)*cs22 + &
+               atd0(4)*(-cs2*ws1(3, 4) + cs49*ps1(3, 4) + cs50*cs52) + atd1(3, 4)*cs27 + &
+               awd0(1)*(-cs1*cs53 + cs44*cs52) - awd1(3, 1)*cs14 + &
+               awd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*ps1(3, 1)*s_3 - cs42*cs52) + awd1(3, 2)*cs19 - &
+               awd1(3, 3)*cs7 + awd0(4)*(-cs2*ps1(3, 4) + cs41*cs52) - awd1(3, 4)*cs5 + &
+               cs16*(cs25*ws1(3, 3) + cs36*cs53 + cs41*ws1(3, 4) - cs42*ws1(3, 2) - cs43*ps1(3, 1) &
+               + cs44*ws1(3, 1) - cs45*cs52 + cs50*ps1(3, 4)) + cs26*cs52)
          end block
       case default
          block
@@ -3100,40 +3129,40 @@ contains
                cs0*cs20*cs375*s_3 + cs0*cs20*ps0(1)*ps2(3, 3, 1)*s_3 - cs167*ps2(3, 3, 2) - &
                cs296*cs376
             hvp_f1_rad = &
-               -atd0(1)*cs1*cs14 + (1.0_wp/2.0_wp)*atd0(2)*cs0*inv_Z*s_3*ws0(1) - atd0(4)*cs3 - &
-               awd0(1)*cs19 + (1.0_wp/2.0_wp)*awd0(2)*cs0*inv_Z*ps0(1)*s_3 - awd0(4)*cs5 + &
-               cs0*cs20*cs23*cs24 - cs1*cs9
+               lsf_scale*(-atd0(1)*cs1*cs14 + (1.0_wp/2.0_wp)*atd0(2)*cs0*inv_Z*s_3*ws0(1) - &
+               atd0(4)*cs3 - awd0(1)*cs19 + (1.0_wp/2.0_wp)*awd0(2)*cs0*inv_Z*ps0(1)*s_3 - &
+               awd0(4)*cs5 + cs0*cs20*cs23*cs24 - cs1*cs9)
             hvp_f2_r_rad(1) = &
-               atd0(1)*(cs24*cs52 + cs32*cs53 + cs49*ws1(1, 2) - cs50*ws1(1, 1) - cs51*ws0(1)) + &
-               atd1(1, 1)*cs45 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(1, 1) - cs33*cs48 - &
-               cs47*ps1(1, 1)) + atd1(1, 2)*cs39 + atd1(1, 3)*cs29 + atd0(4)*(cs2*cs33 - &
-               cs35*ws1(1, 4) + cs46*ps1(1, 4)) + atd1(1, 4)*cs34 + awd0(1)*cs44 - awd1(1, 1)*cs19 &
-               + awd0(2)*cs40 + awd1(1, 2)*cs25 - awd1(1, 3)*cs26 + awd0(4)*cs38 - awd1(1, 4)*cs5 &
-               + cs23*(cs55 + cs57 - cs58*ws1(1, 2) - cs59*ps1(1, 1) + cs61 + cs62 + cs63*ws1(1, &
-               1) - cs68) + cs33*cs9
+               lsf_scale*(atd0(1)*(cs24*cs52 + cs32*cs53 + cs49*ws1(1, 2) - cs50*ws1(1, 1) - &
+               cs51*ws0(1)) + atd1(1, 1)*cs45 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(1, 1) - &
+               cs33*cs48 - cs47*ps1(1, 1)) + atd1(1, 2)*cs39 + atd1(1, 3)*cs29 + atd0(4)*(cs2*cs33 &
+               - cs35*ws1(1, 4) + cs46*ps1(1, 4)) + atd1(1, 4)*cs34 + awd0(1)*cs44 - awd1(1, &
+               1)*cs19 + awd0(2)*cs40 + awd1(1, 2)*cs25 - awd1(1, 3)*cs26 + awd0(4)*cs38 - awd1(1, &
+               4)*cs5 + cs23*(cs55 + cs57 - cs58*ws1(1, 2) - cs59*ps1(1, 1) + cs61 + cs62 + &
+               cs63*ws1(1, 1) - cs68) + cs33*cs9)
             hvp_f2_r_rad(2) = &
-               atd0(1)*(cs24*cs83 + cs49*ws1(2, 2) - cs50*ws1(2, 1) + cs53*cs71 - cs82*ws0(1)) + &
-               atd1(2, 1)*cs45 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(2, 1) - cs47*ps1(2, 1) &
-               - cs48*cs72) + atd1(2, 2)*cs39 + atd1(2, 3)*cs29 + atd0(4)*(cs2*cs72 - cs35*ws1(2, &
-               4) + cs46*ps1(2, 4)) + atd1(2, 4)*cs34 + awd0(1)*cs81 - awd1(2, 1)*cs19 + &
-               awd0(2)*cs76 + awd1(2, 2)*cs25 - awd1(2, 3)*cs26 + awd0(4)*cs75 - awd1(2, 4)*cs5 + &
-               cs23*(-cs58*ws1(2, 2) - cs59*ps1(2, 1) + cs63*ws1(2, 1) + cs84 + cs85 + cs86 + cs87 &
-               - cs88) + cs72*cs9
+               lsf_scale*(atd0(1)*(cs24*cs83 + cs49*ws1(2, 2) - cs50*ws1(2, 1) + cs53*cs71 - &
+               cs82*ws0(1)) + atd1(2, 1)*cs45 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(2, 1) - &
+               cs47*ps1(2, 1) - cs48*cs72) + atd1(2, 2)*cs39 + atd1(2, 3)*cs29 + atd0(4)*(cs2*cs72 &
+               - cs35*ws1(2, 4) + cs46*ps1(2, 4)) + atd1(2, 4)*cs34 + awd0(1)*cs81 - awd1(2, &
+               1)*cs19 + awd0(2)*cs76 + awd1(2, 2)*cs25 - awd1(2, 3)*cs26 + awd0(4)*cs75 - awd1(2, &
+               4)*cs5 + cs23*(-cs58*ws1(2, 2) - cs59*ps1(2, 1) + cs63*ws1(2, 1) + cs84 + cs85 + &
+               cs86 + cs87 - cs88) + cs72*cs9)
             hvp_f2_r_rad(3) = &
-               atd0(1)*(-cs101*ws0(1) + cs102*cs24 + cs49*ws1(3, 2) - cs50*ws1(3, 1) + cs53*cs91) &
-               + atd1(3, 1)*cs45 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(3, 1) - cs47*ps1(3, &
-               1) - cs48*cs92) + atd1(3, 2)*cs39 + atd1(3, 3)*cs29 + atd0(4)*(cs2*cs92 - &
-               cs35*ws1(3, 4) + cs46*ps1(3, 4)) + atd1(3, 4)*cs34 + awd0(1)*(cs100 + cs99) - &
+               lsf_scale*(atd0(1)*(-cs101*ws0(1) + cs102*cs24 + cs49*ws1(3, 2) - cs50*ws1(3, 1) + &
+               cs53*cs91) + atd1(3, 1)*cs45 + atd0(2)*((1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws1(3, 1) - &
+               cs47*ps1(3, 1) - cs48*cs92) + atd1(3, 2)*cs39 + atd1(3, 3)*cs29 + atd0(4)*(cs2*cs92 &
+               - cs35*ws1(3, 4) + cs46*ps1(3, 4)) + atd1(3, 4)*cs34 + awd0(1)*(cs100 + cs99) - &
                awd1(3, 1)*cs19 + awd0(2)*cs96 + awd1(3, 2)*cs25 - awd1(3, 3)*cs26 + awd0(4)*cs95 - &
                awd1(3, 4)*cs5 + cs23*(cs103 + cs104 + cs105 + cs106 - cs107 - cs58*ws1(3, 2) - &
-               cs59*ps1(3, 1) + cs63*ws1(3, 1)) + cs9*cs92
+               cs59*ps1(3, 1) + cs63*ws1(3, 1)) + cs9*cs92)
             hvp_f3_rr_rad(1, 1) = &
-               atd0(1)*(-cs116*cs127 + cs118*cs14 + cs129*cs177 + cs139*cs52 + cs165*cs177 + &
-               cs178*cs24 + cs49*ws2(1, 1, 2) - cs50*ws2(1, 1, 1) + ws0(1)*(2.0_wp*cs123 + &
-               cs125*cs52 - cs15*ps2(1, 1, 1)) + ws1(1, 1)*(cs112*cs52 + cs173) + ws1(1, &
-               2)*(-cs12*cs52 - cs122)) + atd1(1, 1)*(cs112*cs55 + cs112*cs57 + cs139*cs63 + &
-               cs158*ws1(1, 2) + cs169*ws0(2) + cs172*ws1(1, 1) + cs176*cs24 + ws0(1)*(cs125*cs63 &
-               + cs173)) + atd2(1, 1, 1)*cs45 + &
+               lsf_scale*(atd0(1)*(-cs116*cs127 + cs118*cs14 + cs129*cs177 + cs139*cs52 + &
+               cs165*cs177 + cs178*cs24 + cs49*ws2(1, 1, 2) - cs50*ws2(1, 1, 1) + &
+               ws0(1)*(2.0_wp*cs123 + cs125*cs52 - cs15*ps2(1, 1, 1)) + ws1(1, 1)*(cs112*cs52 + &
+               cs173) + ws1(1, 2)*(-cs12*cs52 - cs122)) + atd1(1, 1)*(cs112*cs55 + cs112*cs57 + &
+               cs139*cs63 + cs158*ws1(1, 2) + cs169*ws0(2) + cs172*ws1(1, 1) + cs176*cs24 + &
+               ws0(1)*(cs125*cs63 + cs173)) + atd2(1, 1, 1)*cs45 + &
                atd0(2)*((1.0_wp/2.0_wp)*cs0*cs124*cs151*cs20*ws0(2) + &
                (1.0_wp/2.0_wp)*cs0*cs151*cs20*ps0(1)*ps1(1, 1)*ws1(1, 2) + &
                (1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws2(1, 1, 1) - cs118*cs48 - cs125*cs166*ps1(1, 1) - &
@@ -3156,12 +3185,12 @@ contains
                cs170*ws0(2) + cs176*ws1(1, 1) + cs178*ws0(1) + cs24*(6.0_wp*cs0*cs117*cs184 + &
                cs0*cs64*ps0(1)*ps2(1, 1, 2)*s_3 + cs0*cs64*ps1(1, 1)*ps1(1, 2)*s_3 - cs113*cs180 - &
                cs179*ps2(1, 1, 4) - cs181*ps2(1, 1, 3) - cs182*ps1(1, 1) - cs183*ps2(1, 1, 1)) + &
-               cs54*ws2(1, 1, 4) - cs58*ws2(1, 1, 2) + cs60*ws2(1, 1, 3) + cs63*ws2(1, 1, 1))
+               cs54*ws2(1, 1, 4) - cs58*ws2(1, 1, 2) + cs60*ws2(1, 1, 3) + cs63*ws2(1, 1, 1)))
             t_hvp_f3_rr_rad_01 = &
-               atd0(1)*(cs129*cs83 + cs14*cs191 + cs193*cs52 + cs231*ws1(1, 2) + cs24*cs278 + &
-               cs240*ws1(2, 2) + cs245*ws1(2, 1) + cs253*ws1(1, 1) + cs263*ws0(4) + cs271*ws0(2) + &
-               cs276*cs83 + cs277*ws1(2, 3) + cs49*ws2(1, 2, 2) - cs50*ws2(1, 2, 1) + &
-               ws0(1)*(cs122*ps1(2, 1) + cs136*cs71 - cs15*ps2(1, 2, 1) + cs177*cs78)) + atd1(1, &
+               lsf_scale*(atd0(1)*(cs129*cs83 + cs14*cs191 + cs193*cs52 + cs231*ws1(1, 2) + &
+               cs24*cs278 + cs240*ws1(2, 2) + cs245*ws1(2, 1) + cs253*ws1(1, 1) + cs263*ws0(4) + &
+               cs271*ws0(2) + cs276*cs83 + cs277*ws1(2, 3) + cs49*ws2(1, 2, 2) - cs50*ws2(1, 2, 1) &
+               + ws0(1)*(cs122*ps1(2, 1) + cs136*cs71 - cs15*ps2(1, 2, 1) + cs177*cs78)) + atd1(1, &
                1)*(cs24*cs250 + cs255) + atd2(1, 2, 1)*cs45 + atd1(2, 1)*cs247 + &
                atd0(2)*(-cs191*cs48 - cs219*cs260 + cs223*cs267 - cs236*cs266 + cs238*ws1(2, 2) + &
                cs24*cs275 + cs244*ws1(2, 1) + cs254*ws1(1, 1) + cs261*ws0(4) + cs268*ps1(2, 1) - &
@@ -3183,15 +3212,15 @@ contains
                2, 4) - cs181*ps2(1, 2, 3) - cs182*ps1(2, 1) - cs183*ps2(1, 2, 1) - cs264*ps1(2, &
                4)) + cs241*ws1(2, 2) + cs246*ws1(2, 1) + cs250*ws1(1, 1) + cs265*ws0(4) + &
                cs275*ws0(2) + cs278*ws0(1) - cs279*cs71 + cs54*ws2(1, 2, 4) - cs58*ws2(1, 2, 2) + &
-               cs60*ws2(1, 2, 3) + cs63*ws2(1, 2, 1))
+               cs60*ws2(1, 2, 3) + cs63*ws2(1, 2, 1)))
             hvp_f3_rr_rad(1, 2) = t_hvp_f3_rr_rad_01
             hvp_f3_rr_rad(2, 1) = t_hvp_f3_rr_rad_01
             t_hvp_f3_rr_rad_02 = &
-               atd0(1)*(cs102*cs129 + cs102*cs276 + cs14*cs285 + cs24*cs325 + cs240*ws1(3, 2) + &
-               cs245*ws1(3, 1) + cs277*ws1(3, 3) + cs286*cs52 + cs303*ws1(1, 2) + cs310*ws1(1, 1) &
-               + cs317*ws0(4) + cs322*ws0(2) + cs49*ws2(1, 3, 2) - cs50*ws2(1, 3, 1) + &
-               ws0(1)*(cs122*ps1(3, 1) + cs136*cs91 - cs15*ps2(1, 3, 1) + cs177*cs98)) + atd1(1, &
-               1)*cs313 + atd2(1, 3, 1)*cs45 + atd1(3, 1)*cs247 + atd0(2)*(-cs105*cs269 - &
+               lsf_scale*(atd0(1)*(cs102*cs129 + cs102*cs276 + cs14*cs285 + cs24*cs325 + &
+               cs240*ws1(3, 2) + cs245*ws1(3, 1) + cs277*ws1(3, 3) + cs286*cs52 + cs303*ws1(1, 2) &
+               + cs310*ws1(1, 1) + cs317*ws0(4) + cs322*ws0(2) + cs49*ws2(1, 3, 2) - cs50*ws2(1, &
+               3, 1) + ws0(1)*(cs122*ps1(3, 1) + cs136*cs91 - cs15*ps2(1, 3, 1) + cs177*cs98)) + &
+               atd1(1, 1)*cs313 + atd2(1, 3, 1)*cs45 + atd1(3, 1)*cs247 + atd0(2)*(-cs105*cs269 - &
                cs236*cs320 + cs238*ws1(3, 2) + cs24*cs324 + cs244*ws1(3, 1) - cs260*cs319 + &
                cs267*cs300 + cs268*ps1(3, 1) - cs285*cs48 + cs307*ws1(1, 1) + cs316*ws0(4) - &
                cs321*cs61 + cs322*ws0(1) + cs49*ws2(1, 3, 1)) + atd1(1, 2)*cs306 + atd2(1, 3, &
@@ -3212,16 +3241,17 @@ contains
                cs182*ps1(3, 1) - cs183*ps2(1, 3, 1) - cs264*ps1(3, 4)) + cs241*ws1(3, 2) + &
                cs246*ws1(3, 1) - cs279*cs91 + cs297*ws1(1, 4) + cs305*ws1(1, 2) + cs312*ws1(1, 1) &
                + cs318*ws0(4) + cs324*ws0(2) + cs325*ws0(1) + cs54*ws2(1, 3, 4) - cs58*ws2(1, 3, &
-               2) + cs60*ws2(1, 3, 3) + cs63*ws2(1, 3, 1)) + cs285*cs9
+               2) + cs60*ws2(1, 3, 3) + cs63*ws2(1, 3, 1)) + cs285*cs9)
             hvp_f3_rr_rad(1, 3) = t_hvp_f3_rr_rad_02
             hvp_f3_rr_rad(3, 1) = t_hvp_f3_rr_rad_02
             hvp_f3_rr_rad(2, 2) = &
-               atd0(1)*(-cs127*cs328 + cs14*cs330 + cs193*cs353 + cs24*cs354 + cs339*cs83 + &
-               cs347*cs353 + cs49*ws2(2, 2, 2) - cs50*ws2(2, 2, 1) + ws0(1)*(-cs15*ps2(2, 2, 1) + &
-               2.0_wp*cs333 + cs335*cs83) + ws1(2, 1)*(cs112*cs83 + cs350) + ws1(2, 2)*(-cs12*cs83 &
-               - cs332)) + atd1(2, 1)*(cs112*cs84 + cs112*cs85 + cs158*ws1(2, 2) + cs172*ws1(2, 1) &
-               + cs24*cs352 + cs339*cs63 + cs348*ws0(2) + ws0(1)*(cs335*cs63 + cs350)) + atd2(2, &
-               2, 1)*cs45 + atd0(2)*((1.0_wp/2.0_wp)*cs0*cs151*cs20*cs334*ws0(2) + &
+               lsf_scale*(atd0(1)*(-cs127*cs328 + cs14*cs330 + cs193*cs353 + cs24*cs354 + &
+               cs339*cs83 + cs347*cs353 + cs49*ws2(2, 2, 2) - cs50*ws2(2, 2, 1) + &
+               ws0(1)*(-cs15*ps2(2, 2, 1) + 2.0_wp*cs333 + cs335*cs83) + ws1(2, 1)*(cs112*cs83 + &
+               cs350) + ws1(2, 2)*(-cs12*cs83 - cs332)) + atd1(2, 1)*(cs112*cs84 + cs112*cs85 + &
+               cs158*ws1(2, 2) + cs172*ws1(2, 1) + cs24*cs352 + cs339*cs63 + cs348*ws0(2) + &
+               ws0(1)*(cs335*cs63 + cs350)) + atd2(2, 2, 1)*cs45 + &
+               atd0(2)*((1.0_wp/2.0_wp)*cs0*cs151*cs20*cs334*ws0(2) + &
                (1.0_wp/2.0_wp)*cs0*cs151*cs20*ps0(1)*ps1(2, 1)*ws1(2, 2) + &
                (1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws2(2, 2, 1) - cs166*cs335*ps1(2, 1) - cs193*cs204 - &
                cs204*cs347 - cs232*cs339 + cs24*cs349 - cs330*cs48 + cs348*ws1(2, 1)) + atd1(2, &
@@ -3243,11 +3273,11 @@ contains
                1)*ps1(2, 2)*s_3 - cs179*ps2(2, 2, 4) - cs180*cs327 - cs181*ps2(2, 2, 3) - &
                cs183*ps2(2, 2, 1) - cs355*ps1(2, 1)) + cs344*ws1(2, 4) + cs345*ws1(2, 2) + &
                cs346*ws0(4) + cs349*ws0(2) + cs352*ws1(2, 1) + cs354*ws0(1) + cs54*ws2(2, 2, 4) - &
-               cs58*ws2(2, 2, 2) + cs60*ws2(2, 2, 3) + cs63*ws2(2, 2, 1)) + cs330*cs9
+               cs58*ws2(2, 2, 2) + cs60*ws2(2, 2, 3) + cs63*ws2(2, 2, 1)) + cs330*cs9)
             t_hvp_f3_rr_rad_12 = &
-               atd0(1)*(cs102*cs193 + cs102*cs280 + cs14*cs357 + cs231*ws1(3, 2) + cs24*cs367 + &
-               cs253*ws1(3, 1) + cs286*cs83 + cs303*ws1(2, 2) + cs310*ws1(2, 1) + cs326*cs83 + &
-               cs360*ws0(4) + cs364*ws0(2) + cs49*ws2(2, 3, 2) - cs50*ws2(2, 3, 1) + &
+               lsf_scale*(atd0(1)*(cs102*cs193 + cs102*cs280 + cs14*cs357 + cs231*ws1(3, 2) + &
+               cs24*cs367 + cs253*ws1(3, 1) + cs286*cs83 + cs303*ws1(2, 2) + cs310*ws1(2, 1) + &
+               cs326*cs83 + cs360*ws0(4) + cs364*ws0(2) + cs49*ws2(2, 3, 2) - cs50*ws2(2, 3, 1) + &
                ws0(1)*(-cs15*ps2(2, 3, 1) + cs204*cs91 + cs332*ps1(3, 1) + cs353*cs98)) + atd1(2, &
                1)*cs313 + atd2(2, 3, 1)*cs45 + atd1(3, 1)*(cs24*cs358 + cs255) + &
                atd0(2)*(-cs105*cs270 - cs219*cs320 + cs223*ps0(1)*ws1(3, 2) + cs24*cs366 + &
@@ -3271,17 +3301,18 @@ contains
                cs183*ps2(2, 3, 1) - cs355*ps1(3, 1) - cs361*ps1(3, 4)) + cs297*ws1(2, 4) + &
                cs305*ws1(2, 2) + cs312*ws1(2, 1) + cs358*ws1(3, 1) + cs362*ws0(4) + cs366*ws0(2) + &
                cs367*ws0(1) + cs54*ws2(2, 3, 4) - cs58*ws2(2, 3, 2) + cs60*ws2(2, 3, 3) + &
-               cs63*ws2(2, 3, 1)) + cs357*cs9
+               cs63*ws2(2, 3, 1)) + cs357*cs9)
             hvp_f3_rr_rad(2, 3) = t_hvp_f3_rr_rad_12
             hvp_f3_rr_rad(3, 2) = t_hvp_f3_rr_rad_12
             hvp_f3_rr_rad(3, 3) = &
-               atd0(1)*(cs102*cs379 - cs127*cs369 + cs14*cs371 + cs24*cs394 + cs286*cs393 + &
-               cs387*cs393 + cs49*ws2(3, 3, 2) - cs50*ws2(3, 3, 1) + ws0(1)*(cs102*cs376 - &
-               cs15*ps2(3, 3, 1) + 2.0_wp*cs374) + ws1(3, 1)*(cs102*cs112 + cs391) + ws1(3, &
-               2)*(-cs102*cs12 - cs373)) + atd1(3, 1)*(cs103*cs112 + cs104*cs112 + cs158*ws1(3, 2) &
-               + cs172*ws1(3, 1) + cs24*cs392 + cs379*cs63 + cs388*ws0(2) + ws0(1)*(cs376*cs63 + &
-               cs391)) + atd2(3, 3, 1)*cs45 + atd0(2)*((1.0_wp/2.0_wp)*cs0*cs151*cs20*cs375*ws0(2) &
-               + (1.0_wp/2.0_wp)*cs0*cs151*cs20*ps0(1)*ps1(3, 1)*ws1(3, 2) + &
+               lsf_scale*(atd0(1)*(cs102*cs379 - cs127*cs369 + cs14*cs371 + cs24*cs394 + &
+               cs286*cs393 + cs387*cs393 + cs49*ws2(3, 3, 2) - cs50*ws2(3, 3, 1) + &
+               ws0(1)*(cs102*cs376 - cs15*ps2(3, 3, 1) + 2.0_wp*cs374) + ws1(3, 1)*(cs102*cs112 + &
+               cs391) + ws1(3, 2)*(-cs102*cs12 - cs373)) + atd1(3, 1)*(cs103*cs112 + cs104*cs112 + &
+               cs158*ws1(3, 2) + cs172*ws1(3, 1) + cs24*cs392 + cs379*cs63 + cs388*ws0(2) + &
+               ws0(1)*(cs376*cs63 + cs391)) + atd2(3, 3, 1)*cs45 + &
+               atd0(2)*((1.0_wp/2.0_wp)*cs0*cs151*cs20*cs375*ws0(2) + &
+               (1.0_wp/2.0_wp)*cs0*cs151*cs20*ps0(1)*ps1(3, 1)*ws1(3, 2) + &
                (1.0_wp/2.0_wp)*cs0*inv_Z*s_3*ws2(3, 3, 1) - cs166*cs376*ps1(3, 1) + cs24*cs390 - &
                cs286*cs290 - cs290*cs387 - cs304*cs379 - cs371*cs48 + cs388*ws1(3, 1)) + atd1(3, &
                2)*(-cs103*cs12 - cs104*cs12 + cs153*cs301 + cs158*ws1(3, 1) + cs24*cs385 + &
@@ -3303,7 +3334,7 @@ contains
                3, 3) - cs183*ps2(3, 3, 1) - cs389*cs98) - cs296*cs379 + cs384*ws1(3, 4) + &
                cs385*ws1(3, 2) + cs386*ws0(4) + cs390*ws0(2) + cs392*ws1(3, 1) + cs394*ws0(1) + &
                cs54*ws2(3, 3, 4) - cs58*ws2(3, 3, 2) + cs60*ws2(3, 3, 3) + cs63*ws2(3, 3, 1)) + &
-               cs371*cs9
+               cs371*cs9)
          end block
       end select
 

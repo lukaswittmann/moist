@@ -215,6 +215,39 @@ MOIST provides isodensity, SvdW, CFC, and SSES LSFs:
    cfc
    sses
 
+.. _drop-lsf-scale:
+
+Level-set scale
+~~~~~~~~~~~~~~~
+
+Every LSF carries a positive constant multiplier ``scale`` (:math:`\alpha`): DROP projects onto :math:`S = \alpha\,S_\mathrm{LSF}`, and every value and derivative of the LSF carries :math:`\alpha`.
+The surface, and its properties (normals, and curvatures, ...) do not depend on that.
+DROP's critical-gradient switch and the projection tolerance read :math:`S` in absolute terms, so the defaults put :math:`\lVert\nabla S\rVert` near one on the surface, as for SvdW, whose single-atom field is a signed distance:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 25 55
+
+   * - LSF
+     - Default ``scale``
+     - :math:`\lVert\nabla S\rVert` on the surface
+   * - SvdW
+     - ``1``
+     - one for a single atom, median 0.88 to 0.99
+   * - CFC
+     - ``0.25``
+     - :math:`0.25\,|a_1|/R_I` for a single atom (one for carbon), median near one
+   * - SSES
+     - ``0.088``
+     - :math:`2\,\alpha\,(R_I + p)` on convex patches, :math:`1/(2(\bar R + p))` at a mean radius of 3 bohr
+   * - Isodensity
+     - ``1000`` (:math:`1/\rho_\mathrm{iso}`)
+     - :math:`|\nabla\rho|/\rho_\mathrm{iso}`: about 2.1 for neutral molecules, 1.6 for anions and 3 for cations, nearly independent of :math:`\rho_\mathrm{iso}`
+
+A smaller scale pushes healthy surface into the critical-gradient switch, which removes area and, at projection level 2, starts branch searches; a much larger one makes the Newton solves slower (SSES at scale 1 instead of 0.088 is 1.5 to 2.2 times slower at identical area).
+This value should generally not be changed.
+
+
 Grid Discretization
 -------------------
 

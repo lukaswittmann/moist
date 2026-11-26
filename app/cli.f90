@@ -330,12 +330,10 @@ contains
          ! SSES lengths in Bohr
          if (args%has_key("sses_probe_radius")) call args%get("sses_probe_radius", config%sses%probe_radius)
          if (args%has_key("sses_smoothing_length")) call args%get("sses_smoothing_length", config%sses%smoothing_length)
-         if (args%has_key("sses_scale")) call args%get("sses_scale", config%sses%scale)
          if (trim(config%drop_variant) == "sses") then
-            if (.not. all(ieee_is_finite([config%sses%probe_radius, config%sses%smoothing_length, config%sses%scale])) &
-                .or. config%sses%probe_radius < 0.0_wp .or. config%sses%smoothing_length <= 0.0_wp &
-                .or. config%sses%scale <= 0.0_wp) then
-               call fatal_error(error, "SSES requires finite probe radius >= 0, smoothing length > 0 and scale > 0")
+            if (.not. all(ieee_is_finite([config%sses%probe_radius, config%sses%smoothing_length])) &
+                .or. config%sses%probe_radius < 0.0_wp .or. config%sses%smoothing_length <= 0.0_wp) then
+               call fatal_error(error, "SSES requires finite probe radius >= 0 and smoothing length > 0")
                return
             end if
          end if
@@ -980,10 +978,6 @@ contains
                              action=not_less_than(0.0_wp), &
                              dest="sses_smoothing_length", metavar="REAL", &
                              help="Positive smoothing length in Bohr", group_idx=grp_technical)
-         call p%add_argument("--lsf-scale", data_type="real", &
-                             default_val=defaults%scale, action=not_less_than(0.0_wp), &
-                             dest="sses_scale", metavar="REAL", &
-                             help="Positive field multiplier for critical-gradient switching", group_idx=grp_technical)
       end subroutine add_cavity_drop_sses_arguments
 
       !> Configure the solvent subcommand parser

@@ -415,6 +415,7 @@ contains
 
       call self%param%init_defaults()
       if (present(param)) self%param = param
+      self%scale = self%param%scale
    end subroutine lsf_new
 
    !> Bind molecular geometry and resize the per-atom caches
@@ -438,6 +439,7 @@ contains
       integer :: n_alloc
 
       call lsf_base_update(self, mol, radii)
+      self%scale = self%param%scale
 
       n_alloc = mol%nat
       if (allocated(self%active_cand)) deallocate (self%active_cand)
@@ -499,6 +501,7 @@ contains
 
       if (.not. allocated(self%cand_screen)) error stop "moist DROP LSF: prepare before update"
       call self%param%validate(error)
+      self%scale = self%param%scale
       if (.not. allocated(error) .and. self%param%fade_enabled) call check_fade(self, error)
       if (allocated(error)) then
          self%n_active = 0
@@ -535,6 +538,7 @@ contains
 
       if (.not. allocated(self%cand_screen)) error stop "moist DROP LSF: prepare before update"
       call self%param%validate(error)
+      self%scale = self%param%scale
       if (.not. allocated(error) .and. self%param%fade_enabled) call check_fade(self, error)
       if (allocated(error)) then
          self%n_active = 0
@@ -1425,17 +1429,17 @@ contains
       associate (k => self%param%blend_k)
          select case (order)
          case (0)
-            call svdw_strip_lift_o0(1, k, s_1, s_2, s_3, self%pk0, self%jet0)
+            call svdw_strip_lift_o0(1, k, s_1, s_2, s_3, self%scale, self%pk0, self%jet0)
          case (1)
-            call svdw_strip_lift_o1(1, k, s_1, s_2, s_3, self%pk0, self%pk1, self%jet0, self%jet1)
+            call svdw_strip_lift_o1(1, k, s_1, s_2, s_3, self%scale, self%pk0, self%pk1, self%jet0, self%jet1)
          case (2)
-            call svdw_strip_lift_o2(1, k, s_1, s_2, s_3, self%pk0, self%pk1, self%pk2, &
+            call svdw_strip_lift_o2(1, k, s_1, s_2, s_3, self%scale, self%pk0, self%pk1, self%pk2, &
                                     self%jet0, self%jet1, self%jet2)
          case (3)
-            call svdw_strip_lift_o3(1, k, s_1, s_2, s_3, self%pk0, self%pk1, self%pk2, &
+            call svdw_strip_lift_o3(1, k, s_1, s_2, s_3, self%scale, self%pk0, self%pk1, self%pk2, &
                                     self%pk3, self%jet0, self%jet1, self%jet2, self%jet3)
          case default
-            call svdw_strip_lift_o4(1, k, s_1, s_2, s_3, self%pk0, self%pk1, self%pk2, &
+            call svdw_strip_lift_o4(1, k, s_1, s_2, s_3, self%scale, self%pk0, self%pk1, self%pk2, &
                                     self%pk3, self%pk4, self%jet0, self%jet1, self%jet2, &
                                     self%jet3, self%jet4)
          end select
@@ -1659,6 +1663,7 @@ contains
          error stop "moist DROP LSF SvdW: evaluate_batch before update"
       end if
       call self%param%validate(error)
+      self%scale = self%param%scale
       if (.not. allocated(error) .and. self%param%fade_enabled) call check_fade(self, error)
       if (allocated(error)) return
       ! The batch overwrites the per-point cache: accessors abort until `prepare`
@@ -1826,15 +1831,15 @@ contains
       associate (k => self%param%blend_k)
          select case (order)
          case (0)
-            call svdw_strip_lift_o0(np, k, s_1, s_2, s_3, b0, l0)
+            call svdw_strip_lift_o0(np, k, s_1, s_2, s_3, self%scale, b0, l0)
          case (1)
-            call svdw_strip_lift_o1(np, k, s_1, s_2, s_3, b0, b1, l0, l1)
+            call svdw_strip_lift_o1(np, k, s_1, s_2, s_3, self%scale, b0, b1, l0, l1)
          case (2)
-            call svdw_strip_lift_o2(np, k, s_1, s_2, s_3, b0, b1, b2, l0, l1, l2)
+            call svdw_strip_lift_o2(np, k, s_1, s_2, s_3, self%scale, b0, b1, b2, l0, l1, l2)
          case (3)
-            call svdw_strip_lift_o3(np, k, s_1, s_2, s_3, b0, b1, b2, b3, l0, l1, l2, l3)
+            call svdw_strip_lift_o3(np, k, s_1, s_2, s_3, self%scale, b0, b1, b2, b3, l0, l1, l2, l3)
          case default
-            call svdw_strip_lift_o4(np, k, s_1, s_2, s_3, b0, b1, b2, b3, b4, l0, l1, l2, &
+            call svdw_strip_lift_o4(np, k, s_1, s_2, s_3, self%scale, b0, b1, b2, b3, b4, l0, l1, l2, &
                                     l3, l4)
          end select
       end associate
@@ -2099,6 +2104,7 @@ contains
          error stop "moist DROP LSF SvdW: vjp_f1_rA_batch before update"
       end if
       call self%param%validate(error)
+      self%scale = self%param%scale
       if (.not. allocated(error) .and. self%param%fade_enabled) call check_fade(self, error)
       if (allocated(error)) then
          error%message = "vjp_f1_rA_batch failed at point 1: "//error%message
@@ -2353,7 +2359,7 @@ contains
          end if
 
          call patch_unreached(np, b0, reached)
-         call svdw_strip_lift_o2(np, k, s_1, s_2, s_3, b0, b1, b2, l0, l1, l2)
+         call svdw_strip_lift_o2(np, k, s_1, s_2, s_3, self%scale, b0, b1, b2, l0, l1, l2)
          do p = 1, np
             if (.not. reached(p)) cycle
             reached(p) = jet_finite(2, l0(p), l1(:, p), l2(:, p), z3, z4)
@@ -2361,7 +2367,7 @@ contains
          end do
          call clear_unreached(np, reached, b0, b1, b2)
 
-         call svdw_strip_lift_vjp(np, k, s_1, s_2, s_3, b0, b1, b2, w0, w1, w2, m0, m1, &
+         call svdw_strip_lift_vjp(np, k, s_1, s_2, s_3, self%scale, b0, b1, b2, w0, w1, w2, m0, m1, &
                                   m2)
          call svdw_strip_vjp(np, points, nc, c, r, k, iq, x_on, delta, m0, m1, m2, &
                              self%vjp_x, self%vjp_ix, self%vjp_u, rs, n_zero3)
@@ -2561,7 +2567,7 @@ contains
       call svdw_weights(self, s_1, s_2, s_3)
       do ia = 1, self%n_active
          call atom_tensors(self, ia, 3, at0, at1, at2, at3, at4)
-         call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, &
+         call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                 self%ps0, self%ps1, self%ps2, self%ps3, &
                                 at0, at1, at2, at3, at4, 2, &
                                 f1_rA, f2_r_rA, f3_rr_rA, d4)
@@ -2616,7 +2622,7 @@ contains
          ! dummy undefined memory
          call atom_rad_tensors(self, ia, 2, atd0, atd1, atd2, atd3)
          atd3 = 0.0_wp
-         call svdw_radius_eval(self%param%blend_k, s_1, s_2, s_3, &
+         call svdw_radius_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                self%ps0, self%ps1, self%ps2, self%ps3, &
                                atd0, atd1, atd2, atd3, 2, &
                                f1_rad, f2_r_rad, f3_rr_rad, d4)
@@ -2652,7 +2658,7 @@ contains
       call svdw_weights(self, s_1, s_2, s_3)
       do ia = 1, self%n_active
          call atom_tensors(self, ia, 4, at0, at1, at2, at3, at4)
-         call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, &
+         call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                 self%ps0, self%ps1, self%ps2, self%ps3, &
                                 at0, at1, at2, at3, at4, 3, &
                                 f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA)
@@ -2704,7 +2710,7 @@ contains
 
       do ia = 1, self%n_active
          call atom_tensors(self, ia, 2, at0, at1, at2, at3, at4)
-         call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, &
+         call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                 self%ps0, self%ps1, self%ps2, self%ps3, &
                                 at0, at1, at2, at3, at4, 1, &
                                 f1_rA, f2_r_rA, d3n, d4n)
@@ -2804,13 +2810,13 @@ contains
       do ib = 1, n
          do ia = 1, n
             if (ia == ib) then
-               call svdw_pair_diag_eval(self%param%blend_k, s_1, s_2, s_3, &
+               call svdw_pair_diag_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                         self%ps0, self%ps1, self%ps2, &
                                         ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
                                         ca3(:, :, :, :, ia), ca4(:, :, :, :, :, ia), &
                                         0, b2, b3, b4)
             else
-               call svdw_pair_eval(self%param%blend_k, s_1, s_2, s_3, &
+               call svdw_pair_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                    self%ps0, self%ps1, self%ps2, &
                                    ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
                                    ca3(:, :, :, :, ia), &
@@ -2851,13 +2857,13 @@ contains
       do ib = 1, n
          do ia = 1, n
             if (ia == ib) then
-               call svdw_pair_diag_eval(self%param%blend_k, s_1, s_2, s_3, &
+               call svdw_pair_diag_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                         self%ps0, self%ps1, self%ps2, &
                                         ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
                                         ca3(:, :, :, :, ia), ca4(:, :, :, :, :, ia), &
                                         1, b2, b3, b4)
             else
-               call svdw_pair_eval(self%param%blend_k, s_1, s_2, s_3, &
+               call svdw_pair_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                    self%ps0, self%ps1, self%ps2, &
                                    ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
                                    ca3(:, :, :, :, ia), &
@@ -2902,13 +2908,13 @@ contains
       do ib = 1, n
          do ia = 1, n
             if (ia == ib) then
-               call svdw_pair_diag_eval(self%param%blend_k, s_1, s_2, s_3, &
+               call svdw_pair_diag_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                         self%ps0, self%ps1, self%ps2, &
                                         ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
                                         ca3(:, :, :, :, ia), ca4(:, :, :, :, :, ia), &
                                         2, b2, b3, b4)
             else
-               call svdw_pair_eval(self%param%blend_k, s_1, s_2, s_3, &
+               call svdw_pair_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                    self%ps0, self%ps1, self%ps2, &
                                    ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
                                    ca3(:, :, :, :, ia), &
@@ -2972,12 +2978,12 @@ contains
          do ia = 1, n
             if (ia == ib) then
                call atom_radrad_tensors(self, ia, max_deriv, atdd0, atdd1, atdd2)
-               call svdw_radpair_diag_eval(self%param%blend_k, s_1, s_2, s_3, &
+               call svdw_radpair_diag_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                            self%ps0, self%ps1, self%ps2, &
                                            cd0(:, ia), cd1(:, :, ia), cd2(:, :, :, ia), &
                                            atdd0, atdd1, atdd2, max_deriv, b2, b3, b4)
             else
-               call svdw_radpair_eval(self%param%blend_k, s_1, s_2, s_3, &
+               call svdw_radpair_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                       self%ps0, self%ps1, self%ps2, &
                                       cd0(:, ia), cd1(:, :, ia), cd2(:, :, :, ia), &
                                       cd0(:, ib), cd1(:, :, ib), cd2(:, :, :, ib), &
@@ -3040,14 +3046,14 @@ contains
       do ib = 1, n
          do ia = 1, n
             if (ia == ib) then
-               call svdw_nucrad_diag_eval(self%param%blend_k, s_1, s_2, s_3, &
+               call svdw_nucrad_diag_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                           self%ps0, self%ps1, self%ps2, &
                                           ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
                                           ca3(:, :, :, :, ia), &
                                           cd0(:, ia), cd1(:, :, ia), cd2(:, :, :, ia), &
                                           cd3(:, :, :, :, ia), max_deriv, b2, b3, b4)
             else
-               call svdw_nucrad_eval(self%param%blend_k, s_1, s_2, s_3, &
+               call svdw_nucrad_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                      self%ps0, self%ps1, self%ps2, &
                                      ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
                                      ca3(:, :, :, :, ia), &
@@ -3170,7 +3176,7 @@ contains
 
       call svdw_weights(self, s_1, s_2, s_3)
       call tangent_powersums(self, v, 0, ws0, ws1, ws2, ws3)
-      call svdw_tangent_eval(self%param%blend_k, s_1, s_2, s_3, &
+      call svdw_tangent_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                              self%ps0, self%ps1, self%ps2, self%ps3, &
                              ws0, ws1, ws2, ws3, 0, res, d1, d2, d3)
    end subroutine lsf_tangent_f0
@@ -3198,7 +3204,7 @@ contains
 
       call svdw_weights(self, s_1, s_2, s_3)
       call tangent_powersums(self, v, 1, ws0, ws1, ws2, ws3)
-      call svdw_tangent_eval(self%param%blend_k, s_1, s_2, s_3, &
+      call svdw_tangent_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                              self%ps0, self%ps1, self%ps2, self%ps3, &
                              ws0, ws1, ws2, ws3, 1, t0, t1, d2, d3)
       res = t1
@@ -3227,7 +3233,7 @@ contains
 
       call svdw_weights(self, s_1, s_2, s_3)
       call tangent_powersums(self, v, 2, ws0, ws1, ws2, ws3)
-      call svdw_tangent_eval(self%param%blend_k, s_1, s_2, s_3, &
+      call svdw_tangent_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                              self%ps0, self%ps1, self%ps2, self%ps3, &
                              ws0, ws1, ws2, ws3, 2, t0, t1, t2, d3)
       call pack_sym_matrix(t2, res, ndim)
@@ -3256,7 +3262,7 @@ contains
 
       call svdw_weights(self, s_1, s_2, s_3)
       call tangent_powersums(self, v, 3, ws0, ws1, ws2, ws3)
-      call svdw_tangent_eval(self%param%blend_k, s_1, s_2, s_3, &
+      call svdw_tangent_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                              self%ps0, self%ps1, self%ps2, self%ps3, &
                              ws0, ws1, ws2, ws3, 3, t0, t1, t2, t3)
       call pack_sym_tensor3(t3, res, ndim)
@@ -3310,7 +3316,7 @@ contains
             aw0 = aw0 + awr0
             aw1 = aw1 + awr1
          end if
-         call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
+         call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                             self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
                             at0, at1, at2, at3, aw0, aw1, aw2, aw3, 0, h1, d2, d3)
          res(:, ia) = h1
@@ -3365,7 +3371,7 @@ contains
             aw1 = aw1 + awr1
             aw2 = aw2 + awr2
          end if
-         call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
+         call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                             self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
                             at0, at1, at2, at3, aw0, aw1, aw2, aw3, 1, h1, h2, d3)
          res(:, :, ia) = h2
@@ -3422,7 +3428,7 @@ contains
             aw2 = aw2 + awr2
             aw3 = aw3 + awr3
          end if
-         call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
+         call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                             self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
                             at0, at1, at2, at3, aw0, aw1, aw2, aw3, 2, h1, h2, h3)
          do s = 1, ndim
@@ -3555,7 +3561,7 @@ contains
          ! `atd3` exists only because the tensor builder takes it as a
          ! non-optional `intent(out)` dummy; the eval below never sees it, so it
          ! is left undefined on purpose
-         call svdw_radius_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
+         call svdw_radius_hvp_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                    self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
                                    atd0, atd1, atd2, awd0, awd1, awd2, max_deriv, &
                                    h1, h2, h3)
@@ -3627,7 +3633,7 @@ contains
       call svdw_weights(self, s_1, s_2, s_3)
       do ia = 1, self%n_active
          call atom_tensors(self, ia, 3, at0, at1, at2, at3, at4)
-         call svdw_vjp_eval(self%param%blend_k, s_1, s_2, s_3, &
+         call svdw_vjp_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                             self%ps0, self%ps1, self%ps2, &
                             at0, at1, at2, at3, w0, w1, wsym, vjp_f1_rA)
          res(:, ia) = vjp_f1_rA
@@ -3695,7 +3701,7 @@ contains
          ! never reaches `atd3` and does not take it as an argument -- unlike
          ! `svdw_radius_eval`, which does and therefore needs `atd3` defined
          call atom_rad_tensors(self, ia, 2, atd0, atd1, atd2, atd3)
-         call svdw_radius_vjp_eval(self%param%blend_k, s_1, s_2, s_3, &
+         call svdw_radius_vjp_eval(self%param%blend_k, s_1, s_2, s_3, self%scale, &
                                    self%ps0, self%ps1, self%ps2, &
                                    atd0, atd1, atd2, w0, w1, wsym, vjp_f1_rad)
          res(ia) = vjp_f1_rad
@@ -3777,6 +3783,9 @@ contains
 
    !> Surface-free radius around a point, from its value `S`
    !>
+   !> `S` below is the unscaled level `lsf0/scale`; the bounds hold for it, not for the scaled
+   !> value the accessors return
+   !>
    !> Fade off: `r = |S|`, the 1-Lipschitz property of the log-sum-exp soft minimum
    !>
    !> - `grad S` is the blend-weighted mean of unit vectors `(r - r_I)/||r - r_I||`,
@@ -3808,33 +3817,36 @@ contains
    pure function lsf_svdw_exclusion_radius(self, lsf0) result(r)
       !> LSF instance
       class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
-      !> LSF value at the evaluation point
+      !> LSF value at the evaluation point, scale included
       real(wp), intent(in) :: lsf0
       !> Surface-free radius
       real(wp) :: r
 
+      !> Unscaled level the bounds are built for
+      real(wp) :: s0
       !> Capped level, its `eta` and the slope factor `Gamma`
       real(wp) :: phi, eta, gam
 
       r = 0.0_wp
       if (ieee_is_nan(lsf0)) return
       if (lsf0 < -huge(lsf0)) return
+      s0 = lsf0/self%scale
       if (self%param%blend_1b < 0.0_wp) return
       if (self%param%blend_2b < 0.0_wp) return
       if (self%param%blend_3b < 0.0_wp) return
       if (.not. self%param%fade_enabled) then
-         if (lsf0 > huge(lsf0)) return
-         r = abs(lsf0)
+         if (s0 > huge(s0)) return
+         r = abs(s0)
          return
       end if
 
       if (.not. certificate_current(self)) return
       if (.not. self%cert%valid) return
       associate (c => self%cert)
-         if (lsf0 <= 0.0_wp) then
-            r = -lsf0/(1.0_wp + c%k0)
+         if (s0 <= 0.0_wp) then
+            r = -s0/(1.0_wp + c%k0)
          else
-            phi = min(lsf0, c%s_cap)
+            phi = min(s0, c%s_cap)
             eta = exp(c%k*phi/3.0_wp - c%a)
             gam = c%coef_a*eta*eta + c%coef_b*sqrt(eta) + c%coef_g
             r = phi - (3.0_wp/c%k)*log((1.0_wp + gam*eta)/(1.0_wp + gam*c%eps))

@@ -410,6 +410,7 @@ contains
 
       call self%param%init_defaults()
       if (present(param)) self%param = param
+      self%scale = self%param%scale
    end subroutine lsf_new
 
    !> Bind molecular geometry and resize the per-atom caches
@@ -441,6 +442,7 @@ contains
       integer :: n_alloc
 
       call lsf_base_update(self, mol, radii)
+      self%scale = self%param%scale
 
       n_alloc = mol%nat
       if (allocated(self%active_cand)) deallocate (self%active_cand)
@@ -582,6 +584,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       call self%param%validate(error)
+      self%scale = self%param%scale
       if (.not. allocated(error)) then
          if (.not. fade_current(self)) then
             call fatal_error(error, "CFC parameters changed after update; call update")
@@ -766,7 +769,7 @@ contains
          end do
       end do
       if (.not. (self%pd0 > 0.0_wp)) return
-      call cfc_spatial_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, self%pd4_rrrr, md, &
+      call cfc_spatial_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, self%pd4_rrrr, md, &
                             self%jet0, self%jet1_r, self%jet2_rr, self%jet3_rrr, self%jet4_rrrr)
       if (jet_finite(md, self%jet0, self%jet1_r, self%jet2_rr, self%jet3_rrr, &
                      self%jet4_rrrr)) then
@@ -1120,6 +1123,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       call self%param%validate(error)
+      self%scale = self%param%scale
       if (allocated(error)) return
       if (.not. fade_current(self)) then
          call fatal_error(error, "CFC parameters changed after update; call update")
@@ -1339,15 +1343,15 @@ contains
 
       select case (order)
       case (0)
-         call cfc_strip_lift_o0(np, b0, l0)
+         call cfc_strip_lift_o0(np, self%scale, b0, l0)
       case (1)
-         call cfc_strip_lift_o1(np, b0, b1, l0, l1)
+         call cfc_strip_lift_o1(np, self%scale, b0, b1, l0, l1)
       case (2)
-         call cfc_strip_lift_o2(np, b0, b1, b2, l0, l1, l2)
+         call cfc_strip_lift_o2(np, self%scale, b0, b1, b2, l0, l1, l2)
       case (3)
-         call cfc_strip_lift_o3(np, b0, b1, b2, b3, l0, l1, l2, l3)
+         call cfc_strip_lift_o3(np, self%scale, b0, b1, b2, b3, l0, l1, l2, l3)
       case default
-         call cfc_strip_lift_o4(np, b0, b1, b2, b3, b4, l0, l1, l2, l3, l4)
+         call cfc_strip_lift_o4(np, self%scale, b0, b1, b2, b3, b4, l0, l1, l2, l3, l4)
       end select
    end subroutine strip_eval
 
@@ -1736,7 +1740,7 @@ contains
             reached(p) = pd0(p) > 0.0_wp
             if (.not. reached(p)) pd0(p) = 1.0_wp
          end do
-         call cfc_strip_lift_o2(np, pd0, pd1, pd2, l0, l1, l2)
+         call cfc_strip_lift_o2(np, self%scale, pd0, pd1, pd2, l0, l1, l2)
          do p = 1, np
             if (.not. reached(p)) cycle
             reached(p) = ieee_is_finite(l0(p)) .and. all(ieee_is_finite(l1(:, p))) .and. &
@@ -1745,7 +1749,7 @@ contains
          end do
          call clear_unreached(np, reached, pd0, pd1, pd2)
 
-         call cfc_strip_lift_vjp(np, pd0, pd1, pd2, w0, w1, w2, m0, m1, m2)
+         call cfc_strip_lift_vjp(np, self%scale, pd0, pd1, pd2, w0, w1, w2, m0, m1, m2)
          call cfc_strip_vjp(np, points, nc, c, r, q, a1, a2, cp, fs, fw, m0, m1, m2, &
                             self%strip_geo, self%vjp_jet3, self%vjp_gacc, self%bat_sv, &
                             self%bat_reach, rs, n_zero3)
@@ -1887,7 +1891,7 @@ contains
       call self%require_deriv(3, "f3_rr_rA")
 
       do ia = 1, self%n_active
-         call cfc_nuclear_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
+         call cfc_nuclear_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
                                self%qn0(:, ia), self%qn1_r(:, :, ia), &
                                self%qn2_rr(:, :, :, ia), self%qn3_rrr(:, :, :, :, ia), &
                                2, f1_rA, f2_r_rA, f3_rr_rA, d4)
@@ -1918,7 +1922,7 @@ contains
       call self%require_deriv(4, "f4_rrr_rA")
 
       do ia = 1, self%n_active
-         call cfc_nuclear_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
+         call cfc_nuclear_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
                                self%qn0(:, ia), self%qn1_r(:, :, ia), &
                                self%qn2_rr(:, :, :, ia), self%qn3_rrr(:, :, :, :, ia), &
                                3, f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA)
@@ -2085,7 +2089,7 @@ contains
       call radius_tensors(self, 2, rd0, rd1_r, rd2_rr, rd3_rrr)
 
       do ia = 1, self%n_active
-         call cfc_radius_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
+         call cfc_radius_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
                               rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
                               rd3_rrr(:, :, :, ia), 2, &
                               f1_rad, f2_r_rad, f3_rr_rad, d4)
@@ -2141,7 +2145,7 @@ contains
       if (.not. present(deriv_rA)) return
 
       do ia = 1, self%n_active
-         call cfc_nuclear_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
+         call cfc_nuclear_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
                                self%qn0(:, ia), self%qn1_r(:, :, ia), &
                                self%qn2_rr(:, :, :, ia), self%qn3_rrr(:, :, :, :, ia), &
                                1, f1_rA, f2_r_rA, d3n, d4n)
@@ -2321,7 +2325,7 @@ contains
                                           w0a, x0, w0b, w1a, x1, w1b, w2a, x2, w2b)
             end if
 
-            call cfc_hessian_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+            call cfc_hessian_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, &
                                   self%qn0(:, ia), self%qn1_r(:, :, ia), &
                                   self%qn2_rr(:, :, :, ia), &
                                   self%qn0(:, ib), self%qn1_r(:, :, ib), &
@@ -2476,7 +2480,7 @@ contains
 
       ip = 0
       do ia = 1, n
-         call cfc_radius2_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+         call cfc_radius2_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, &
                                rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
                                rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
                                dd0(ia), dd1(:, ia), dd2(:, :, ia), level, b2, b3, b4)
@@ -2490,7 +2494,7 @@ contains
             x2 = 0.0_wp
             if (level >= 1) x1 = cx1(:, ip)
             if (level >= 2) x2 = cx2(:, :, ip)
-            call cfc_radius2_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+            call cfc_radius2_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, &
                                   rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
                                   rd0(ib), rd1_r(:, ib), rd2_rr(:, :, ib), &
                                   x0, x1, x2, level, b2, b3, b4)
@@ -2637,7 +2641,7 @@ contains
 
       ip = 0
       do ia = 1, n
-         call cfc_nucrad_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+         call cfc_nucrad_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, &
                               self%qn0(:, ia), self%qn1_r(:, :, ia), &
                               self%qn2_rr(:, :, :, ia), &
                               rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
@@ -2663,14 +2667,14 @@ contains
                y2 = cy2(:, :, :, ip)
             end if
             ! `ab` is position on ia and radius on ib; `ba` is the other way
-            call cfc_nucrad_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+            call cfc_nucrad_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, &
                                  self%qn0(:, ia), self%qn1_r(:, :, ia), &
                                  self%qn2_rr(:, :, :, ia), &
                                  rd0(ib), rd1_r(:, ib), rd2_rr(:, :, ib), &
                                  x0, x1, x2, level, b2, b3, b4)
             call nucrad_store(ia, ib, b2, b3, b4, &
                               lsf2_rA_rad, lsf3_r_rA_rad, lsf4_rr_rA_rad)
-            call cfc_nucrad_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+            call cfc_nucrad_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, &
                                  self%qn0(:, ib), self%qn1_r(:, :, ib), &
                                  self%qn2_rr(:, :, :, ib), &
                                  rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
@@ -2898,7 +2902,7 @@ contains
       call self%require_deriv(0, "tangent_f0")
 
       call tangent_tensors(self, v, 0, tg0, tg1_r, tg2_rr, tg3_rrr)
-      call cfc_tangent_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
+      call cfc_tangent_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
                             tg0, tg1_r, tg2_rr, tg3_rrr, 0, res, d1, d2, d3)
    end subroutine lsf_tangent_f0
 
@@ -2922,7 +2926,7 @@ contains
       call self%require_deriv(1, "tangent_f1_r")
 
       call tangent_tensors(self, v, 1, tg0, tg1_r, tg2_rr, tg3_rrr)
-      call cfc_tangent_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
+      call cfc_tangent_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
                             tg0, tg1_r, tg2_rr, tg3_rrr, 1, t0, t1, d2, d3)
       res = t1
    end subroutine lsf_tangent_f1_r
@@ -2947,7 +2951,7 @@ contains
       call self%require_deriv(2, "tangent_f2_rr")
 
       call tangent_tensors(self, v, 2, tg0, tg1_r, tg2_rr, tg3_rrr)
-      call cfc_tangent_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
+      call cfc_tangent_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
                             tg0, tg1_r, tg2_rr, tg3_rrr, 2, t0, t1, t2, d3)
       call pack_sym_matrix(t2, res, ndim)
    end subroutine lsf_tangent_f2_rr
@@ -2972,7 +2976,7 @@ contains
       call self%require_deriv(3, "tangent_f3_rrr")
 
       call tangent_tensors(self, v, 3, tg0, tg1_r, tg2_rr, tg3_rrr)
-      call cfc_tangent_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
+      call cfc_tangent_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
                             tg0, tg1_r, tg2_rr, tg3_rrr, 3, t0, t1, t2, t3)
       call pack_sym_tensor3(t3, res, ndim)
    end subroutine lsf_tangent_f3_rrr
@@ -3246,7 +3250,7 @@ contains
       end if
 
       do ia = 1, self%n_active
-         call cfc_hvp_eval(self%pd0, self%pd1_r, self%pd2_rr, tg0, tg1_r, tg2_rr, &
+         call cfc_hvp_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, tg0, tg1_r, tg2_rr, &
                            self%qn0(:, ia), self%qn1_r(:, :, ia), self%qn2_rr(:, :, :, ia), &
                            hv0(:, ia), hv1(:, :, ia), hv2(:, :, :, ia), 0, h1, d2, d3)
          res(:, ia) = h1
@@ -3293,7 +3297,7 @@ contains
       end if
 
       do ia = 1, self%n_active
-         call cfc_hvp_eval(self%pd0, self%pd1_r, self%pd2_rr, tg0, tg1_r, tg2_rr, &
+         call cfc_hvp_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, tg0, tg1_r, tg2_rr, &
                            self%qn0(:, ia), self%qn1_r(:, :, ia), self%qn2_rr(:, :, :, ia), &
                            hv0(:, ia), hv1(:, :, ia), hv2(:, :, :, ia), 1, h1, h2, d3)
          res(:, :, ia) = h2
@@ -3340,7 +3344,7 @@ contains
       end if
 
       do ia = 1, self%n_active
-         call cfc_hvp_eval(self%pd0, self%pd1_r, self%pd2_rr, tg0, tg1_r, tg2_rr, &
+         call cfc_hvp_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, tg0, tg1_r, tg2_rr, &
                            self%qn0(:, ia), self%qn1_r(:, :, ia), self%qn2_rr(:, :, :, ia), &
                            hv0(:, ia), hv1(:, :, ia), hv2(:, :, :, ia), 2, h1, h2, h3)
          do b = 1, ndim
@@ -3512,7 +3516,7 @@ contains
       call radius_tensors(self, max_deriv, rd0, rd1_r, rd2_rr)
 
       do ia = 1, self%n_active
-         call cfc_radius_hvp_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+         call cfc_radius_hvp_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, &
                                   tg0, tg1_r, tg2_rr, &
                                   rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
                                   rh0(ia), rh1_r(:, ia), rh2_rr(:, :, ia), &
@@ -3575,7 +3579,7 @@ contains
 
       call unpack_sym_matrix(w2, wsym, ndim)
       do ia = 1, self%n_active
-         call cfc_vjp_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+         call cfc_vjp_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, &
                            self%qn0(:, ia), self%qn1_r(:, :, ia), &
                            self%qn2_rr(:, :, :, ia), w0, w1, wsym, vjp1)
          res(:, ia) = vjp1
@@ -3643,7 +3647,7 @@ contains
 
       call unpack_sym_matrix(w2, wsym, ndim)
       do ia = 1, self%n_active
-         call cfc_radius_vjp_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+         call cfc_radius_vjp_eval(self%scale, self%pd0, self%pd1_r, self%pd2_rr, &
                                   rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
                                   w0, w1, wsym, vjp1)
          res(ia) = vjp1
@@ -3812,6 +3816,9 @@ contains
 
    !> Radius of a ball around the evaluation point free of surface
    !>
+   !> `S` below is the unscaled level `lsf0/scale`; the bounds hold for it, not for the scaled
+   !> value the accessors return
+   !>
    !> Fade off: `|S|/L` with the cached Lipschitz bound `L` of the untruncated model
    !>
    !> Fade on: `r = |tau(S)|`, `tau(phi) = int_0^phi ds/Lam(s)`
@@ -3838,26 +3845,30 @@ contains
    pure function lsf_exclusion_radius(self, lsf0) result(r)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
-      !> LSF value at the evaluation point
+      !> LSF value at the evaluation point, scale included
       real(wp), intent(in) :: lsf0
       !> Surface-free radius
       real(wp) :: r
+
+      !> Unscaled level the bounds are built for
+      real(wp) :: s0
 
       r = 0.0_wp
       if (ieee_is_nan(lsf0)) return
       if (lsf0 < -huge(lsf0)) return
       if (.not. certificate_current(self)) return
+      s0 = lsf0/self%scale
       if (.not. self%param%fade_enabled) then
-         if (lsf0 > huge(lsf0)) return
-         r = abs(lsf0)*self%excl_inv_lip
+         if (s0 > huge(s0)) return
+         r = abs(s0)*self%excl_inv_lip
          return
       end if
 
       if (.not. self%cert%valid) return
-      if (lsf0 <= 0.0_wp) then
-         r = -lsf0*self%cert%inv_lam0
+      if (s0 <= 0.0_wp) then
+         r = -s0*self%cert%inv_lam0
       else
-         r = tau_lower(self%cert, min(lsf0, self%cert%s_cap))
+         r = tau_lower(self%cert, min(s0, self%cert%s_cap))
       end if
       r = max(r, 0.0_wp)
    end function lsf_exclusion_radius

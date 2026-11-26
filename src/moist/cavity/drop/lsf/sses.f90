@@ -132,6 +132,7 @@ contains
       self%candidate_space = lsf_candidate_space_user
       call self%param%init_defaults()
       if (present(param)) self%param = param
+      self%scale = self%param%scale
       self%prepared_deriv = -1
    end subroutine new
 
@@ -149,6 +150,7 @@ contains
       real(wp), intent(in) :: radii(:)
 
       call lsf_base_update(self, mol, radii)
+      self%scale = self%param%scale
       self%prepared_deriv = -1
    end subroutine update
 
@@ -200,7 +202,8 @@ contains
          call fatal_error(error, "SSES: moment optimizer failed to converge")
          return
       end if
-      self%spatial%c = self%param%scale*self%spatial%c
+      self%scale = self%param%scale
+      self%spatial%c = self%scale*self%spatial%c
       self%prepared_deriv = self%max_deriv
    end subroutine prepare
 
@@ -400,17 +403,17 @@ contains
                      self%param%smoothing_length, self%param%temperature(), ps, cs, rs, order, y0, &
                      field, valid, gc, gr)
       if (.not. valid) error stop "SSES: analytic derivative evaluation failed"
-      field%c = self%param%scale*field%c
+      field%c = self%scale*field%c
       if (present(gc)) then
          do a = 1, self%ncenters
             do k = 1, 3
-               gc(k, a)%c = self%param%scale*gc(k, a)%c
+               gc(k, a)%c = self%scale*gc(k, a)%c
             end do
          end do
       end if
       if (present(gr)) then
          do a = 1, self%ncenters
-            gr(a)%c = self%param%scale*gr(a)%c
+            gr(a)%c = self%scale*gr(a)%c
          end do
       end if
    end subroutine derivative_jets
@@ -456,7 +459,7 @@ contains
       if (.not. sses_cache_moment(self%cache, self%point, y0)) return
       call moment_atom_native(self%cache%state, order, done, gc0, gc1, gc2, gr0, gr1, gr2)
       if (.not. done) return
-      scale = self%param%scale
+      scale = self%scale
       if (present(gc0)) gc0(:, 1:n) = scale*gc0(:, 1:n)
       if (present(gc1)) gc1(:, :, 1:n) = scale*gc1(:, :, 1:n)
       if (present(gc2)) gc2(:, :, :, 1:n) = scale*gc2(:, :, :, 1:n)

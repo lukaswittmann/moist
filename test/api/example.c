@@ -4350,6 +4350,7 @@ struct cfc_options_1_0 {
     size_t struct_size;
     double a1, a2, c;
     int m;
+    double scale;
 };
 
 /* Obsolete PCM layout, retained only to verify rejection */
@@ -4455,6 +4456,7 @@ int test_options_padding(void)
         MARK_FIELD(svdw, blend_1b);
         MARK_FIELD(svdw, blend_2b);
         MARK_FIELD(svdw, blend_3b);
+        MARK_FIELD(svdw, scale);
         for (int pass = 0; pass < 2; ++pass) {
             memset(&value, pass ? 0x5a : 0xa5, sizeof value);
             moist_init_svdw_options(error, &value, sizeof value);
@@ -4469,6 +4471,7 @@ int test_options_padding(void)
         MARK_FIELD(cfc, a2);
         MARK_FIELD(cfc, c);
         MARK_FIELD(cfc, m);
+        MARK_FIELD(cfc, scale);
         for (int pass = 0; pass < 2; ++pass) {
             memset(&value, pass ? 0x5a : 0xa5, sizeof value);
             moist_init_cfc_options(error, &value, sizeof value);

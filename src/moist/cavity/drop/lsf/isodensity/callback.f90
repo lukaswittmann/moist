@@ -150,6 +150,7 @@ contains
       self%context = context
       call self%param%init_defaults()
       if (present(param)) self%param = param
+      self%scale = self%param%scale
    end subroutine lsf_new
 
    !> Declare the build-phase request at the cavity scope
@@ -230,6 +231,7 @@ contains
       real(wp), intent(in) :: radii(:)
 
       call lsf_base_update(self, mol, radii)
+      self%scale = self%param%scale
       self%zmax = isodensity_max_nuclear_charge(mol)
       call self%core%update(mol, radii, self%param, self%z)
    end subroutine lsf_update
@@ -311,15 +313,16 @@ contains
       ! S = scale (rho_iso - rho): the isovalue shifts the value only, and every
       ! derivative inherits the sign flip; identical by construction to the lift
       ! in [[moist_cavity_drop_lsf_isodensity_internal]]
-      self%value = self%param%scale*(self%param%rho_iso - rho)
-      self%grad = -self%param%scale*drho
+      self%scale = self%param%scale
+      self%value = self%scale*(self%param%rho_iso - rho)
+      self%grad = -self%scale*drho
       if (want_hess) then
-         self%hess = -self%param%scale*d2rho
+         self%hess = -self%scale*d2rho
       else
          self%hess = 0.0_wp
       end if
       if (want_third) then
-         self%third = -self%param%scale*d3rho
+         self%third = -self%scale*d3rho
       else
          self%third = 0.0_wp
       end if
@@ -568,7 +571,7 @@ contains
       !> Whether this LSF is backed by a density
       logical :: available
 
-      factor = -self%param%scale
+      factor = -self%scale
       available = .true.
    end function lsf_density_adjoint_factor
 

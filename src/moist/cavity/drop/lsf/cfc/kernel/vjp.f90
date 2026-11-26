@@ -7,9 +7,13 @@ submodule(moist_cavity_drop_lsf_cfc_kernel) moist_cavity_drop_lsf_cfc_kernel_vjp
 
 contains
 
-   pure module subroutine cfc_strip_lift_vjp(np, pd0, pd1, pd2, w0, w1, w2, lam0, lam1, lam2)
+   pure module subroutine cfc_strip_lift_vjp(np, lsf_scale, pd0, pd1, pd2, w0, w1, w2, lam0, &
+                                      lam1, lam2)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
+      !> Constant multiplier of the level set; every output is lsf_scale times the
+      !> unscaled derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 pseudo-density jet of the strip, point-first
       real(wp), intent(in) :: pd0(np)
       !> Order-1 pseudo-density jet of the strip, point-first; second index the Cartesian
@@ -72,20 +76,23 @@ contains
          cs7 = 2.0_wp*sw2(p, 4)
          cs8 = 2.0_wp*sw2(p, 5)
          lm0(p) = &
-            cs1*sw1(p, 1) + cs2*sw1(p, 2) + cs3*sw1(p, 3) + cs6*(cs0*pd2(p, 2) - &
-            cs5*pd1(p, 2)) + cs7*(cs0*pd2(p, 4) - cs5*pd1(p, 3)) + cs8*(cs0*pd2(p, 5) - &
-            cs4*pd1(p, 2)*pd1(p, 3)) - ipd(p)*sw0(p) + sw2(p, 1)*(cs0*pd2(p, 1) - &
+            lsf_scale*(cs1*sw1(p, 1) + cs2*sw1(p, 2) + cs3*sw1(p, 3) + cs6*(cs0*pd2(p, &
+            2) - cs5*pd1(p, 2)) + cs7*(cs0*pd2(p, 4) - cs5*pd1(p, 3)) + cs8*(cs0*pd2(p, &
+            5) - cs4*pd1(p, 2)*pd1(p, 3)) - ipd(p)*sw0(p) + sw2(p, 1)*(cs0*pd2(p, 1) - &
             cs4*(pd1(p, 1)*pd1(p, 1))) + sw2(p, 3)*(cs0*pd2(p, 3) - cs4*(pd1(p, &
-            2)*pd1(p, 2))) + sw2(p, 6)*(cs0*pd2(p, 6) - cs4*(pd1(p, 3)*pd1(p, 3)))
-         lm1(p, 1) = 2.0_wp*cs1*sw2(p, 1) + cs2*cs6 + cs3*cs7 - ipd(p)*sw1(p, 1)
-         lm1(p, 2) = cs1*cs6 + 2.0_wp*cs2*sw2(p, 3) + cs3*cs8 - ipd(p)*sw1(p, 2)
-         lm1(p, 3) = cs1*cs7 + cs2*cs8 + 2.0_wp*cs3*sw2(p, 6) - ipd(p)*sw1(p, 3)
-         lm2(p, 1) = -ipd(p)*sw2(p, 1)
-         lm2(p, 2) = -cs6*ipd(p)
-         lm2(p, 3) = -ipd(p)*sw2(p, 3)
-         lm2(p, 4) = -cs7*ipd(p)
-         lm2(p, 5) = -cs8*ipd(p)
-         lm2(p, 6) = -ipd(p)*sw2(p, 6)
+            2)*pd1(p, 2))) + sw2(p, 6)*(cs0*pd2(p, 6) - cs4*(pd1(p, 3)*pd1(p, 3))))
+         lm1(p, 1) = &
+            lsf_scale*(2.0_wp*cs1*sw2(p, 1) + cs2*cs6 + cs3*cs7 - ipd(p)*sw1(p, 1))
+         lm1(p, 2) = &
+            lsf_scale*(cs1*cs6 + 2.0_wp*cs2*sw2(p, 3) + cs3*cs8 - ipd(p)*sw1(p, 2))
+         lm1(p, 3) = &
+            lsf_scale*(cs1*cs7 + cs2*cs8 + 2.0_wp*cs3*sw2(p, 6) - ipd(p)*sw1(p, 3))
+         lm2(p, 1) = lsf_scale*(-ipd(p)*sw2(p, 1))
+         lm2(p, 2) = lsf_scale*(-cs6*ipd(p))
+         lm2(p, 3) = lsf_scale*(-ipd(p)*sw2(p, 3))
+         lm2(p, 4) = lsf_scale*(-cs7*ipd(p))
+         lm2(p, 5) = lsf_scale*(-cs8*ipd(p))
+         lm2(p, 6) = lsf_scale*(-ipd(p)*sw2(p, 6))
       end do
 
       lam0 = lm0(1:np)

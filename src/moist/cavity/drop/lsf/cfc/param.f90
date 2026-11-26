@@ -44,12 +44,17 @@ module moist_cavity_drop_lsf_cfc_param
       real(wp) :: fade_start = 27.0_wp
       !> Fade band width `b` in e-folds of `u_A`
       real(wp) :: fade_width = 3.0_wp
+      !> Constant multiplier of the level set, finite and positive
+      !>
+      !> - single atom: `||grad S|| = scale |a1|/R_A`; 0.25 puts carbon (CPCM radius
+      !>   2 Angstrom) at one and the surface median near SvdW's
+      real(wp) :: scale = 0.25_wp
    contains
       !> Restore compiled defaults
       procedure :: init_defaults => init_parameter_defaults
       !> Declare fields for JSON input, output, and printing
       procedure :: register_entries => register_parameter_entries
-      !> Refuse a pair power other than 4 or an invalid fade band
+      !> Refuse a pair power other than 4, an invalid `scale` or fade band
       procedure :: validate => validate_lsf_cfc_param
       !> Override any subset of parameter fields
       procedure, public :: new => new_lsf_cfc_param
@@ -73,6 +78,7 @@ contains
       self%fade_enabled = defaults%fade_enabled
       self%fade_start = defaults%fade_start
       self%fade_width = defaults%fade_width
+      self%scale = defaults%scale
    end subroutine init_parameter_defaults
 
    !> Declare parameter fields for JSON input, output, and printing
@@ -88,25 +94,30 @@ contains
       call self%register_logical("fade_enabled", self%fade_enabled)
       call self%register_real_scalar("fade_start", self%fade_start)
       call self%register_real_scalar("fade_width", self%fade_width)
+      call self%register_real_scalar("scale", self%scale)
    end subroutine register_parameter_entries
 
-   !> Refuse a pair power other than 4 or an invalid fade band
+   !> Refuse a pair power other than 4, an invalid `scale` or fade band
    !>
-   !> - always: `m = 4`, the generated kernel bakes it in
+   !> - always: `m = 4`, the generated kernel bakes it in; finite `scale > 0`
    !> - fade off: the band is not read, so not checked
    !> - fade on: finite, positive `fade_start` and `fade_width`, and `a2 < 0`
    !>   (the band is counted in e-folds of `exp(a2 sigma)`)
    !>
    !> @param[inout] self  CFC parameter instance
-   !> @param[out]   error Invalid pair power or fade band
+   !> @param[out]   error Invalid pair power, `scale` or fade band
    subroutine validate_lsf_cfc_param(self, error)
       !> CFC parameter instance
       class(moist_cavity_drop_lsf_cfc_param_type), intent(inout) :: self
-      !> Invalid pair power or fade band
+      !> Invalid pair power, `scale` or fade band
       type(error_type), allocatable, intent(out) :: error
 
       if (self%m /= 4) then
          call fatal_error(error, "CFC pair power m must be 4 (the generated kernel bakes it in)")
+         return
+      end if
+      if (.not. (ieee_is_finite(self%scale) .and. self%scale > 0.0_wp)) then
+         call fatal_error(error, "CFC scale must be finite and positive")
          return
       end if
       if (.not. self%fade_enabled) return
@@ -129,7 +140,8 @@ contains
    !> @param[in]    fade_enabled Fade the atom and pair terms over a finite band (optional)
    !> @param[in]    fade_start   Fade onset in e-folds of u (optional)
    !> @param[in]    fade_width   Fade band width in e-folds of u (optional)
-   subroutine new_lsf_cfc_param(self, a1, a2, c, m, fade_enabled, fade_start, fade_width)
+   !> @param[in]    scale        Constant level-set multiplier (optional)
+   subroutine new_lsf_cfc_param(self, a1, a2, c, m, fade_enabled, fade_start, fade_width, scale)
       class(moist_cavity_drop_lsf_cfc_param_type), intent(inout) :: self
       !> Atomic-term exponent (optional override)
       real(wp), intent(in), optional :: a1
@@ -145,6 +157,8 @@ contains
       real(wp), intent(in), optional :: fade_start
       !> Fade band width in e-folds (optional override)
       real(wp), intent(in), optional :: fade_width
+      !> Constant level-set multiplier (optional override)
+      real(wp), intent(in), optional :: scale
 
       if (present(a1)) self%a1 = a1
       if (present(a2)) self%a2 = a2
@@ -153,11 +167,12 @@ contains
       if (present(fade_enabled)) self%fade_enabled = fade_enabled
       if (present(fade_start)) self%fade_start = fade_start
       if (present(fade_width)) self%fade_width = fade_width
+      if (present(scale)) self%scale = scale
    end subroutine new_lsf_cfc_param
 
    !> Print the CFC shape parameters in the verbose cavity diagnostics
    !>
-   !> - level 2: the exponents, coupling and power; level 4: the fade
+   !> - level 2: the exponents, coupling, power and field scale; level 4: the fade
    !>
    !> @param[in] self  CFC parameter instance
    !> @param[in] unit  Output unit (default `output_unit`); callers holding a run
@@ -184,6 +199,7 @@ contains
       call pp%kv("Pair exponent (a2)", self%a2)
       call pp%kv("Pair coupling (c)", self%c)
       call pp%kv("Pair power (m)", self%m)
+      call pp%kv("Field scale", self%scale)
       if (lvl >= 4) call pp%kv("Fade", self%fade_enabled)
       if (lvl >= 4 .and. self%fade_enabled) then
          call pp%kv("Fade start", self%fade_start, "e-folds")

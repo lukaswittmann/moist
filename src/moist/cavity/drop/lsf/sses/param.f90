@@ -18,8 +18,11 @@ module moist_cavity_drop_lsf_sses_param
       real(wp) :: probe_radius = 2.7_wp
       !> Smoothing length in Bohr
       real(wp) :: smoothing_length = 0.5_wp
-      !> Positive field multiplier for DROP critical-gradient switching
-      real(wp) :: scale = 1.0_wp
+      !> Constant multiplier of the level set, finite and positive
+      !>
+      !> - convex patch: `||grad F|| ~ 2 (R + p)`; 0.088 is `1/(2 (R + p))` at a mean radius
+      !>   of 3 Bohr and the default probe, `||grad S||` near one like SvdW
+      real(wp) :: scale = 0.088_wp
    contains
       !> Restore compiled parameter defaults
       procedure :: init_defaults

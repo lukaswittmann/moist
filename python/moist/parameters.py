@@ -127,6 +127,7 @@ class SvdWParameters(_Parameters):
     blend_1b: float = _native_default("svdw", "blend_1b")
     blend_2b: float = _native_default("svdw", "blend_2b")
     blend_3b: float = _native_default("svdw", "blend_3b")
+    scale: float = _native_default("svdw", "scale")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -138,6 +139,7 @@ class CFCParameters(_Parameters):
     a2: float = _native_default("cfc", "a2")
     c: float = _native_default("cfc", "c")
     m: int = _native_default("cfc", "m")
+    scale: float = _native_default("cfc", "scale")
 
 
 @dataclass(frozen=True, kw_only=True)

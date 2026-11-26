@@ -56,6 +56,7 @@ program tester
    use test_cavity_drop_lsf, only: collect_cavity_drop_lsf
    use test_cavity_drop_lsf_reference, only: collect_cavity_drop_lsf_reference
    use test_cavity_drop_lsf_screening, only: collect_cavity_drop_lsf_screening
+   use test_cavity_drop_lsf_scale, only: collect_cavity_drop_lsf_scale
    use test_cavity_drop_isodensity, only: collect_cavity_drop_isodensity
    use test_cavity_drop_gradient, only: collect_cavity_drop_gradient
    use test_cavity_drop_branching, only: collect_cavity_drop_branching
@@ -155,6 +156,7 @@ program tester
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
       & new_testsuite("cavity_drop_lsf_reference", collect_cavity_drop_lsf_reference), &
       & new_testsuite("cavity_drop_lsf_screening", collect_cavity_drop_lsf_screening), &
+      & new_testsuite("cavity_drop_lsf_scale", collect_cavity_drop_lsf_scale), &
       & new_testsuite("cavity_drop_isodensity", collect_cavity_drop_isodensity), &
       & new_testsuite("cavity_drop_gradient", collect_cavity_drop_gradient), &
       & new_testsuite("cavity_drop_branching", collect_cavity_drop_branching), &

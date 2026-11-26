@@ -39,6 +39,7 @@ module test_cavity_reference
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_cavity_drop_lsf_cfc_param, only: moist_cavity_drop_lsf_cfc_param_type
    use moist_radii, only: default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
    implicit none(type, external)
@@ -542,7 +543,8 @@ contains
          call move_alloc(drop, cavity)
       case (kind_drop_cfc)
          allocate (drop)
-         call cfc%new()
+         ! Data recorded at scale 1; the 0.25 default only reweights the switch
+         call cfc%new(param=moist_cavity_drop_lsf_cfc_param_type(scale=1.0_wp))
          call new_cavity_drop(drop, default_cpcm_radii(), cfc, err, param=drop_param, ctx=ctx)
          call move_alloc(drop, cavity)
       case default

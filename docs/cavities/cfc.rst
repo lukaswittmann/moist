@@ -17,7 +17,7 @@ Atomic and pairwise terms build the pseudo-density that is given by
    \mathrm{PD}(\mathbf r) = \sum_I e^{a_1\sigma_I}
    + \sum_{I<J} c\,\bigl(1 - \mathbf s_I\cdot\mathbf s_J\bigr)^m e^{a_2(\sigma_I + \sigma_J)}.
 
-The level set is defined as :math:`S(\mathbf r) = -\log\mathrm{PD}(\mathbf r)`, so the interior is negative.
+The level set is defined as :math:`S(\mathbf r) = -\alpha\log\mathrm{PD}(\mathbf r)` with the constant ``scale`` :math:`\alpha` (default ``0.25``), so the interior is negative.
 
 .. subfigure:: AB
    :layout-sm: A|B
@@ -55,6 +55,11 @@ Optional settings:
 ``m`` (:math:`m`, integer, default ``4``)
    Pair-term polynomial power.
    The generated kernel and its derivatives bake in :math:`m = 4`; any other value is refused by the C constructor, by a parameter file, and by every evaluation, with the fade on or off.
+
+``scale`` (:math:`\alpha`, real, default ``0.25``)
+   Constant multiplier, :math:`S = -\alpha\log\mathrm{PD}`; see :ref:`drop-lsf-scale`.
+   A single atom has :math:`\lVert\nabla S\rVert = \alpha\,|a_1|/R_I`, one for carbon at the defaults.
+   Should not be changed.
 
 ``fade_enabled`` (logical, default ``true``)
    Fade every atom and pair term smoothly to zero over a finite switching region past each atom; see `Fade`_.

@@ -69,6 +69,7 @@ tests = [
   'cavity_drop_lsf',
   'cavity_drop_lsf_reference',
   'cavity_drop_lsf_screening',
+  'cavity_drop_lsf_scale',
   'cavity_drop_isodensity',
   'cavity_drop_gradient',
   'cavity_drop_branching',

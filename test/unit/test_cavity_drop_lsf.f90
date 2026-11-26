@@ -638,8 +638,9 @@ contains
    !> @param[in]  blend_2b            optional svdw 2-body weight override
    !> @param[in]  blend_3b            optional svdw 3-body weight override
    !> @param[in]  screening_threshold optional screening cutoff (default 0)
+   !> @param[in]  scale               optional SvdW / CFC level-set scale (default: family default)
    subroutine init_lsf(lsf, mol, radii, max_deriv, kind, blend_k, blend_2b, &
-                       blend_3b, screening_threshold, fade_enabled, fade_start, fade_width)
+                       blend_3b, screening_threshold, fade_enabled, fade_start, fade_width, scale)
       class(moist_cavity_drop_lsf_type), allocatable, intent(out) :: lsf
       !> Bound molecular structure
       type(structure_type), intent(in) :: mol
@@ -663,6 +664,8 @@ contains
       real(wp), intent(in), optional :: fade_start
       !> Optional SvdW / CFC fade width in e-folds
       real(wp), intent(in), optional :: fade_width
+      !> Optional SvdW / CFC level-set scale
+      real(wp), intent(in), optional :: scale
 
       type(moist_cavity_drop_lsf_svdw_type) :: tmp_svdw
       type(moist_cavity_drop_lsf_cfc_type)  :: tmp_cfc
@@ -678,7 +681,8 @@ contains
       case ("svdw")
          tmp_svdw%screening_threshold = thr
          call param%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b, &
-                        fade_enabled=fade_enabled, fade_start=fade_start, fade_width=fade_width)
+                        fade_enabled=fade_enabled, fade_start=fade_start, fade_width=fade_width, &
+                        scale=scale)
          call tmp_svdw%new(param)
          call tmp_svdw%update(mol, radii)
          call tmp_svdw%set_max_deriv(max_deriv)
@@ -686,7 +690,7 @@ contains
       case ("cfc")
          tmp_cfc%screening_threshold = thr
          call cfc_param%new(fade_enabled=fade_enabled, fade_start=fade_start, &
-                            fade_width=fade_width)
+                            fade_width=fade_width, scale=scale)
          call tmp_cfc%new(cfc_param)
          call tmp_cfc%update(mol, radii)
          call tmp_cfc%set_max_deriv(max_deriv)
@@ -4025,7 +4029,7 @@ contains
       call init_lsf(lsf, part, radii(atoms), 0, "cfc")
       if (prepare_failed(lsf, point, error)) return
       call lsf%f0(s)
-      pd = exp(-s)
+      pd = exp(-s/lsf%scale)
    end subroutine cfc_pseudo_density
 
    !* ================================================================================= *!
@@ -4735,7 +4739,8 @@ contains
          do icase = 1, size(mols)
             call get_test_radii(mols(icase), radii)
             call get_test_points(mols(icase), points)
-            call init_lsf(lsf, mols(icase), radii, 0, "cfc", fade_enabled=ifade == 2)
+            call init_lsf(lsf, mols(icase), radii, 0, "cfc", fade_enabled=ifade == 2, &
+                          scale=1.0_wp)
             call probe_exclusion_balls(lsf, points, n_certified, error)
             if (allocated(error)) return
             n_total = n_total + n_certified
@@ -4753,7 +4758,7 @@ contains
          call get_test_radii(cat_mols(imol), radii)
          do ifd = 1, 2
             call init_lsf(lsf, cat_mols(imol), radii, 0, "cfc", fade_enabled=.true., &
-                          fade_start=band(1, ifd), fade_width=band(2, ifd))
+                          fade_start=band(1, ifd), fade_width=band(2, ifd), scale=1.0_wp)
             call cfc_certificate_points(lsf, cat_mols(imol), radii, &
                                         band(1, ifd)/abs(defaults%a2), &
                                         band(2, ifd)/abs(defaults%a2), points, error)
@@ -4769,7 +4774,8 @@ contains
             if (ifd /= 1) cycle
 
             ! Defaults: the faded certificate stays at today's |S|/L up to S = 10
-            call init_lsf(lsf_off, cat_mols(imol), radii, 0, "cfc", fade_enabled=.false.)
+            call init_lsf(lsf_off, cat_mols(imol), radii, 0, "cfc", fade_enabled=.false., &
+                          scale=1.0_wp)
             n_loose = 0
             do ip = 1, size(points, 2)
                call lsf%prepare(points(:, ip), lsf_err)
@@ -4780,8 +4786,9 @@ contains
                if (lsf%unreached()) cycle
                call lsf%f0(s)
                if (abs(s) > 10.0_wp) cycle
-               if (lsf%exclusion_radius(s) < (1.0_wp - 1.0e-3_wp)*lsf_off%exclusion_radius(s)) &
+               if (lsf%exclusion_radius(s) < (1.0_wp - 1.0e-3_wp)*lsf_off%exclusion_radius(s)) then
                   n_loose = n_loose + 1
+               end if
             end do
             call check(error, n_loose, 0, &
                        more="fade on, defaults: a radius below (1 - 1e-3) |S|/L at |S| <= 10")
@@ -4792,8 +4799,8 @@ contains
       ! Negative control: raw |S|/L over-claims inside the band of a lone atom
       call new(mol, [6], reshape([0.0_wp, 0.0_wp, 0.0_wp], [ndim, 1]))
       radii = [2.0_wp]
-      call init_lsf(lsf, mol, radii, 0, "cfc", fade_enabled=.true.)
-      call init_lsf(lsf_off, mol, radii, 0, "cfc", fade_enabled=.false.)
+      call init_lsf(lsf, mol, radii, 0, "cfc", fade_enabled=.true., scale=1.0_wp)
+      call init_lsf(lsf_off, mol, radii, 0, "cfc", fade_enabled=.false., scale=1.0_wp)
       sigma = (defaults%fade_start + 0.97_wp*defaults%fade_width)/abs(defaults%a2)
       x = [radii(1)*(1.0_wp + sigma), 0.0_wp, 0.0_wp]
       dist = radii(1)*sigma
@@ -4984,7 +4991,8 @@ contains
       call get_test_radii(mol, radii)
 
       call off%new(param=moist_cavity_drop_lsf_cfc_param_type(a1=-15.0_wp, a2=-9.0_wp, &
-                                                             c=5.0_wp, m=4, fade_enabled=.false.))
+                                                             c=5.0_wp, m=4, fade_enabled=.false., &
+                                                             scale=1.0_wp))
       call off%update(mol, radii)
       r_off = off%exclusion_radius(-1.0_wp)
       call check(error, r_off > 0.05_wp .and. r_off < 0.2_wp, &
@@ -4999,7 +5007,7 @@ contains
                  message="fade off: no far certificate")
       if (allocated(error)) return
 
-      call cfc%new()
+      call cfc%new(param=moist_cavity_drop_lsf_cfc_param_type(scale=1.0_wp))
       call cfc%update(mol, radii)
       r = cfc%exclusion_radius(-1.0_wp)
       call check(error, r <= r_off .and. r > (1.0_wp - 1.0e-6_wp)*r_off, &
@@ -5116,7 +5124,7 @@ contains
       do irow = 1, 2
          n = ns(irow)
          call new(mol, num(1:n), xyz(:, 1:n))
-         call lsf%new()
+         call lsf%new(param=moist_cavity_drop_lsf_cfc_param_type(scale=1.0_wp))
          call lsf%update(mol, [(2.0_wp, i=1, n)])
          got = [lsf%cert%xi_star, lsf%far_exclusion_radius(), lsf%cert%r_cap, &
                 lsf%exclusion_radius(-1.0_wp), lsf%exclusion_radius(2.0_wp), &
@@ -5134,7 +5142,7 @@ contains
       end do
 
       ! Negative control: n = 1000, the fade terms move r(10) off |S|/L
-      call param%new(fade_enabled=.false.)
+      call param%new(fade_enabled=.false., scale=1.0_wp)
       call off%new(param)
       call off%update(mol, [(2.0_wp, i=1, n)])
       call check(error, abs(lsf%exclusion_radius(10.0_wp)/off%exclusion_radius(10.0_wp) - 1.0_wp) &
@@ -7824,7 +7832,7 @@ contains
       sigma = start + 0.4_wp*width
       call new_smoothstep_polynomial(fade, x_off=start + width, x_on=start, order=4)
       call fade%eval(sigma, w)
-      expected = -single%param%a1*sigma - log(w)
+      expected = single%scale*(-single%param%a1*sigma - log(w))
       call single%evaluate_batch(reshape([3.0_wp*(1.0_wp + sigma), 0.0_wp, 0.0_wp], [ndim, 1]), &
                                  0, b0, error=lsf_err)
       call batch_status(single, st)
@@ -7835,9 +7843,10 @@ contains
       call check(error, st(1), 0, more="the single in-band atom must be reached")
       if (allocated(error)) return
       call check(error, abs(b0(1) - expected) <= 1.0e-12_wp*abs(expected), &
-                 more="one in-band atom: S = -a1 sigma - log(1 - S_4(t))")
+                 more="one in-band atom: S = alpha (-a1 sigma - log(1 - S_4(t)))")
       if (allocated(error)) return
-      call check(error, abs(-single%param%a1*sigma - expected) > 1.0e-6_wp*abs(expected), &
+      call check(error, abs(-single%scale*single%param%a1*sigma - expected) > &
+                 1.0e-6_wp*abs(expected), &
                  more="negative control: the band must bite at this sigma")
    end subroutine test_cfc_fade_tiling
 

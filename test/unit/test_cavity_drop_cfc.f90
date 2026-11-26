@@ -208,7 +208,7 @@ contains
       real(wp) :: pd4_rrrr(ndim, ndim, ndim, ndim), f4_rrrr(ndim, ndim, ndim, ndim)
 
       pd4_rrrr = 0.0_wp
-      call cfc_spatial_eval(pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr, max_deriv, &
+      call cfc_spatial_eval(1.0_wp, pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr, max_deriv, &
                             lpd0, lpd1_r, lpd2_rr, lpd3_rrr, f4_rrrr)
       lpd0 = -lpd0
       lpd1_r = -lpd1_r
@@ -951,7 +951,7 @@ contains
          do md = 0, 4
             f0 = poison; f1_r = poison; f2_rr = poison
             f3_rrr = poison; f4_rrrr = poison
-            call cfc_spatial_eval(pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr, md, &
+            call cfc_spatial_eval(1.0_wp, pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr, md, &
                                   f0, f1_r, f2_rr, f3_rrr, f4_rrrr)
             call no_poison(error, [f0], "cfc_spatial_eval f0", poison)
             if (allocated(error)) return
@@ -979,7 +979,7 @@ contains
 
          do md = 0, 3
             n1 = poison; n2 = poison; n3 = poison; n4 = poison
-            call cfc_nuclear_eval(pd0, pd1_r, pd2_rr, pd3_rrr, qa0, qa1_r, qa2_rr, qa3_rrr, &
+            call cfc_nuclear_eval(1.0_wp, pd0, pd1_r, pd2_rr, pd3_rrr, qa0, qa1_r, qa2_rr, qa3_rrr, &
                                   md, n1, n2, n3, n4)
             call no_poison(error, reshape(n1, [size(n1)]), "cfc_nuclear_eval f1_rA", poison)
             if (allocated(error)) return
@@ -991,7 +991,7 @@ contains
             if (allocated(error)) return
 
             t0 = poison; t1 = poison; t2 = poison; t3 = poison
-            call cfc_tangent_eval(pd0, pd1_r, pd2_rr, pd3_rrr, tg0, tg1_r, tg2_rr, tg3_rrr, &
+            call cfc_tangent_eval(1.0_wp, pd0, pd1_r, pd2_rr, pd3_rrr, tg0, tg1_r, tg2_rr, tg3_rrr, &
                                   md, t0, t1, t2, t3)
             call no_poison(error, [t0], "cfc_tangent_eval tangent_f0", poison)
             if (allocated(error)) return
@@ -1006,7 +1006,7 @@ contains
 
          do md = 0, 2
             e2 = poison; e3 = poison; e4 = poison
-            call cfc_hessian_eval(pd0, pd1_r, pd2_rr, qa0, qa1_r, qa2_rr, &
+            call cfc_hessian_eval(1.0_wp, pd0, pd1_r, pd2_rr, qa0, qa1_r, qa2_rr, &
                                   qa0, qa1_r, qa2_rr, qq0, qq1_r, qq2_rr, md, e2, e3, e4)
             call no_poison(error, reshape(e2, [size(e2)]), "cfc_hessian_eval f2_rArB", poison)
             if (allocated(error)) return
@@ -1016,7 +1016,7 @@ contains
             if (allocated(error)) return
 
             h1 = poison; h2 = poison; h3 = poison
-            call cfc_hvp_eval(pd0, pd1_r, pd2_rr, tg0, tg1_r, tg2_rr, qa0, qa1_r, qa2_rr, &
+            call cfc_hvp_eval(1.0_wp, pd0, pd1_r, pd2_rr, tg0, tg1_r, tg2_rr, qa0, qa1_r, qa2_rr, &
                               hv0, hv1_r, hv2_rr, md, h1, h2, h3)
             call no_poison(error, reshape(h1, [size(h1)]), "cfc_hvp_eval hvp_f1_rA", poison)
             if (allocated(error)) return

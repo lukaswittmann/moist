@@ -210,7 +210,7 @@ contains
 
    end subroutine svdw_strip_powersums_o0
 
-   pure module subroutine svdw_strip_lift_o0(np, blend_k, s_1, s_2, s_3, ps0, lsf0)
+   pure module subroutine svdw_strip_lift_o0(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, lsf0)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -221,6 +221,9 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 = p2, 3 = p3,
       !> 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -245,7 +248,7 @@ contains
       end do
       ! libm log: kept out of the vectorized loops
       do p = 1, np
-         lsf0(p) = -log(zz(p))/blend_k
+         lsf0(p) = lsf_scale*(-log(zz(p))/blend_k)
       end do
 
    end subroutine svdw_strip_lift_o0
@@ -531,7 +534,8 @@ contains
 
    end subroutine svdw_strip_powersums_o1
 
-   pure module subroutine svdw_strip_lift_o1(np, blend_k, s_1, s_2, s_3, ps0, ps1, lsf0, lsf1_r)
+   pure module subroutine svdw_strip_lift_o1(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, lsf0, &
+                                      lsf1_r)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -542,6 +546,9 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 = p2, 3 = p3,
       !> 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -576,7 +583,7 @@ contains
       end do
       ! libm log: kept out of the vectorized loops
       do p = 1, np
-         lsf0(p) = -log(zz(p))/blend_k
+         lsf0(p) = lsf_scale*(-log(zz(p))/blend_k)
       end do
 
       do p = 1, np
@@ -585,9 +592,15 @@ contains
          cs2 = s_1 - 1.0_wp/2.0_wp*s_2 + (1.0_wp/3.0_wp)*s_3
          cs3 = (1.0_wp/6.0_wp)*s_3*(3.0_wp*(ps0(p, 1)*ps0(p, 1)) - 3.0_wp*ps0(p, 2))
          cs4 = izz(p)/blend_k
-         o1(p, 1) = -cs4*(cs0*ps1(p, 1, 4) - cs1*ps1(p, 1, 2) + cs2*ps1(p, 1, 3) + cs3*ps1(p, 1, 1))
-         o1(p, 2) = -cs4*(cs0*ps1(p, 2, 4) - cs1*ps1(p, 2, 2) + cs2*ps1(p, 2, 3) + cs3*ps1(p, 2, 1))
-         o1(p, 3) = -cs4*(cs0*ps1(p, 3, 4) - cs1*ps1(p, 3, 2) + cs2*ps1(p, 3, 3) + cs3*ps1(p, 3, 1))
+         o1(p, 1) = &
+            lsf_scale*(-cs4*(cs0*ps1(p, 1, 4) - cs1*ps1(p, 1, 2) + cs2*ps1(p, 1, 3) + cs3*ps1(p, &
+            1, 1)))
+         o1(p, 2) = &
+            lsf_scale*(-cs4*(cs0*ps1(p, 2, 4) - cs1*ps1(p, 2, 2) + cs2*ps1(p, 2, 3) + cs3*ps1(p, &
+            2, 1)))
+         o1(p, 3) = &
+            lsf_scale*(-cs4*(cs0*ps1(p, 3, 4) - cs1*ps1(p, 3, 2) + cs2*ps1(p, 3, 3) + cs3*ps1(p, &
+            3, 1)))
       end do
 
       do p = 1, np
@@ -1034,8 +1047,8 @@ contains
 
    end subroutine svdw_strip_powersums_o2
 
-   pure module subroutine svdw_strip_lift_o2(np, blend_k, s_1, s_2, s_3, ps0, ps1, ps2, lsf0, lsf1_r, &
-                                      lsf2_rr)
+   pure module subroutine svdw_strip_lift_o2(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, lsf0, &
+                                      lsf1_r, lsf2_rr)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -1046,6 +1059,9 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 = p2, 3 = p3,
       !> 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -1086,7 +1102,7 @@ contains
       end do
       ! libm log: kept out of the vectorized loops
       do p = 1, np
-         lsf0(p) = -log(zz(p))/blend_k
+         lsf0(p) = lsf_scale*(-log(zz(p))/blend_k)
       end do
 
       do p = 1, np
@@ -1111,36 +1127,37 @@ contains
          cs18 = (izz(p)*izz(p))
          cs19 = cs13*ps1(p, 1, 4)
          cs20 = cs7*(cs15*ps1(p, 2, 1) - cs8)
-         o1(p, 1) = -cs5*cs7
-         o1(p, 2) = -cs7*cs9
-         o1(p, 3) = -cs11*cs7
+         o1(p, 1) = lsf_scale*(-cs5*cs7)
+         o1(p, 2) = lsf_scale*(-cs7*cs9)
+         o1(p, 3) = lsf_scale*(-cs11*cs7)
          o2(p, 1) = &
-            -cs12*ps2(p, 1, 4) - cs13*(ps1(p, 1, 4)*ps1(p, 1, 4)) - cs14*ps2(p, 1, 3) - &
+            lsf_scale*(-cs12*ps2(p, 1, 4) - cs13*(ps1(p, 1, 4)*ps1(p, 1, 4)) - cs14*ps2(p, 1, 3) - &
             cs16*ps1(p, 1, 1) - cs17*ps2(p, 1, 1) + cs18*(cs5*cs5)*cs6 + &
             (1.0_wp/2.0_wp)*cs6*izz(p)*ps0(p, 1)*ps2(p, 1, 2)*s_3 + &
-            (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 1, 1)*ps1(p, 1, 2)*s_3
+            (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 1, 1)*ps1(p, 1, 2)*s_3)
          o2(p, 2) = &
-            -cs12*ps2(p, 2, 4) - cs14*ps2(p, 2, 3) - cs16*ps1(p, 2, 1) - cs17*ps2(p, 2, 1) + &
-            cs18*cs5*cs6*cs9 - cs19*ps1(p, 2, 4) + (1.0_wp/2.0_wp)*cs6*izz(p)*ps0(p, 1)*ps2(p, 2, &
-            2)*s_3 + (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 1, 1)*ps1(p, 2, 2)*s_3
+            lsf_scale*(-cs12*ps2(p, 2, 4) - cs14*ps2(p, 2, 3) - cs16*ps1(p, 2, 1) - cs17*ps2(p, 2, &
+            1) + cs18*cs5*cs6*cs9 - cs19*ps1(p, 2, 4) + (1.0_wp/2.0_wp)*cs6*izz(p)*ps0(p, &
+            1)*ps2(p, 2, 2)*s_3 + (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 1, 1)*ps1(p, 2, 2)*s_3)
          o2(p, 4) = &
-            cs11*cs18*cs5*cs6 - cs12*ps2(p, 4, 4) - cs14*ps2(p, 4, 3) - cs16*ps1(p, 3, 1) - &
-            cs17*ps2(p, 4, 1) - cs19*ps1(p, 3, 4) + (1.0_wp/2.0_wp)*cs6*izz(p)*ps0(p, 1)*ps2(p, 4, &
-            2)*s_3 + (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 1, 1)*ps1(p, 3, 2)*s_3
+            lsf_scale*(cs11*cs18*cs5*cs6 - cs12*ps2(p, 4, 4) - cs14*ps2(p, 4, 3) - cs16*ps1(p, 3, &
+            1) - cs17*ps2(p, 4, 1) - cs19*ps1(p, 3, 4) + (1.0_wp/2.0_wp)*cs6*izz(p)*ps0(p, &
+            1)*ps2(p, 4, 2)*s_3 + (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 1, 1)*ps1(p, 3, 2)*s_3)
          o2(p, 3) = &
-            -cs12*ps2(p, 3, 4) - cs13*(ps1(p, 2, 4)*ps1(p, 2, 4)) - cs14*ps2(p, 3, 3) - &
+            lsf_scale*(-cs12*ps2(p, 3, 4) - cs13*(ps1(p, 2, 4)*ps1(p, 2, 4)) - cs14*ps2(p, 3, 3) - &
             cs17*ps2(p, 3, 1) + cs18*cs6*(cs9*cs9) - cs20*ps1(p, 2, 1) + &
             (1.0_wp/2.0_wp)*cs6*izz(p)*ps0(p, 1)*ps2(p, 3, 2)*s_3 + &
-            (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 2, 1)*ps1(p, 2, 2)*s_3
+            (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 2, 1)*ps1(p, 2, 2)*s_3)
          o2(p, 5) = &
-            cs11*cs18*cs6*cs9 - cs12*ps2(p, 5, 4) - cs13*ps1(p, 2, 4)*ps1(p, 3, 4) - cs14*ps2(p, &
-            5, 3) - cs17*ps2(p, 5, 1) - cs20*ps1(p, 3, 1) + (1.0_wp/2.0_wp)*cs6*izz(p)*ps0(p, &
-            1)*ps2(p, 5, 2)*s_3 + (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 2, 1)*ps1(p, 3, 2)*s_3
+            lsf_scale*(cs11*cs18*cs6*cs9 - cs12*ps2(p, 5, 4) - cs13*ps1(p, 2, 4)*ps1(p, 3, 4) - &
+            cs14*ps2(p, 5, 3) - cs17*ps2(p, 5, 1) - cs20*ps1(p, 3, 1) + &
+            (1.0_wp/2.0_wp)*cs6*izz(p)*ps0(p, 1)*ps2(p, 5, 2)*s_3 + &
+            (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 2, 1)*ps1(p, 3, 2)*s_3)
          o2(p, 6) = &
-            (cs11*cs11)*cs18*cs6 - cs12*ps2(p, 6, 4) - cs13*(ps1(p, 3, 4)*ps1(p, 3, 4)) - &
-            cs14*ps2(p, 6, 3) - cs17*ps2(p, 6, 1) + (1.0_wp/2.0_wp)*cs6*izz(p)*ps0(p, 1)*ps2(p, 6, &
-            2)*s_3 + (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 3, 1)*ps1(p, 3, 2)*s_3 - cs7*ps1(p, 3, &
-            1)*(-cs10 + cs15*ps1(p, 3, 1))
+            lsf_scale*((cs11*cs11)*cs18*cs6 - cs12*ps2(p, 6, 4) - cs13*(ps1(p, 3, 4)*ps1(p, 3, 4)) &
+            - cs14*ps2(p, 6, 3) - cs17*ps2(p, 6, 1) + (1.0_wp/2.0_wp)*cs6*izz(p)*ps0(p, 1)*ps2(p, &
+            6, 2)*s_3 + (1.0_wp/2.0_wp)*cs6*izz(p)*ps1(p, 3, 1)*ps1(p, 3, 2)*s_3 - cs7*ps1(p, 3, &
+            1)*(-cs10 + cs15*ps1(p, 3, 1)))
       end do
 
       do p = 1, np
@@ -1930,8 +1947,8 @@ contains
 
    end subroutine svdw_strip_powersums_o3
 
-   pure module subroutine svdw_strip_lift_o3(np, blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, lsf0, &
-                                      lsf1_r, lsf2_rr, lsf3_rrr)
+   pure module subroutine svdw_strip_lift_o3(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, &
+                                      lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
       !> Live points in the strip, 1..16
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -1942,6 +1959,9 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 = p2, 3 = p3,
       !> 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -1994,7 +2014,7 @@ contains
       end do
       ! libm log: kept out of the vectorized loops
       do p = 1, np
-         lsf0(p) = -log(zz(p))/blend_k
+         lsf0(p) = lsf_scale*(-log(zz(p))/blend_k)
       end do
 
       do p = 1, np
@@ -2125,91 +2145,91 @@ contains
          cs114 = cs64*ps2(p, 5, 3)
          cs115 = cs61*ps1(p, 2, 4)
          cs116 = cs44*ps1(p, 3, 1)
-         o1(p, 1) = -cs10*cs8
-         o1(p, 2) = -cs10*cs14
-         o1(p, 3) = -cs10*cs17
+         o1(p, 1) = lsf_scale*(-cs10*cs8)
+         o1(p, 2) = lsf_scale*(-cs10*cs14)
+         o1(p, 3) = lsf_scale*(-cs10*cs17)
          o2(p, 1) = &
-            -cs18*ps2(p, 1, 4) - cs19*cs20 - cs21*ps2(p, 1, 3) - cs25*ps1(p, 1, 1) - cs26*ps2(p, &
-            1, 1) + cs27*cs28*cs9 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, 1)*ps2(p, 1, 2)*s_3 + &
-            (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 1, 1)*ps1(p, 1, 2)*s_3
+            lsf_scale*(-cs18*ps2(p, 1, 4) - cs19*cs20 - cs21*ps2(p, 1, 3) - cs25*ps1(p, 1, 1) - &
+            cs26*ps2(p, 1, 1) + cs27*cs28*cs9 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, 1)*ps2(p, 1, &
+            2)*s_3 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 1, 1)*ps1(p, 1, 2)*s_3)
          o2(p, 2) = &
-            cs14*cs27*cs8*cs9 - cs18*ps2(p, 2, 4) - cs21*ps2(p, 2, 3) - cs25*ps1(p, 2, 1) - &
-            cs26*ps2(p, 2, 1) - cs29*ps1(p, 1, 4) + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, 1)*ps2(p, 2, &
-            2)*s_3 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 1, 1)*ps1(p, 2, 2)*s_3
+            lsf_scale*(cs14*cs27*cs8*cs9 - cs18*ps2(p, 2, 4) - cs21*ps2(p, 2, 3) - cs25*ps1(p, 2, &
+            1) - cs26*ps2(p, 2, 1) - cs29*ps1(p, 1, 4) + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, &
+            1)*ps2(p, 2, 2)*s_3 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 1, 1)*ps1(p, 2, 2)*s_3)
          o2(p, 4) = &
-            cs17*cs27*cs8*cs9 - cs18*ps2(p, 4, 4) - cs21*ps2(p, 4, 3) - cs25*ps1(p, 3, 1) - &
-            cs26*ps2(p, 4, 1) - cs30*ps1(p, 3, 4) + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, 1)*ps2(p, 4, &
-            2)*s_3 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 1, 1)*ps1(p, 3, 2)*s_3
+            lsf_scale*(cs17*cs27*cs8*cs9 - cs18*ps2(p, 4, 4) - cs21*ps2(p, 4, 3) - cs25*ps1(p, 3, &
+            1) - cs26*ps2(p, 4, 1) - cs30*ps1(p, 3, 4) + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, &
+            1)*ps2(p, 4, 2)*s_3 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 1, 1)*ps1(p, 3, 2)*s_3)
          o2(p, 3) = &
-            -cs18*ps2(p, 3, 4) - cs20*cs31 - cs21*ps2(p, 3, 3) - cs26*ps2(p, 3, 1) + cs27*cs35*cs9 &
-            - cs34*ps1(p, 2, 1) + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, 1)*ps2(p, 3, 2)*s_3 + &
-            (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 2, 1)*ps1(p, 2, 2)*s_3
+            lsf_scale*(-cs18*ps2(p, 3, 4) - cs20*cs31 - cs21*ps2(p, 3, 3) - cs26*ps2(p, 3, 1) + &
+            cs27*cs35*cs9 - cs34*ps1(p, 2, 1) + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, 1)*ps2(p, 3, &
+            2)*s_3 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 2, 1)*ps1(p, 2, 2)*s_3)
          o2(p, 5) = &
-            cs14*cs17*cs27*cs9 - cs18*ps2(p, 5, 4) - cs21*ps2(p, 5, 3) - cs26*ps2(p, 5, 1) - &
-            cs29*ps1(p, 3, 4) - cs34*ps1(p, 3, 1) + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, 1)*ps2(p, 5, &
-            2)*s_3 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 2, 1)*ps1(p, 3, 2)*s_3
+            lsf_scale*(cs14*cs17*cs27*cs9 - cs18*ps2(p, 5, 4) - cs21*ps2(p, 5, 3) - cs26*ps2(p, 5, &
+            1) - cs29*ps1(p, 3, 4) - cs34*ps1(p, 3, 1) + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, &
+            1)*ps2(p, 5, 2)*s_3 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 2, 1)*ps1(p, 3, 2)*s_3)
          o2(p, 6) = &
-            -cs18*ps2(p, 6, 4) - cs20*cs36 - cs21*ps2(p, 6, 3) - cs26*ps2(p, 6, 1) + cs27*cs40*cs9 &
-            - cs39*ps1(p, 3, 1) + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, 1)*ps2(p, 6, 2)*s_3 + &
-            (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 3, 1)*ps1(p, 3, 2)*s_3
+            lsf_scale*(-cs18*ps2(p, 6, 4) - cs20*cs36 - cs21*ps2(p, 6, 3) - cs26*ps2(p, 6, 1) + &
+            cs27*cs40*cs9 - cs39*ps1(p, 3, 1) + (1.0_wp/2.0_wp)*cs9*izz(p)*ps0(p, 1)*ps2(p, 6, &
+            2)*s_3 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps1(p, 3, 1)*ps1(p, 3, 2)*s_3)
          o3(p, 1) = &
-            -cs18*ps3(p, 1, 4) - cs21*ps3(p, 1, 3) - cs26*ps3(p, 1, 1) + cs42*ps3(p, 1, 2) + &
-            cs46*ps2(p, 1, 3) + cs48*ps2(p, 1, 2) + cs49*ps1(p, 1, 2) + cs51*ps1(p, 1, 4) + &
-            cs53*ps2(p, 1, 4) + cs56*ps1(p, 1, 1) + cs59*ps2(p, 1, 1) + cs68*cs8
+            lsf_scale*(-cs18*ps3(p, 1, 4) - cs21*ps3(p, 1, 3) - cs26*ps3(p, 1, 1) + cs42*ps3(p, 1, &
+            2) + cs46*ps2(p, 1, 3) + cs48*ps2(p, 1, 2) + cs49*ps1(p, 1, 2) + cs51*ps1(p, 1, 4) + &
+            cs53*ps2(p, 1, 4) + cs56*ps1(p, 1, 1) + cs59*ps2(p, 1, 1) + cs68*cs8)
          o3(p, 2) = &
-            cs14*cs68 - cs18*ps3(p, 2, 4) - cs21*ps3(p, 2, 3) - cs26*ps3(p, 2, 1) + cs42*ps3(p, 2, &
-            2) + cs46*ps2(p, 2, 3) + cs48*ps2(p, 2, 2) + cs49*ps1(p, 2, 2) + cs51*ps1(p, 2, 4) + &
-            cs53*ps2(p, 2, 4) + cs56*ps1(p, 2, 1) + cs59*ps2(p, 2, 1)
+            lsf_scale*(cs14*cs68 - cs18*ps3(p, 2, 4) - cs21*ps3(p, 2, 3) - cs26*ps3(p, 2, 1) + &
+            cs42*ps3(p, 2, 2) + cs46*ps2(p, 2, 3) + cs48*ps2(p, 2, 2) + cs49*ps1(p, 2, 2) + &
+            cs51*ps1(p, 2, 4) + cs53*ps2(p, 2, 4) + cs56*ps1(p, 2, 1) + cs59*ps2(p, 2, 1))
          o3(p, 5) = &
-            cs17*cs68 - cs18*ps3(p, 5, 4) - cs21*ps3(p, 5, 3) - cs26*ps3(p, 5, 1) + cs42*ps3(p, 5, &
-            2) + cs46*ps2(p, 4, 3) + cs48*ps2(p, 4, 2) + cs49*ps1(p, 3, 2) + cs51*ps1(p, 3, 4) + &
-            cs53*ps2(p, 4, 4) + cs56*ps1(p, 3, 1) + cs59*ps2(p, 4, 1)
+            lsf_scale*(cs17*cs68 - cs18*ps3(p, 5, 4) - cs21*ps3(p, 5, 3) - cs26*ps3(p, 5, 1) + &
+            cs42*ps3(p, 5, 2) + cs46*ps2(p, 4, 3) + cs48*ps2(p, 4, 2) + cs49*ps1(p, 3, 2) + &
+            cs51*ps1(p, 3, 4) + cs53*ps2(p, 4, 4) + cs56*ps1(p, 3, 1) + cs59*ps2(p, 4, 1))
          o3(p, 3) = &
-            cs14*cs92 - cs18*ps3(p, 3, 4) - cs21*ps3(p, 3, 3) - cs26*ps3(p, 3, 1) + cs42*ps3(p, 3, &
-            2) + cs70*ps2(p, 2, 3) + cs71*ps2(p, 3, 3) + cs73*ps2(p, 2, 4) + cs74*ps2(p, 3, 4) + &
-            cs76*ps2(p, 2, 2) + cs77*ps2(p, 3, 2) + cs78*ps2(p, 3, 1) + cs81*ps2(p, 2, 1) + &
-            cs83*ps1(p, 2, 4) + cs87*ps1(p, 2, 2) + cs89*ps1(p, 2, 1)
+            lsf_scale*(cs14*cs92 - cs18*ps3(p, 3, 4) - cs21*ps3(p, 3, 3) - cs26*ps3(p, 3, 1) + &
+            cs42*ps3(p, 3, 2) + cs70*ps2(p, 2, 3) + cs71*ps2(p, 3, 3) + cs73*ps2(p, 2, 4) + &
+            cs74*ps2(p, 3, 4) + cs76*ps2(p, 2, 2) + cs77*ps2(p, 3, 2) + cs78*ps2(p, 3, 1) + &
+            cs81*ps2(p, 2, 1) + cs83*ps1(p, 2, 4) + cs87*ps1(p, 2, 2) + cs89*ps1(p, 2, 1))
          o3(p, 6) = &
-            cs17*cs92 - cs18*ps3(p, 6, 4) - cs21*ps3(p, 6, 3) - cs26*ps3(p, 6, 1) + cs42*ps3(p, 6, &
-            2) + cs70*ps2(p, 4, 3) + cs71*ps2(p, 5, 3) + cs73*ps2(p, 4, 4) + cs74*ps2(p, 5, 4) + &
-            cs76*ps2(p, 4, 2) + cs77*ps2(p, 5, 2) + cs78*ps2(p, 5, 1) + cs81*ps2(p, 4, 1) + &
-            cs83*ps1(p, 3, 4) + cs87*ps1(p, 3, 2) + cs89*ps1(p, 3, 1)
+            lsf_scale*(cs17*cs92 - cs18*ps3(p, 6, 4) - cs21*ps3(p, 6, 3) - cs26*ps3(p, 6, 1) + &
+            cs42*ps3(p, 6, 2) + cs70*ps2(p, 4, 3) + cs71*ps2(p, 5, 3) + cs73*ps2(p, 4, 4) + &
+            cs74*ps2(p, 5, 4) + cs76*ps2(p, 4, 2) + cs77*ps2(p, 5, 2) + cs78*ps2(p, 5, 1) + &
+            cs81*ps2(p, 4, 1) + cs83*ps1(p, 3, 4) + cs87*ps1(p, 3, 2) + cs89*ps1(p, 3, 1))
          o3(p, 8) = &
-            cs101*ps2(p, 4, 1) + cs17*cs93 + cs17*(-cs16*cs63 - cs17*cs91 + cs60*ps2(p, 4, 4) - &
-            cs62*ps2(p, 4, 2) + cs65*ps1(p, 3, 1) + cs66*ps2(p, 4, 1) + cs90*ps1(p, 3, 4) + cs93) &
-            - cs18*ps3(p, 8, 4) - cs21*ps3(p, 8, 3) - cs26*ps3(p, 8, 1) + cs42*ps3(p, 8, 2) + &
-            cs71*ps2(p, 6, 3) + cs74*ps2(p, 6, 4) + cs77*ps2(p, 6, 2) + cs78*ps2(p, 6, 1) + &
+            lsf_scale*(cs101*ps2(p, 4, 1) + cs17*cs93 + cs17*(-cs16*cs63 - cs17*cs91 + cs60*ps2(p, &
+            4, 4) - cs62*ps2(p, 4, 2) + cs65*ps1(p, 3, 1) + cs66*ps2(p, 4, 1) + cs90*ps1(p, 3, 4) &
+            + cs93) - cs18*ps3(p, 8, 4) - cs21*ps3(p, 8, 3) - cs26*ps3(p, 8, 1) + cs42*ps3(p, 8, &
+            2) + cs71*ps2(p, 6, 3) + cs74*ps2(p, 6, 4) + cs77*ps2(p, 6, 2) + cs78*ps2(p, 6, 1) + &
             cs97*ps2(p, 4, 4) + cs99*ps2(p, 4, 2) + ps1(p, 3, 1)*(cs17*cs65 + cs38*cs45 - &
             cs41*ps2(p, 4, 1) + cs55*ps2(p, 4, 2) - cs88*ps1(p, 3, 1)) + ps1(p, 3, 2)*(-cs102*cs86 &
             - cs84*cs95 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps2(p, 4, 1)*s_3) + ps1(p, 3, 4)*(cs17*cs90 - &
-            cs20*ps2(p, 4, 4) + cs50*ps1(p, 3, 4))
+            cs20*ps2(p, 4, 4) + cs50*ps1(p, 3, 4)))
          o3(p, 4) = &
-            cs103*ps2(p, 3, 3) + cs104*ps2(p, 3, 2) + cs105*ps1(p, 2, 2) + cs106*ps1(p, 2, 4) + &
-            cs107*ps2(p, 3, 4) + cs108*ps1(p, 2, 1) + cs110*ps2(p, 3, 1) + cs113*cs14 - &
-            cs18*ps3(p, 4, 4) - cs21*ps3(p, 4, 3) - cs26*ps3(p, 4, 1) + cs42*ps3(p, 4, 2)
+            lsf_scale*(cs103*ps2(p, 3, 3) + cs104*ps2(p, 3, 2) + cs105*ps1(p, 2, 2) + cs106*ps1(p, &
+            2, 4) + cs107*ps2(p, 3, 4) + cs108*ps1(p, 2, 1) + cs110*ps2(p, 3, 1) + cs113*cs14 - &
+            cs18*ps3(p, 4, 4) - cs21*ps3(p, 4, 3) - cs26*ps3(p, 4, 1) + cs42*ps3(p, 4, 2))
          o3(p, 7) = &
-            cs103*ps2(p, 5, 3) + cs104*ps2(p, 5, 2) + cs105*ps1(p, 3, 2) + cs106*ps1(p, 3, 4) + &
-            cs107*ps2(p, 5, 4) + cs108*ps1(p, 3, 1) + cs110*ps2(p, 5, 1) + cs113*cs17 - &
-            cs18*ps3(p, 7, 4) - cs21*ps3(p, 7, 3) - cs26*ps3(p, 7, 1) + cs42*ps3(p, 7, 2)
+            lsf_scale*(cs103*ps2(p, 5, 3) + cs104*ps2(p, 5, 2) + cs105*ps1(p, 3, 2) + cs106*ps1(p, &
+            3, 4) + cs107*ps2(p, 5, 4) + cs108*ps1(p, 3, 1) + cs110*ps2(p, 5, 1) + cs113*cs17 - &
+            cs18*ps3(p, 7, 4) - cs21*ps3(p, 7, 3) - cs26*ps3(p, 7, 1) + cs42*ps3(p, 7, 2))
          o3(p, 9) = &
-            cs101*ps2(p, 5, 1) + cs114*cs17 + cs17*(-cs111*cs16 + cs112*ps1(p, 3, 1) + cs114 + &
-            cs115*ps1(p, 3, 4) - cs14*cs17*cs67 + cs60*ps2(p, 5, 4) - cs62*ps2(p, 5, 2) + &
+            lsf_scale*(cs101*ps2(p, 5, 1) + cs114*cs17 + cs17*(-cs111*cs16 + cs112*ps1(p, 3, 1) + &
+            cs114 + cs115*ps1(p, 3, 4) - cs14*cs17*cs67 + cs60*ps2(p, 5, 4) - cs62*ps2(p, 5, 2) + &
             cs66*ps2(p, 5, 1)) - cs18*ps3(p, 9, 4) - cs21*ps3(p, 9, 3) - cs26*ps3(p, 9, 1) + &
             cs42*ps3(p, 9, 2) + cs70*ps2(p, 6, 3) + cs73*ps2(p, 6, 4) + cs76*ps2(p, 6, 2) + &
             cs97*ps2(p, 5, 4) + cs99*ps2(p, 5, 2) + ps1(p, 3, 1)*(cs112*cs17 + cs38*cs69 - &
             cs41*ps2(p, 5, 1) - cs54*ps1(p, 2, 1)*ps1(p, 3, 1) + cs55*ps2(p, 5, 2)) + ps2(p, 6, &
             1)*(cs109 + cs79) + ps1(p, 3, 2)*(-1.0_wp/2.0_wp*cs102*cs69 - 1.0_wp/2.0_wp*cs85*cs95 &
             + (1.0_wp/2.0_wp)*cs9*izz(p)*ps2(p, 5, 1)*s_3) + ps1(p, 3, 4)*(cs115*cs17 - &
-            cs20*ps2(p, 5, 4) + cs82*ps1(p, 3, 4))
+            cs20*ps2(p, 5, 4) + cs82*ps1(p, 3, 4)))
          o3(p, 10) = &
-            cs17*(-cs116*cs16 + cs116*cs38 + cs36*cs61 - cs40*cs67 + cs60*ps2(p, 6, 4) - &
-            cs62*ps2(p, 6, 2) + cs64*ps2(p, 6, 3) + cs66*ps2(p, 6, 1)) - cs18*ps3(p, 10, 4) - &
+            lsf_scale*(cs17*(-cs116*cs16 + cs116*cs38 + cs36*cs61 - cs40*cs67 + cs60*ps2(p, 6, 4) &
+            - cs62*ps2(p, 6, 2) + cs64*ps2(p, 6, 3) + cs66*ps2(p, 6, 1)) - cs18*ps3(p, 10, 4) - &
             cs21*ps3(p, 10, 3) - cs26*ps3(p, 10, 1) + cs42*ps3(p, 10, 2) + cs43*cs95*ps2(p, 6, 3) &
             + ps1(p, 3, 1)*(-cs41*ps2(p, 6, 1) - cs54*(ps1(p, 3, 1)*ps1(p, 3, 1)) + cs55*ps2(p, 6, &
             2) + cs95*(-cs15 + 2.0_wp*cs37)) + ps2(p, 6, 1)*(cs100 - cs39 + cs58*cs95) + ps1(p, 3, &
             2)*(-cs102*cs95 + (1.0_wp/2.0_wp)*cs9*izz(p)*ps2(p, 6, 1)*s_3) + ps2(p, 6, &
             2)*(cs9*izz(p)*ps1(p, 3, 1)*s_3 - cs98) + ps1(p, 3, 4)*(2.0_wp*cs17*cs61*ps1(p, 3, 4) &
-            - cs20*ps2(p, 6, 4)) + ps2(p, 6, 4)*(-2.0_wp*cs94 + 2.0_wp*cs96)
+            - cs20*ps2(p, 6, 4)) + ps2(p, 6, 4)*(-2.0_wp*cs94 + 2.0_wp*cs96))
       end do
 
       do p = 1, np
@@ -3726,8 +3746,8 @@ contains
 
    end subroutine svdw_strip_powersums_o4
 
-   pure module subroutine svdw_strip_lift_o4(np, blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, ps4, lsf0, &
-                                      lsf1_r, lsf2_rr, lsf3_rrr, lsf4_rrrr)
+   pure module subroutine svdw_strip_lift_o4(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, &
+                                      ps4, lsf0, lsf1_r, lsf2_rr, lsf3_rrr, lsf4_rrrr)
       !> Live points in the strip, 1..8
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -3738,6 +3758,9 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 = p2, 3 = p3,
       !> 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -3832,7 +3855,7 @@ contains
       end do
       ! libm log: kept out of the vectorized loops
       do p = 1, np
-         lsf0(p) = -log(zz(p))/blend_k
+         lsf0(p) = lsf_scale*(-log(zz(p))/blend_k)
       end do
 
       do p = 1, np
@@ -4550,109 +4573,109 @@ contains
             cs11*cs196*cs30*s_3 + cs11*cs30*ps0(p, 1)*ps2(p, 6, 1)*s_3 - cs198*cs451 - &
             cs243*ps2(p, 6, 2)
          cs560 = cs11*cs30*cs45 - cs274*cs466 - cs467
-         o1(p, 1) = -cs10*cs12
-         o1(p, 2) = -cs12*cs16
-         o1(p, 3) = -cs12*cs19
+         o1(p, 1) = lsf_scale*(-cs10*cs12)
+         o1(p, 2) = lsf_scale*(-cs12*cs16)
+         o1(p, 3) = lsf_scale*(-cs12*cs19)
          o2(p, 1) = &
-            cs11*cs30*cs31 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 1, 2)*s_3 + &
+            lsf_scale*(cs11*cs30*cs31 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 1, 2)*s_3 + &
             (1.0_wp/2.0_wp)*cs11*izz(p)*ps1(p, 1, 1)*ps1(p, 1, 2)*s_3 - cs20*ps2(p, 1, 4) - &
-            cs21*cs22 - cs23*ps2(p, 1, 3) - cs27*ps1(p, 1, 1) - cs29*cs9
+            cs21*cs22 - cs23*ps2(p, 1, 3) - cs27*ps1(p, 1, 1) - cs29*cs9)
          o2(p, 2) = &
-            cs10*cs11*cs16*cs30 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 2, 2)*s_3 + &
-            (1.0_wp/2.0_wp)*cs11*izz(p)*ps1(p, 1, 1)*ps1(p, 2, 2)*s_3 - cs20*ps2(p, 2, 4) - &
-            cs23*ps2(p, 2, 3) - cs27*ps1(p, 2, 1) - cs32*ps1(p, 1, 4) - cs33*cs9
+            lsf_scale*(cs10*cs11*cs16*cs30 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 2, &
+            2)*s_3 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps1(p, 1, 1)*ps1(p, 2, 2)*s_3 - cs20*ps2(p, 2, 4) &
+            - cs23*ps2(p, 2, 3) - cs27*ps1(p, 2, 1) - cs32*ps1(p, 1, 4) - cs33*cs9)
          o2(p, 4) = &
-            cs10*cs11*cs19*cs30 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 4, 2)*s_3 + &
-            (1.0_wp/2.0_wp)*cs11*izz(p)*ps1(p, 1, 1)*ps1(p, 3, 2)*s_3 - cs20*ps2(p, 4, 4) - &
-            cs23*ps2(p, 4, 3) - cs27*ps1(p, 3, 1) - cs34*ps1(p, 3, 4) - cs35*cs9
+            lsf_scale*(cs10*cs11*cs19*cs30 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 4, &
+            2)*s_3 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps1(p, 1, 1)*ps1(p, 3, 2)*s_3 - cs20*ps2(p, 4, 4) &
+            - cs23*ps2(p, 4, 3) - cs27*ps1(p, 3, 1) - cs34*ps1(p, 3, 4) - cs35*cs9)
          o2(p, 3) = &
-            cs11*cs30*cs41 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 3, 2)*s_3 + &
+            lsf_scale*(cs11*cs30*cs41 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 3, 2)*s_3 + &
             (1.0_wp/2.0_wp)*cs11*izz(p)*ps1(p, 2, 1)*ps1(p, 2, 2)*s_3 - cs20*ps2(p, 3, 4) - &
-            cs22*cs36 - cs23*ps2(p, 3, 3) - cs39*ps1(p, 2, 1) - cs40*cs9
+            cs22*cs36 - cs23*ps2(p, 3, 3) - cs39*ps1(p, 2, 1) - cs40*cs9)
          o2(p, 5) = &
-            cs11*cs16*cs19*cs30 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 5, 2)*s_3 + &
-            (1.0_wp/2.0_wp)*cs11*izz(p)*ps1(p, 2, 1)*ps1(p, 3, 2)*s_3 - cs20*ps2(p, 5, 4) - &
-            cs23*ps2(p, 5, 3) - cs32*ps1(p, 3, 4) - cs39*ps1(p, 3, 1) - cs42*cs9
+            lsf_scale*(cs11*cs16*cs19*cs30 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 5, &
+            2)*s_3 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps1(p, 2, 1)*ps1(p, 3, 2)*s_3 - cs20*ps2(p, 5, 4) &
+            - cs23*ps2(p, 5, 3) - cs32*ps1(p, 3, 4) - cs39*ps1(p, 3, 1) - cs42*cs9)
          o2(p, 6) = &
-            cs11*cs30*cs48 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 6, 2)*s_3 + &
+            lsf_scale*(cs11*cs30*cs48 + (1.0_wp/2.0_wp)*cs11*izz(p)*ps0(p, 1)*ps2(p, 6, 2)*s_3 + &
             (1.0_wp/2.0_wp)*cs11*izz(p)*ps1(p, 3, 1)*ps1(p, 3, 2)*s_3 - cs20*ps2(p, 6, 4) - &
-            cs22*cs43 - cs23*ps2(p, 6, 3) - cs46*ps1(p, 3, 1) - cs47*cs9
+            cs22*cs43 - cs23*ps2(p, 6, 3) - cs46*ps1(p, 3, 1) - cs47*cs9)
          o3(p, 1) = &
-            cs10*cs92 - cs20*ps3(p, 1, 4) - cs23*ps3(p, 1, 3) + cs50*ps3(p, 1, 2) - cs51*ps3(p, 1, &
-            1) + cs56*ps2(p, 1, 3) + cs60*ps2(p, 1, 2) + cs63*ps1(p, 1, 2) + cs66*ps1(p, 1, 4) + &
-            cs68*ps2(p, 1, 4) + cs73*ps1(p, 1, 1) + cs76*ps2(p, 1, 1)
+            lsf_scale*(cs10*cs92 - cs20*ps3(p, 1, 4) - cs23*ps3(p, 1, 3) + cs50*ps3(p, 1, 2) - &
+            cs51*ps3(p, 1, 1) + cs56*ps2(p, 1, 3) + cs60*ps2(p, 1, 2) + cs63*ps1(p, 1, 2) + &
+            cs66*ps1(p, 1, 4) + cs68*ps2(p, 1, 4) + cs73*ps1(p, 1, 1) + cs76*ps2(p, 1, 1))
          o3(p, 2) = &
-            cs16*cs92 - cs20*ps3(p, 2, 4) - cs23*ps3(p, 2, 3) + cs50*ps3(p, 2, 2) - cs51*ps3(p, 2, &
-            1) + cs56*ps2(p, 2, 3) + cs60*ps2(p, 2, 2) + cs63*ps1(p, 2, 2) + cs66*ps1(p, 2, 4) + &
-            cs68*ps2(p, 2, 4) + cs73*ps1(p, 2, 1) + cs76*ps2(p, 2, 1)
+            lsf_scale*(cs16*cs92 - cs20*ps3(p, 2, 4) - cs23*ps3(p, 2, 3) + cs50*ps3(p, 2, 2) - &
+            cs51*ps3(p, 2, 1) + cs56*ps2(p, 2, 3) + cs60*ps2(p, 2, 2) + cs63*ps1(p, 2, 2) + &
+            cs66*ps1(p, 2, 4) + cs68*ps2(p, 2, 4) + cs73*ps1(p, 2, 1) + cs76*ps2(p, 2, 1))
          o3(p, 5) = &
-            cs19*cs92 - cs20*ps3(p, 5, 4) - cs23*ps3(p, 5, 3) + cs50*ps3(p, 5, 2) - cs51*ps3(p, 5, &
-            1) + cs56*ps2(p, 4, 3) + cs60*ps2(p, 4, 2) + cs63*ps1(p, 3, 2) + cs66*ps1(p, 3, 4) + &
-            cs68*ps2(p, 4, 4) + cs73*ps1(p, 3, 1) + cs76*ps2(p, 4, 1)
+            lsf_scale*(cs19*cs92 - cs20*ps3(p, 5, 4) - cs23*ps3(p, 5, 3) + cs50*ps3(p, 5, 2) - &
+            cs51*ps3(p, 5, 1) + cs56*ps2(p, 4, 3) + cs60*ps2(p, 4, 2) + cs63*ps1(p, 3, 2) + &
+            cs66*ps1(p, 3, 4) + cs68*ps2(p, 4, 4) + cs73*ps1(p, 3, 1) + cs76*ps2(p, 4, 1))
          o3(p, 3) = &
-            cs100*ps2(p, 2, 2) + cs101*ps2(p, 3, 2) + cs102*ps2(p, 3, 1) + cs105*ps2(p, 2, 1) + &
-            cs108*ps1(p, 2, 4) + cs113*ps1(p, 2, 2) + cs115*ps1(p, 2, 1) + cs125*cs16 - &
+            lsf_scale*(cs100*ps2(p, 2, 2) + cs101*ps2(p, 3, 2) + cs102*ps2(p, 3, 1) + cs105*ps2(p, &
+            2, 1) + cs108*ps1(p, 2, 4) + cs113*ps1(p, 2, 2) + cs115*ps1(p, 2, 1) + cs125*cs16 - &
             cs20*ps3(p, 3, 4) - cs23*ps3(p, 3, 3) + cs50*ps3(p, 3, 2) - cs51*ps3(p, 3, 1) + &
-            cs94*ps2(p, 2, 3) + cs95*ps2(p, 3, 3) + cs97*ps2(p, 2, 4) + cs98*ps2(p, 3, 4)
+            cs94*ps2(p, 2, 3) + cs95*ps2(p, 3, 3) + cs97*ps2(p, 2, 4) + cs98*ps2(p, 3, 4))
          o3(p, 6) = &
-            cs100*ps2(p, 4, 2) + cs101*ps2(p, 5, 2) + cs102*ps2(p, 5, 1) + cs105*ps2(p, 4, 1) + &
-            cs108*ps1(p, 3, 4) + cs113*ps1(p, 3, 2) + cs115*ps1(p, 3, 1) + cs125*cs19 - &
+            lsf_scale*(cs100*ps2(p, 4, 2) + cs101*ps2(p, 5, 2) + cs102*ps2(p, 5, 1) + cs105*ps2(p, &
+            4, 1) + cs108*ps1(p, 3, 4) + cs113*ps1(p, 3, 2) + cs115*ps1(p, 3, 1) + cs125*cs19 - &
             cs20*ps3(p, 6, 4) - cs23*ps3(p, 6, 3) + cs50*ps3(p, 6, 2) - cs51*ps3(p, 6, 1) + &
-            cs94*ps2(p, 4, 3) + cs95*ps2(p, 5, 3) + cs97*ps2(p, 4, 4) + cs98*ps2(p, 5, 4)
+            cs94*ps2(p, 4, 3) + cs95*ps2(p, 5, 3) + cs97*ps2(p, 4, 4) + cs98*ps2(p, 5, 4))
          o3(p, 8) = &
-            cs101*ps2(p, 6, 2) + cs102*ps2(p, 6, 1) + cs126*cs19 + cs130*ps2(p, 4, 4) + &
+            lsf_scale*(cs101*ps2(p, 6, 2) + cs102*ps2(p, 6, 1) + cs126*cs19 + cs130*ps2(p, 4, 4) + &
             cs132*ps2(p, 4, 2) + cs134*ps2(p, 4, 1) + cs137*ps1(p, 3, 4) - cs140*ps1(p, 3, 2) + &
             cs142*ps1(p, 3, 1) + cs149*cs19 - cs20*ps3(p, 8, 4) - cs23*ps3(p, 8, 3) + cs50*ps3(p, &
-            8, 2) - cs51*ps3(p, 8, 1) + cs95*ps2(p, 6, 3) + cs98*ps2(p, 6, 4)
+            8, 2) - cs51*ps3(p, 8, 1) + cs95*ps2(p, 6, 3) + cs98*ps2(p, 6, 4))
          o3(p, 4) = &
-            cs150*ps2(p, 3, 3) + cs153*ps2(p, 3, 2) + cs157*ps1(p, 2, 2) + cs159*ps1(p, 2, 4) + &
-            cs16*cs173 + cs160*ps2(p, 3, 4) + cs164*ps1(p, 2, 1) + cs167*ps2(p, 3, 1) - &
-            cs20*ps3(p, 4, 4) - cs23*ps3(p, 4, 3) + cs50*ps3(p, 4, 2) - cs51*ps3(p, 4, 1)
+            lsf_scale*(cs150*ps2(p, 3, 3) + cs153*ps2(p, 3, 2) + cs157*ps1(p, 2, 2) + cs159*ps1(p, &
+            2, 4) + cs16*cs173 + cs160*ps2(p, 3, 4) + cs164*ps1(p, 2, 1) + cs167*ps2(p, 3, 1) - &
+            cs20*ps3(p, 4, 4) - cs23*ps3(p, 4, 3) + cs50*ps3(p, 4, 2) - cs51*ps3(p, 4, 1))
          o3(p, 7) = &
-            cs150*ps2(p, 5, 3) + cs153*ps2(p, 5, 2) + cs157*ps1(p, 3, 2) + cs159*ps1(p, 3, 4) + &
-            cs160*ps2(p, 5, 4) + cs164*ps1(p, 3, 1) + cs167*ps2(p, 5, 1) + cs173*cs19 - &
-            cs20*ps3(p, 7, 4) - cs23*ps3(p, 7, 3) + cs50*ps3(p, 7, 2) - cs51*ps3(p, 7, 1)
+            lsf_scale*(cs150*ps2(p, 5, 3) + cs153*ps2(p, 5, 2) + cs157*ps1(p, 3, 2) + cs159*ps1(p, &
+            3, 4) + cs160*ps2(p, 5, 4) + cs164*ps1(p, 3, 1) + cs167*ps2(p, 5, 1) + cs173*cs19 - &
+            cs20*ps3(p, 7, 4) - cs23*ps3(p, 7, 3) + cs50*ps3(p, 7, 2) - cs51*ps3(p, 7, 1))
          o3(p, 9) = &
-            cs100*ps2(p, 6, 2) + cs130*ps2(p, 5, 4) + cs132*ps2(p, 5, 2) + cs134*ps2(p, 5, 1) + &
-            cs174*cs19 + cs175*ps2(p, 6, 1) + cs176*ps1(p, 3, 4) - cs180*ps1(p, 3, 2) + &
+            lsf_scale*(cs100*ps2(p, 6, 2) + cs130*ps2(p, 5, 4) + cs132*ps2(p, 5, 2) + cs134*ps2(p, &
+            5, 1) + cs174*cs19 + cs175*ps2(p, 6, 1) + cs176*ps1(p, 3, 4) - cs180*ps1(p, 3, 2) + &
             cs181*ps1(p, 3, 1) + cs187*cs19 - cs20*ps3(p, 9, 4) - cs23*ps3(p, 9, 3) + cs50*ps3(p, &
-            9, 2) - cs51*ps3(p, 9, 1) + cs94*ps2(p, 6, 3) + cs97*ps2(p, 6, 4)
+            9, 2) - cs51*ps3(p, 9, 1) + cs94*ps2(p, 6, 3) + cs97*ps2(p, 6, 4))
          o3(p, 10) = &
-            cs188*ps2(p, 6, 3) + cs19*cs207 + cs191*ps2(p, 6, 2) + cs194*ps1(p, 3, 4) + &
+            lsf_scale*(cs188*ps2(p, 6, 3) + cs19*cs207 + cs191*ps2(p, 6, 2) + cs194*ps1(p, 3, 4) + &
             cs195*ps2(p, 6, 4) + cs199*ps1(p, 3, 1) - cs20*ps3(p, 10, 4) - cs23*ps3(p, 10, 3) + &
             cs50*ps3(p, 10, 2) - cs51*ps3(p, 10, 1) + ps2(p, 6, 1)*(cs133 + cs200 + cs201) + &
-            ps1(p, 3, 2)*((1.0_wp/2.0_wp)*cs11*izz(p)*ps2(p, 6, 1)*s_3 - cs192)
+            ps1(p, 3, 2)*((1.0_wp/2.0_wp)*cs11*izz(p)*ps2(p, 6, 1)*s_3 - cs192))
          o4(p, 1) = &
-            cs10*cs285 - cs20*ps4(p, 1, 4) + cs208*ps3(p, 1, 2) + cs209*ps3(p, 1, 4) + &
+            lsf_scale*(cs10*cs285 - cs20*ps4(p, 1, 4) + cs208*ps3(p, 1, 2) + cs209*ps3(p, 1, 4) + &
             cs210*ps3(p, 1, 1) + cs211*ps3(p, 1, 3) + cs219*ps2(p, 1, 3) - cs23*ps4(p, 1, 3) + &
             cs234*ps1(p, 1, 4) + cs246*ps1(p, 1, 2) + cs251*ps2(p, 1, 4) + cs260*ps2(p, 1, 2) + &
-            cs269*ps1(p, 1, 1) + cs277*ps2(p, 1, 1) + cs50*ps4(p, 1, 2) - cs51*ps4(p, 1, 1)
+            cs269*ps1(p, 1, 1) + cs277*ps2(p, 1, 1) + cs50*ps4(p, 1, 2) - cs51*ps4(p, 1, 1))
          o4(p, 2) = &
-            cs16*cs285 - cs20*ps4(p, 2, 4) + cs208*ps3(p, 2, 2) + cs209*ps3(p, 2, 4) + &
+            lsf_scale*(cs16*cs285 - cs20*ps4(p, 2, 4) + cs208*ps3(p, 2, 2) + cs209*ps3(p, 2, 4) + &
             cs210*ps3(p, 2, 1) + cs211*ps3(p, 2, 3) + cs219*ps2(p, 2, 3) - cs23*ps4(p, 2, 3) + &
             cs234*ps1(p, 2, 4) + cs246*ps1(p, 2, 2) + cs251*ps2(p, 2, 4) + cs260*ps2(p, 2, 2) + &
-            cs269*ps1(p, 2, 1) + cs277*ps2(p, 2, 1) + cs50*ps4(p, 2, 2) - cs51*ps4(p, 2, 1)
+            cs269*ps1(p, 2, 1) + cs277*ps2(p, 2, 1) + cs50*ps4(p, 2, 2) - cs51*ps4(p, 2, 1))
          o4(p, 6) = &
-            cs19*cs285 - cs20*ps4(p, 6, 4) + cs208*ps3(p, 5, 2) + cs209*ps3(p, 5, 4) + &
+            lsf_scale*(cs19*cs285 - cs20*ps4(p, 6, 4) + cs208*ps3(p, 5, 2) + cs209*ps3(p, 5, 4) + &
             cs210*ps3(p, 5, 1) + cs211*ps3(p, 5, 3) + cs219*ps2(p, 4, 3) - cs23*ps4(p, 6, 3) + &
             cs234*ps1(p, 3, 4) + cs246*ps1(p, 3, 2) + cs251*ps2(p, 4, 4) + cs260*ps2(p, 4, 2) + &
-            cs269*ps1(p, 3, 1) + cs277*ps2(p, 4, 1) + cs50*ps4(p, 6, 2) - cs51*ps4(p, 6, 1)
+            cs269*ps1(p, 3, 1) + cs277*ps2(p, 4, 1) + cs50*ps4(p, 6, 2) - cs51*ps4(p, 6, 1))
          o4(p, 3) = &
-            cs100*ps3(p, 2, 2) + cs105*ps3(p, 2, 1) + cs16*cs308 - cs20*ps4(p, 3, 4) + &
+            lsf_scale*(cs100*ps3(p, 2, 2) + cs105*ps3(p, 2, 1) + cs16*cs308 - cs20*ps4(p, 3, 4) + &
             cs218*ps2(p, 3, 3) - cs23*ps4(p, 3, 3) + cs250*ps2(p, 3, 4) + cs276*ps2(p, 3, 1) + &
             cs286*ps2(p, 3, 2) + cs292*ps2(p, 2, 3) + cs298*ps2(p, 2, 4) + cs299*ps2(p, 2, 2) + &
             cs301*ps1(p, 2, 4) + cs305*ps1(p, 2, 2) + cs306*ps2(p, 2, 1) + cs307*ps1(p, 2, 1) + &
             cs50*ps4(p, 3, 2) - cs51*ps4(p, 3, 1) + cs56*ps3(p, 3, 3) + cs60*ps3(p, 3, 2) + &
-            cs68*ps3(p, 3, 4) + cs76*ps3(p, 3, 1) + cs94*ps3(p, 2, 3) + cs97*ps3(p, 2, 4)
+            cs68*ps3(p, 3, 4) + cs76*ps3(p, 3, 1) + cs94*ps3(p, 2, 3) + cs97*ps3(p, 2, 4))
          o4(p, 7) = &
-            cs100*ps3(p, 5, 2) + cs105*ps3(p, 5, 1) + cs19*cs308 - cs20*ps4(p, 7, 4) + &
+            lsf_scale*(cs100*ps3(p, 5, 2) + cs105*ps3(p, 5, 1) + cs19*cs308 - cs20*ps4(p, 7, 4) + &
             cs218*ps2(p, 5, 3) - cs23*ps4(p, 7, 3) + cs250*ps2(p, 5, 4) + cs276*ps2(p, 5, 1) + &
             cs286*ps2(p, 5, 2) + cs292*ps2(p, 4, 3) + cs298*ps2(p, 4, 4) + cs299*ps2(p, 4, 2) + &
             cs301*ps1(p, 3, 4) + cs305*ps1(p, 3, 2) + cs306*ps2(p, 4, 1) + cs307*ps1(p, 3, 1) + &
             cs50*ps4(p, 7, 2) - cs51*ps4(p, 7, 1) + cs56*ps3(p, 6, 3) + cs60*ps3(p, 6, 2) + &
-            cs68*ps3(p, 6, 4) + cs76*ps3(p, 6, 1) + cs94*ps3(p, 5, 3) + cs97*ps3(p, 5, 4)
+            cs68*ps3(p, 6, 4) + cs76*ps3(p, 6, 1) + cs94*ps3(p, 5, 3) + cs97*ps3(p, 5, 4))
          o4(p, 10) = &
-            cs130*ps3(p, 5, 4) + cs132*ps3(p, 5, 2) + cs134*ps3(p, 5, 1) + cs19*cs309 + &
+            lsf_scale*(cs130*ps3(p, 5, 4) + cs132*ps3(p, 5, 2) + cs134*ps3(p, 5, 1) + cs19*cs309 + &
             cs19*(-cs123*cs316 + cs19*cs284 + cs232*ps1(p, 3, 4) + cs244*ps1(p, 3, 2) + &
             cs249*ps2(p, 4, 4) + cs258*ps2(p, 4, 2) + cs268*ps1(p, 3, 1) + cs275*ps2(p, 4, 1) + &
             cs309 + cs77*ps3(p, 5, 4) - cs82*ps3(p, 5, 2) + cs88*ps3(p, 5, 1)) - cs20*ps4(p, 10, &
@@ -4672,24 +4695,24 @@ contains
             3, 4) + cs248*ps2(p, 4, 4) - cs313*cs77 - cs314*cs77 + cs315*cs77 + cs316*cs77 + &
             cs317*cs77) + ps1(p, 3, 4)*(-cs135*cs313 - cs135*cs314 + cs135*cs315 + cs135*cs316 + &
             cs135*cs317 + cs19*cs232 - cs22*ps3(p, 5, 4) + cs227*ps2(p, 4, 4) + cs233*ps1(p, 3, 4) &
-            + cs300*ps1(p, 3, 4))
+            + cs300*ps1(p, 3, 4)))
          o4(p, 4) = &
-            cs101*ps3(p, 4, 2) + cs102*ps3(p, 4, 1) + cs153*ps3(p, 3, 2) + cs16*cs412 + &
+            lsf_scale*(cs101*ps3(p, 4, 2) + cs102*ps3(p, 4, 1) + cs153*ps3(p, 3, 2) + cs16*cs412 + &
             cs160*ps3(p, 3, 4) - cs20*ps4(p, 4, 4) - cs23*ps4(p, 4, 3) + cs320*ps3(p, 3, 3) + &
             cs322*ps3(p, 3, 1) + cs330*ps2(p, 2, 3) + cs340*ps2(p, 2, 4) + cs359*ps2(p, 2, 2) + &
             cs366*ps2(p, 2, 1) + cs368*ps2(p, 3, 3) + cs374*ps2(p, 3, 4) + cs381*ps2(p, 3, 2) + &
             cs388*ps1(p, 2, 4) + cs399*ps1(p, 2, 2) + cs403*ps2(p, 3, 1) + cs408*ps1(p, 2, 1) + &
-            cs50*ps4(p, 4, 2) - cs51*ps4(p, 4, 1) + cs95*ps3(p, 4, 3) + cs98*ps3(p, 4, 4)
+            cs50*ps4(p, 4, 2) - cs51*ps4(p, 4, 1) + cs95*ps3(p, 4, 3) + cs98*ps3(p, 4, 4))
          o4(p, 8) = &
-            cs101*ps3(p, 7, 2) + cs102*ps3(p, 7, 1) + cs153*ps3(p, 6, 2) + cs160*ps3(p, 6, 4) + &
-            cs19*cs412 - cs20*ps4(p, 8, 4) - cs23*ps4(p, 8, 3) + cs320*ps3(p, 6, 3) + cs322*ps3(p, &
-            6, 1) + cs330*ps2(p, 4, 3) + cs340*ps2(p, 4, 4) + cs359*ps2(p, 4, 2) + cs366*ps2(p, 4, &
-            1) + cs368*ps2(p, 5, 3) + cs374*ps2(p, 5, 4) + cs381*ps2(p, 5, 2) + cs388*ps1(p, 3, 4) &
-            + cs399*ps1(p, 3, 2) + cs403*ps2(p, 5, 1) + cs408*ps1(p, 3, 1) + cs50*ps4(p, 8, 2) - &
-            cs51*ps4(p, 8, 1) + cs95*ps3(p, 7, 3) + cs98*ps3(p, 7, 4)
+            lsf_scale*(cs101*ps3(p, 7, 2) + cs102*ps3(p, 7, 1) + cs153*ps3(p, 6, 2) + cs160*ps3(p, &
+            6, 4) + cs19*cs412 - cs20*ps4(p, 8, 4) - cs23*ps4(p, 8, 3) + cs320*ps3(p, 6, 3) + &
+            cs322*ps3(p, 6, 1) + cs330*ps2(p, 4, 3) + cs340*ps2(p, 4, 4) + cs359*ps2(p, 4, 2) + &
+            cs366*ps2(p, 4, 1) + cs368*ps2(p, 5, 3) + cs374*ps2(p, 5, 4) + cs381*ps2(p, 5, 2) + &
+            cs388*ps1(p, 3, 4) + cs399*ps1(p, 3, 2) + cs403*ps2(p, 5, 1) + cs408*ps1(p, 3, 1) + &
+            cs50*ps4(p, 8, 2) - cs51*ps4(p, 8, 1) + cs95*ps3(p, 7, 3) + cs98*ps3(p, 7, 4))
          o4(p, 11) = &
-            cs100*ps3(p, 8, 2) + cs101*ps3(p, 9, 2) + cs102*ps3(p, 9, 1) + cs105*ps3(p, 8, 1) + &
-            cs130*ps3(p, 6, 4) + cs132*ps3(p, 6, 2) + cs134*ps3(p, 6, 1) + cs19*cs413 + &
+            lsf_scale*(cs100*ps3(p, 8, 2) + cs101*ps3(p, 9, 2) + cs102*ps3(p, 9, 1) + cs105*ps3(p, &
+            8, 1) + cs130*ps3(p, 6, 4) + cs132*ps3(p, 6, 2) + cs134*ps3(p, 6, 1) + cs19*cs413 + &
             cs19*(cs19*cs411 + cs339*ps2(p, 4, 4) + cs358*ps2(p, 4, 2) + cs365*ps2(p, 4, 1) + &
             cs370*ps2(p, 5, 4) + cs376*ps2(p, 5, 2) + cs386*ps1(p, 3, 4) + cs398*ps1(p, 3, 2) + &
             cs401*ps2(p, 5, 1) + cs407*ps1(p, 3, 1) - cs409*ps2(p, 4, 3) - cs410*ps2(p, 5, 3) + &
@@ -4711,9 +4734,9 @@ contains
             + cs69*ps3(p, 6, 1)) + ps1(p, 3, 4)*(cs107*cs126 + cs117*cs434 + cs174*cs228 + &
             cs19*cs386 - cs22*ps3(p, 6, 4) + cs226*cs425 + cs338*ps2(p, 4, 4) + cs369*ps2(p, 5, 4) &
             - cs378*ps2(p, 4, 2) + cs384*ps1(p, 3, 2) + cs385*ps1(p, 3, 1) + cs387*ps1(p, 3, 4) - &
-            cs429*ps2(p, 5, 2) + cs435*ps2(p, 5, 1))
+            cs429*ps2(p, 5, 2) + cs435*ps2(p, 5, 1)))
          o4(p, 13) = &
-            cs101*ps3(p, 10, 2) + cs102*ps3(p, 10, 1) + cs19*(-cs19*cs482 + &
+            lsf_scale*(cs101*ps3(p, 10, 2) + cs102*ps3(p, 10, 1) + cs19*(-cs19*cs482 + &
             cs19*(6.0_wp*cs10*cs11*cs19*cs283 + cs11*cs89*ps0(p, 1)*ps2(p, 4, 2)*s_3 + &
             cs11*cs89*ps1(p, 1, 1)*ps1(p, 3, 2)*s_3 - cs278*ps2(p, 4, 4) - cs281*ps1(p, 3, 1) - &
             cs282*ps2(p, 4, 1) - cs482 - cs483*ps1(p, 1, 4)) + cs370*ps2(p, 6, 4) + cs376*ps2(p, &
@@ -4739,20 +4762,20 @@ contains
             cs144*cs434 + cs19*cs474 + cs204*cs228 - cs22*ps3(p, 8, 4) + cs226*cs43 + cs369*ps2(p, &
             6, 4) - cs429*ps2(p, 6, 2) + cs435*ps2(p, 6, 1) + cs450*ps2(p, 4, 4) - cs471*ps2(p, 4, &
             2) + cs472*ps1(p, 3, 2) + cs473*ps1(p, 3, 1)) + ps2(p, 6, 4)*(cs0*cs149 + cs137 + &
-            cs423)
+            cs423))
          o4(p, 5) = &
-            cs16*cs527 - cs20*ps4(p, 5, 4) - cs23*ps4(p, 5, 3) + cs484*ps3(p, 4, 2) + cs485*ps3(p, &
-            4, 4) + cs486*ps3(p, 4, 1) + cs487*ps3(p, 4, 3) + cs490*ps2(p, 3, 3) + cs499*ps1(p, 2, &
-            4) + cs50*ps4(p, 5, 2) + cs503*ps1(p, 2, 2) + cs506*ps2(p, 3, 4) - cs51*ps4(p, 5, 1) + &
-            cs511*ps2(p, 3, 2) + cs519*ps1(p, 2, 1) + cs524*ps2(p, 3, 1)
+            lsf_scale*(cs16*cs527 - cs20*ps4(p, 5, 4) - cs23*ps4(p, 5, 3) + cs484*ps3(p, 4, 2) + &
+            cs485*ps3(p, 4, 4) + cs486*ps3(p, 4, 1) + cs487*ps3(p, 4, 3) + cs490*ps2(p, 3, 3) + &
+            cs499*ps1(p, 2, 4) + cs50*ps4(p, 5, 2) + cs503*ps1(p, 2, 2) + cs506*ps2(p, 3, 4) - &
+            cs51*ps4(p, 5, 1) + cs511*ps2(p, 3, 2) + cs519*ps1(p, 2, 1) + cs524*ps2(p, 3, 1))
          o4(p, 9) = &
-            cs19*cs527 - cs20*ps4(p, 9, 4) - cs23*ps4(p, 9, 3) + cs484*ps3(p, 7, 2) + cs485*ps3(p, &
-            7, 4) + cs486*ps3(p, 7, 1) + cs487*ps3(p, 7, 3) + cs490*ps2(p, 5, 3) + cs499*ps1(p, 3, &
-            4) + cs50*ps4(p, 9, 2) + cs503*ps1(p, 3, 2) + cs506*ps2(p, 5, 4) - cs51*ps4(p, 9, 1) + &
-            cs511*ps2(p, 5, 2) + cs519*ps1(p, 3, 1) + cs524*ps2(p, 5, 1)
+            lsf_scale*(cs19*cs527 - cs20*ps4(p, 9, 4) - cs23*ps4(p, 9, 3) + cs484*ps3(p, 7, 2) + &
+            cs485*ps3(p, 7, 4) + cs486*ps3(p, 7, 1) + cs487*ps3(p, 7, 3) + cs490*ps2(p, 5, 3) + &
+            cs499*ps1(p, 3, 4) + cs50*ps4(p, 9, 2) + cs503*ps1(p, 3, 2) + cs506*ps2(p, 5, 4) - &
+            cs51*ps4(p, 9, 1) + cs511*ps2(p, 5, 2) + cs519*ps1(p, 3, 1) + cs524*ps2(p, 5, 1))
          o4(p, 12) = &
-            cs130*ps3(p, 7, 4) + cs132*ps3(p, 7, 2) + cs134*ps3(p, 7, 1) + cs150*ps3(p, 9, 3) + &
-            cs153*ps3(p, 9, 2) + cs160*ps3(p, 9, 4) + cs167*ps3(p, 9, 1) + cs19*cs528 + &
+            lsf_scale*(cs130*ps3(p, 7, 4) + cs132*ps3(p, 7, 2) + cs134*ps3(p, 7, 1) + cs150*ps3(p, &
+            9, 3) + cs153*ps3(p, 9, 2) + cs160*ps3(p, 9, 4) + cs167*ps3(p, 9, 1) + cs19*cs528 + &
             cs19*(-cs185*cs531 + cs19*cs526 + cs498*ps1(p, 3, 4) + cs501*ps1(p, 3, 2) + &
             cs504*ps2(p, 5, 4) + cs509*ps2(p, 5, 2) + cs518*ps1(p, 3, 1) + cs522*ps2(p, 5, 1) + &
             cs528 + cs77*ps3(p, 7, 4) - cs82*ps3(p, 7, 2) + cs88*ps3(p, 7, 1)) - cs20*ps4(p, 12, &
@@ -4771,9 +4794,9 @@ contains
             - cs417 + cs488*ps1(p, 3, 1)) + ps2(p, 5, 4)*(cs19*cs504 + cs248*ps2(p, 5, 4) - &
             cs420*cs77 + cs496*ps1(p, 3, 4) - cs529*cs77 + cs530*cs77 + cs531*cs77 + cs532*cs77) + &
             ps1(p, 3, 4)*(-cs117*cs420 - cs117*cs529 + cs117*cs530 + cs117*cs531 + cs117*cs532 + &
-            cs136*cs173 + cs19*cs498 - cs22*ps3(p, 7, 4) + cs36*cs533 + cs496*ps2(p, 5, 4))
+            cs136*cs173 + cs19*cs498 - cs22*ps3(p, 7, 4) + cs36*cs533 + cs496*ps2(p, 5, 4)))
          o4(p, 14) = &
-            cs100*ps3(p, 10, 2) + cs175*ps3(p, 10, 1) + cs19*(-cs19*cs544 + &
+            lsf_scale*(cs100*ps3(p, 10, 2) + cs175*ps3(p, 10, 1) + cs19*(-cs19*cs544 + &
             cs19*(6.0_wp*cs11*cs16*cs19*cs283 + cs11*cs89*ps0(p, 1)*ps2(p, 5, 2)*s_3 + &
             cs11*cs89*ps1(p, 2, 1)*ps1(p, 3, 2)*s_3 - cs278*ps2(p, 5, 4) - cs282*ps2(p, 5, 1) - &
             cs483*ps1(p, 2, 4) - cs525*ps1(p, 3, 1) - cs544) + cs339*ps2(p, 6, 4) + cs358*ps2(p, &
@@ -4799,9 +4822,9 @@ contains
             cs117*cs15*ps2(p, 6, 1) + cs136*cs174 + cs136*cs187 + cs144*cs15*ps2(p, 5, 1) + &
             cs19*cs539 - cs22*ps3(p, 9, 4) + cs338*ps2(p, 6, 4) - cs378*ps2(p, 6, 2) + cs43*cs495 &
             + cs450*ps2(p, 5, 4) - cs471*ps2(p, 5, 2) + cs537*ps1(p, 3, 2) + cs538*ps1(p, 3, 1)) + &
-            ps2(p, 6, 4)*(cs0*cs187 + cs176 + cs422)
+            ps2(p, 6, 4)*(cs0*cs187 + cs176 + cs422))
          o4(p, 15) = &
-            cs19*(cs19*(6.0_wp*cs11*cs283*cs48 + cs11*cs89*ps0(p, 1)*ps2(p, 6, 2)*s_3 + &
+            lsf_scale*(cs19*(cs19*(6.0_wp*cs11*cs283*cs48 + cs11*cs89*ps0(p, 1)*ps2(p, 6, 2)*s_3 + &
             cs11*cs89*ps1(p, 3, 1)*ps1(p, 3, 2)*s_3 - cs122*cs45*ps1(p, 3, 1) - cs278*ps2(p, 6, 4) &
             - cs279*cs43 - cs280*ps2(p, 6, 3) - cs282*ps2(p, 6, 1)) - cs451*cs547 + cs551*ps1(p, &
             3, 4) + cs553*ps1(p, 3, 2) + cs555*ps2(p, 6, 4) + cs556*ps2(p, 6, 2) + cs559*ps1(p, 3, &
@@ -4827,7 +4850,7 @@ contains
             4) + cs222*(ps1(p, 3, 4)*ps1(p, 3, 4)*ps1(p, 3, 4)) + cs549*ps2(p, 6, 4)) + ps2(p, 6, &
             4)*(cs0*cs207 + cs19*cs555 + cs194 + cs248*ps2(p, 6, 4) - cs448*cs77 - cs545*cs77 + &
             cs546*cs77 + cs547*cs77 + cs548*cs77 + cs549*ps1(p, 3, 4)) + ps3(p, 10, &
-            4)*(-3.0_wp*cs127 + 3.0_wp*cs129)
+            4)*(-3.0_wp*cs127 + 3.0_wp*cs129))
       end do
 
       do p = 1, np
@@ -4869,8 +4892,8 @@ contains
 
    end subroutine svdw_strip_lift_o4
 
-   pure module subroutine svdw_strip_lift_vjp(np, blend_k, s_1, s_2, s_3, ps0, ps1, ps2, w0, &
-                                       w1, w2, lam0, lam1, lam2)
+   pure module subroutine svdw_strip_lift_vjp(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, &
+                                       ps2, w0, w1, w2, lam0, lam1, lam2)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -4881,6 +4904,9 @@ contains
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the
+      !> unscaled derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 =
       !> p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -5057,88 +5083,93 @@ contains
          cs90 = -cs80 + cs89
          cs91 = -cs78 + cs86
          lm0(p, 1) = &
-            -cs12*sw1(p, 2) - cs17*sw1(p, 3) + cs30*cs54 + cs36*(cs11*cs29 + cs19*ps2(p, &
-            2, 2) - cs20*ps2(p, 2, 1) + cs32*cs4 - cs35*ps1(p, 2, 1)) + cs37*(cs16*cs29 &
-            + cs19*ps2(p, 4, 2) - cs20*ps2(p, 4, 1) + cs34*cs4 - cs35*ps1(p, 3, 1)) + &
-            cs39*(cs11*cs34 + cs16*cs32 + cs19*ps2(p, 5, 2) - cs20*ps2(p, 5, 1) - &
-            cs38*ps1(p, 3, 1)) - cs7*sw1(p, 1) + sw2(p, 1)*(-cs18*(ps1(p, 1, 1)*ps1(p, &
-            1, 1)) + cs19*ps2(p, 1, 2) - cs20*ps2(p, 1, 1) + cs29*(-cs0 + 2.0_wp*cs3)) + &
-            sw2(p, 3)*(-cs18*(ps1(p, 2, 1)*ps1(p, 2, 1)) + cs19*ps2(p, 3, 2) - &
-            cs20*ps2(p, 3, 1) + cs32*(2.0_wp*cs10 - cs8)) + sw2(p, 6)*(-cs18*(ps1(p, 3, &
-            1)*ps1(p, 3, 1)) + cs19*ps2(p, 6, 2) - cs20*ps2(p, 6, 1) + cs34*(-cs13 + &
-            2.0_wp*cs15))
+            lsf_scale*(-cs12*sw1(p, 2) - cs17*sw1(p, 3) + cs30*cs54 + cs36*(cs11*cs29 + &
+            cs19*ps2(p, 2, 2) - cs20*ps2(p, 2, 1) + cs32*cs4 - cs35*ps1(p, 2, 1)) + &
+            cs37*(cs16*cs29 + cs19*ps2(p, 4, 2) - cs20*ps2(p, 4, 1) + cs34*cs4 - &
+            cs35*ps1(p, 3, 1)) + cs39*(cs11*cs34 + cs16*cs32 + cs19*ps2(p, 5, 2) - &
+            cs20*ps2(p, 5, 1) - cs38*ps1(p, 3, 1)) - cs7*sw1(p, 1) + sw2(p, &
+            1)*(-cs18*(ps1(p, 1, 1)*ps1(p, 1, 1)) + cs19*ps2(p, 1, 2) - cs20*ps2(p, 1, &
+            1) + cs29*(-cs0 + 2.0_wp*cs3)) + sw2(p, 3)*(-cs18*(ps1(p, 2, 1)*ps1(p, 2, &
+            1)) + cs19*ps2(p, 3, 2) - cs20*ps2(p, 3, 1) + cs32*(2.0_wp*cs10 - cs8)) + &
+            sw2(p, 6)*(-cs18*(ps1(p, 3, 1)*ps1(p, 3, 1)) + cs19*ps2(p, 6, 2) - &
+            cs20*ps2(p, 6, 1) + cs34*(-cs13 + 2.0_wp*cs15)))
          lm1(p, 1, 1) = &
-            cs36*(cs56 + cs57) + cs37*cs59 - cs55*sw1(p, 1) + sw2(p, 1)*(cs1*cs6 + &
-            cs29*cs61 - cs3*cs6 + cs60)
+            lsf_scale*(cs36*(cs56 + cs57) + cs37*cs59 - cs55*sw1(p, 1) + sw2(p, &
+            1)*(cs1*cs6 + cs29*cs61 - cs3*cs6 + cs60))
          lm1(p, 2, 1) = &
-            cs36*cs62 + cs39*cs59 - cs55*sw1(p, 2) + sw2(p, 3)*(cs32*cs61 + cs57 + cs63)
+            lsf_scale*(cs36*cs62 + cs39*cs59 - cs55*sw1(p, 2) + sw2(p, 3)*(cs32*cs61 + &
+            cs57 + cs63))
          lm1(p, 3, 1) = &
-            cs37*cs62 + cs39*(cs56 + cs63) - cs55*sw1(p, 3) + sw2(p, 6)*(-cs17 + &
-            cs34*cs61 + cs58)
-         lm2(p, 1, 1) = -cs55*sw2(p, 1)
-         lm2(p, 2, 1) = -cs64*sw2(p, 2)
-         lm2(p, 4, 1) = -cs64*sw2(p, 4)
-         lm2(p, 3, 1) = -cs55*sw2(p, 3)
-         lm2(p, 5, 1) = -cs64*sw2(p, 5)
-         lm2(p, 6, 1) = -cs55*sw2(p, 6)
+            lsf_scale*(cs37*cs62 + cs39*(cs56 + cs63) - cs55*sw1(p, 3) + sw2(p, &
+            6)*(-cs17 + cs34*cs61 + cs58))
+         lm2(p, 1, 1) = lsf_scale*(-cs55*sw2(p, 1))
+         lm2(p, 2, 1) = lsf_scale*(-cs64*sw2(p, 2))
+         lm2(p, 4, 1) = lsf_scale*(-cs64*sw2(p, 4))
+         lm2(p, 3, 1) = lsf_scale*(-cs55*sw2(p, 3))
+         lm2(p, 5, 1) = lsf_scale*(-cs64*sw2(p, 5))
+         lm2(p, 6, 1) = lsf_scale*(-cs55*sw2(p, 6))
          lm0(p, 2) = &
-            (1.0_wp/2.0_wp)*cs18*ps1(p, 3, 1)*sw1(p, 3) + (1.0_wp/2.0_wp)*cs35*sw1(p, 1) &
-            + cs36*(-cs32*cs67 + (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 2, 1)*s_3 - &
-            cs65*cs68) + cs37*(-cs34*cs67 + (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 4, 1)*s_3 &
-            - cs66*cs68) + (1.0_wp/2.0_wp)*cs38*sw1(p, 2) + &
-            cs39*(-1.0_wp/2.0_wp*cs32*cs66 - 1.0_wp/2.0_wp*cs34*cs65 + &
-            (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 5, 1)*s_3) - cs42*cs54 + sw2(p, &
-            1)*(-cs24*cs29 + (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 1, 1)*s_3) + sw2(p, &
-            3)*(-cs32*cs65 + (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 3, 1)*s_3) + sw2(p, &
-            6)*(-cs34*cs66 + (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 6, 1)*s_3)
+            lsf_scale*((1.0_wp/2.0_wp)*cs18*ps1(p, 3, 1)*sw1(p, 3) + &
+            (1.0_wp/2.0_wp)*cs35*sw1(p, 1) + cs36*(-cs32*cs67 + &
+            (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 2, 1)*s_3 - cs65*cs68) + cs37*(-cs34*cs67 &
+            + (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 4, 1)*s_3 - cs66*cs68) + &
+            (1.0_wp/2.0_wp)*cs38*sw1(p, 2) + cs39*(-1.0_wp/2.0_wp*cs32*cs66 - &
+            1.0_wp/2.0_wp*cs34*cs65 + (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 5, 1)*s_3) - &
+            cs42*cs54 + sw2(p, 1)*(-cs24*cs29 + (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 1, &
+            1)*s_3) + sw2(p, 3)*(-cs32*cs65 + (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 3, &
+            1)*s_3) + sw2(p, 6)*(-cs34*cs66 + (1.0_wp/2.0_wp)*cs5*izz(p)*ps2(p, 6, &
+            1)*s_3))
          lm1(p, 1, 2) = &
-            cs36*cs70 + cs37*cs71 + cs69*sw1(p, 1) + sw2(p, 1)*(-cs2*cs29 + &
-            cs5*izz(p)*ps1(p, 1, 1)*s_3)
+            lsf_scale*(cs36*cs70 + cs37*cs71 + cs69*sw1(p, 1) + sw2(p, 1)*(-cs2*cs29 + &
+            cs5*izz(p)*ps1(p, 1, 1)*s_3))
          lm1(p, 2, 2) = &
-            cs36*cs72 + cs39*cs71 + cs69*sw1(p, 2) + sw2(p, 3)*(-cs2*cs32 + &
-            cs5*izz(p)*ps1(p, 2, 1)*s_3)
+            lsf_scale*(cs36*cs72 + cs39*cs71 + cs69*sw1(p, 2) + sw2(p, 3)*(-cs2*cs32 + &
+            cs5*izz(p)*ps1(p, 2, 1)*s_3))
          lm1(p, 3, 2) = &
-            cs37*cs72 + cs39*cs70 + cs69*sw1(p, 3) + sw2(p, 6)*(-cs2*cs34 + &
-            cs5*izz(p)*ps1(p, 3, 1)*s_3)
-         lm2(p, 1, 2) = cs69*sw2(p, 1)
-         lm2(p, 2, 2) = cs20*sw2(p, 2)
-         lm2(p, 4, 2) = cs20*sw2(p, 4)
-         lm2(p, 3, 2) = cs69*sw2(p, 3)
-         lm2(p, 5, 2) = cs20*sw2(p, 5)
-         lm2(p, 6, 2) = cs69*sw2(p, 6)
-         lm0(p, 3) = cs23*cs54
-         lm1(p, 1, 3) = cs29*cs76*sw2(p, 1) + cs32*cs74 + cs37*cs75 - cs73*sw1(p, 1)
-         lm1(p, 2, 3) = cs29*cs74 + cs32*cs76*sw2(p, 3) + cs39*cs75 - cs73*sw1(p, 2)
+            lsf_scale*(cs37*cs72 + cs39*cs70 + cs69*sw1(p, 3) + sw2(p, 6)*(-cs2*cs34 + &
+            cs5*izz(p)*ps1(p, 3, 1)*s_3))
+         lm2(p, 1, 2) = lsf_scale*(cs69*sw2(p, 1))
+         lm2(p, 2, 2) = lsf_scale*(cs20*sw2(p, 2))
+         lm2(p, 4, 2) = lsf_scale*(cs20*sw2(p, 4))
+         lm2(p, 3, 2) = lsf_scale*(cs69*sw2(p, 3))
+         lm2(p, 5, 2) = lsf_scale*(cs20*sw2(p, 5))
+         lm2(p, 6, 2) = lsf_scale*(cs69*sw2(p, 6))
+         lm0(p, 3) = lsf_scale*(cs23*cs54)
+         lm1(p, 1, 3) = &
+            lsf_scale*(cs29*cs76*sw2(p, 1) + cs32*cs74 + cs37*cs75 - cs73*sw1(p, 1))
+         lm1(p, 2, 3) = &
+            lsf_scale*(cs29*cs74 + cs32*cs76*sw2(p, 3) + cs39*cs75 - cs73*sw1(p, 2))
          lm1(p, 3, 3) = &
-            cs23*cs29*cs37 + cs23*cs32*cs39 + cs34*cs76*sw2(p, 6) - cs73*sw1(p, 3)
-         lm2(p, 1, 3) = -cs73*sw2(p, 1)
-         lm2(p, 2, 3) = -cs36*cs73
-         lm2(p, 4, 3) = -cs37*cs73
-         lm2(p, 3, 3) = -cs73*sw2(p, 3)
-         lm2(p, 5, 3) = -cs39*cs73
-         lm2(p, 6, 3) = -cs73*sw2(p, 6)
+            lsf_scale*(cs23*cs29*cs37 + cs23*cs32*cs39 + cs34*cs76*sw2(p, 6) - &
+            cs73*sw1(p, 3))
+         lm2(p, 1, 3) = lsf_scale*(-cs73*sw2(p, 1))
+         lm2(p, 2, 3) = lsf_scale*(-cs36*cs73)
+         lm2(p, 4, 3) = lsf_scale*(-cs37*cs73)
+         lm2(p, 3, 3) = lsf_scale*(-cs73*sw2(p, 3))
+         lm2(p, 5, 3) = lsf_scale*(-cs39*cs73)
+         lm2(p, 6, 3) = lsf_scale*(-cs73*sw2(p, 6))
          lm0(p, 4) = &
-            cs21*cs54 + cs36*(cs32*cs81 - cs77*ps2(p, 2, 4) + cs84*ps1(p, 2, 4)) + &
-            cs37*(cs34*cs81 - cs77*ps2(p, 4, 4) + cs84*ps1(p, 3, 4)) + cs39*(cs32*cs83 + &
-            cs34*cs82 - cs77*ps2(p, 5, 4)) - cs78*sw1(p, 1) - cs79*sw1(p, 2) - &
-            cs80*sw1(p, 3) + sw2(p, 1)*(2.0_wp*cs29*cs81 - cs77*ps2(p, 1, 4)) + sw2(p, &
-            3)*(2.0_wp*cs32*cs82 - cs77*ps2(p, 3, 4)) + sw2(p, 6)*(2.0_wp*cs34*cs83 - &
-            cs77*ps2(p, 6, 4))
+            lsf_scale*(cs21*cs54 + cs36*(cs32*cs81 - cs77*ps2(p, 2, 4) + cs84*ps1(p, 2, &
+            4)) + cs37*(cs34*cs81 - cs77*ps2(p, 4, 4) + cs84*ps1(p, 3, 4)) + &
+            cs39*(cs32*cs83 + cs34*cs82 - cs77*ps2(p, 5, 4)) - cs78*sw1(p, 1) - &
+            cs79*sw1(p, 2) - cs80*sw1(p, 3) + sw2(p, 1)*(2.0_wp*cs29*cs81 - cs77*ps2(p, &
+            1, 4)) + sw2(p, 3)*(2.0_wp*cs32*cs82 - cs77*ps2(p, 3, 4)) + sw2(p, &
+            6)*(2.0_wp*cs34*cs83 - cs77*ps2(p, 6, 4)))
          lm1(p, 1, 4) = &
-            cs36*cs88 + cs37*cs90 - cs85*sw1(p, 1) + sw2(p, 1)*(-2.0_wp*cs78 + &
-            2.0_wp*cs86)
+            lsf_scale*(cs36*cs88 + cs37*cs90 - cs85*sw1(p, 1) + sw2(p, 1)*(-2.0_wp*cs78 &
+            + 2.0_wp*cs86))
          lm1(p, 2, 4) = &
-            cs36*cs91 + cs39*cs90 - cs85*sw1(p, 2) + sw2(p, 3)*(-2.0_wp*cs79 + &
-            2.0_wp*cs87)
+            lsf_scale*(cs36*cs91 + cs39*cs90 - cs85*sw1(p, 2) + sw2(p, 3)*(-2.0_wp*cs79 &
+            + 2.0_wp*cs87))
          lm1(p, 3, 4) = &
-            cs37*cs91 + cs39*cs88 - cs85*sw1(p, 3) + sw2(p, 6)*(-2.0_wp*cs80 + &
-            2.0_wp*cs89)
-         lm2(p, 1, 4) = -cs85*sw2(p, 1)
-         lm2(p, 2, 4) = -cs36*cs85
-         lm2(p, 4, 4) = -cs37*cs85
-         lm2(p, 3, 4) = -cs85*sw2(p, 3)
-         lm2(p, 5, 4) = -cs39*cs85
-         lm2(p, 6, 4) = -cs85*sw2(p, 6)
+            lsf_scale*(cs37*cs91 + cs39*cs88 - cs85*sw1(p, 3) + sw2(p, 6)*(-2.0_wp*cs80 &
+            + 2.0_wp*cs89))
+         lm2(p, 1, 4) = lsf_scale*(-cs85*sw2(p, 1))
+         lm2(p, 2, 4) = lsf_scale*(-cs36*cs85)
+         lm2(p, 4, 4) = lsf_scale*(-cs37*cs85)
+         lm2(p, 3, 4) = lsf_scale*(-cs85*sw2(p, 3))
+         lm2(p, 5, 4) = lsf_scale*(-cs39*cs85)
+         lm2(p, 6, 4) = lsf_scale*(-cs85*sw2(p, 6))
       end do
 
       lam0 = lm0(1:np, :)

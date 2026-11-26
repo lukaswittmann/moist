@@ -115,7 +115,7 @@ contains
    !>
    !> - raises the coarse spacing cap up to [[discovery_size_certified]] when the
    !>   level set certifies surface-free balls large enough to clear coarse cells
-   !>   (its radius at `S = 10`, or around an unreached point)
+   !>   (its radius at the unscaled level 10, `S = 10 scale`, or around an unreached point)
    !>
    !> @param[in]    self     Seeder
    !> @param[in]    lsf      Level set (exclusion certificate and its strength)
@@ -134,7 +134,7 @@ contains
       call work%frame%init(sum(geometry%centers, dim=2)/real(nat, wp), geometry%axes)
       h_cap = discovery_size
       ! Zero for a level set without a surface-free radius: the cap stays
-      r_cert = max(lsf%far_exclusion_radius(), lsf%exclusion_radius(10.0_wp))
+      r_cert = max(lsf%far_exclusion_radius(), lsf%exclusion_radius(10.0_wp*lsf%scale))
       if (r_cert >= sqrt(3.0_wp)*discovery_size_certified) then
          h_cap = discovery_size_certified
       else if (r_cert >= sqrt(3.0_wp)*2.0_wp*discovery_size) then

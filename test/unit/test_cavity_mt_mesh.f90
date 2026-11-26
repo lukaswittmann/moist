@@ -20,7 +20,7 @@ module test_cavity_mt_mesh
       !> Cached analytic value
       real(wp) :: value = 0.0_wp
       !> Radius multiplier to exercise exterior-bound expansion
-      real(wp) :: scale = 1.0_wp
+      real(wp) :: radius_scale = 1.0_wp
       !> Inject a recoverable preparation failure
       logical :: fail = .false.
       !> Level-set value beyond which a point is far, Bohr
@@ -212,7 +212,7 @@ contains
       real(wp) :: xyz(3, 1)
       xyz = 0.0_wp
       call init_analytic(lsf, xyz, [1.0_wp])
-      lsf%scale = 5.0_wp
+      lsf%radius_scale = 5.0_wp
       call build_mt_mesh(lsf, xyz, 0.5_wp, mesh, mesh_error, nthreads=1)
       call require_mesh(mesh_error, error)
       if (allocated(error)) return
@@ -521,7 +521,7 @@ contains
       end if
       self%value = huge(1.0_wp)
       do i = 1, self%ncenters
-         self%value = min(self%value, norm2(point - self%mol%xyz(:, i)) - self%scale*self%radii(i))
+         self%value = min(self%value, norm2(point - self%mol%xyz(:, i)) - self%radius_scale*self%radii(i))
       end do
       if (self%inner > 0.0_wp) self%value = max(self%value, self%inner - norm2(point - self%mol%xyz(:, 1)))
       if (self%value > self%reach) then

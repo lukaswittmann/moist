@@ -165,6 +165,7 @@ contains
 
       call self%param%init_defaults()
       if (present(param)) self%param = param
+      self%scale = self%param%scale
       call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error, basis=self%param%basis)
       if (allocated(error)) return
       !> Scratch sized for the previous basis; resized on first use
@@ -329,6 +330,7 @@ contains
       ! reach once per atom, which the build caches
       call self%gto%build_screening(self%screening_threshold)
       call lsf_base_update(self, mol, radii)
+      self%scale = self%param%scale
       self%zmax = isodensity_max_nuclear_charge(mol)
       call self%core%update(mol, radii, self%param, self%z)
       if (allocated(self%bat_cand)) then
@@ -395,19 +397,20 @@ contains
       self%point = point
 
       self%prepared_deriv = nderiv
-      self%value = self%param%scale*(self%param%rho_iso - rho)
-      self%grad = -self%param%scale*drho
+      self%scale = self%param%scale
+      self%value = self%scale*(self%param%rho_iso - rho)
+      self%grad = -self%scale*drho
       if (nderiv >= 2) then
-         self%hess = -self%param%scale*d2rho
+         self%hess = -self%scale*d2rho
       else
          self%hess = 0.0_wp
       end if
       if (nderiv >= 3) then
-         self%third = -self%param%scale*d3rho
+         self%third = -self%scale*d3rho
       else
          self%third = 0.0_wp
       end if
-      if (nderiv >= 4) self%fourth = -self%param%scale*d4rho
+      if (nderiv >= 4) self%fourth = -self%scale*d4rho
    end subroutine lsf_prepare_impl
 
    !> Density and its spatial derivatives through `nderiv` at one point
@@ -645,6 +648,7 @@ contains
       call self%begin_batch(n)
       if (n == 0) return
       self%prepared_deriv = -1
+      self%scale = self%param%scale
       if (.not. lsf_has_density(self)) then
          call fatal_error(error, "evaluate_batch failed at point 1: no density matrix installed ("// &
                           self%name//")")
@@ -760,18 +764,18 @@ contains
                cycle
             end if
 
-            lsf0(i) = self%param%scale*(self%param%rho_iso - rho(p))
-            if (order >= 1) lsf1_r(:, i) = -self%param%scale*drho(:, p)
+            lsf0(i) = self%scale*(self%param%rho_iso - rho(p))
+            if (order >= 1) lsf1_r(:, i) = -self%scale*drho(:, p)
             if (order >= 2) then
-               t2 = -self%param%scale*d2rho(:, :, p)
+               t2 = -self%scale*d2rho(:, :, p)
                call pack_sym_matrix(t2, lsf2_rr_packed(:, i), ndim)
             end if
             if (order >= 3) then
-               t3 = -self%param%scale*d3rho(:, :, :, p)
+               t3 = -self%scale*d3rho(:, :, :, p)
                call pack_sym_tensor3(t3, lsf3_rrr(:, i), ndim)
             end if
             if (order >= 4) then
-               t4 = -self%param%scale*d4rho(:, :, :, :, p)
+               t4 = -self%scale*d4rho(:, :, :, :, p)
                call pack_sym_tensor4(t4, lsf4_rrrr(:, i), ndim)
             end if
          end do
@@ -1109,7 +1113,7 @@ contains
       !> Whether this LSF is backed by a density
       logical :: available
 
-      factor = -self%param%scale
+      factor = -self%scale
       available = .true.
    end function lsf_density_adjoint_factor
 

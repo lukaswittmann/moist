@@ -13,6 +13,7 @@
 !>
 module test_cavity_drop_lsf_reference
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_lsf_cfc_param, only: moist_cavity_drop_lsf_cfc_param_type
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
@@ -688,7 +689,8 @@ contains
          select type (lsf)
          type is (moist_cavity_drop_lsf_cfc_type)
             lsf%screening_threshold = thr
-            call lsf%new()
+            ! Fixture holds the unscaled field; the scale is covered by cavity_drop_lsf_scale
+            call lsf%new(param=moist_cavity_drop_lsf_cfc_param_type(scale=1.0_wp))
          end select
          max_deriv = max_deriv_cfc
       case default

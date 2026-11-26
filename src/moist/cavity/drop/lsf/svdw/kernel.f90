@@ -11,6 +11,10 @@
 !> - one-, two- and three-body terms in power-sum form (Newton's identities): O(n), never
 !>   over pairs or triples
 !> - kind slot: 1 -> m = 1 (p1), 2 -> m = 2 (p2), 3 -> m = 3 (p3), 4 -> m = 3/2 (q)
+!> - level-set multiplier: every routine whose outputs are derivatives of S takes `lsf_scale`
+!>   after `s_3` and returns `lsf_scale` times them (field lsf_scale*S, same surface); the
+!>   outermost multiply of each output, so `lsf_scale = 1` is bit-identical to the unscaled
+!>   kernel; per-atom tensors and power sums are not scaled
 !>
 !> Tensor families
 !> ---------------
@@ -109,6 +113,8 @@
 !> - stage 2' emits the adjoint `lam` of `ps0`, `ps1`, `ps2` in their layout; stage 3 contracts
 !>   it with every atom's radial chain against the stage-1 cache, never forming `at3`
 !> - `res(3, nat, np)` point-last; exact zeros beyond the band
+!> - `lsf_scale` enters once, in stage 2' (`lam`, the adjoint of lsf_scale*S); stage 3 is
+!>   linear in `lam` and takes no scale
 !>
 !> Source layout
 !> -------------
@@ -726,6 +732,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -748,8 +756,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   f2_rr        Spatial Hessian d^2S/dr^2
    !> @param[out]   f3_rrr       Third spatial derivative d^3S/dr^3
    !> @param[out]   f4_rrrr      Fourth spatial derivative d^4S/dr^4
-   pure module subroutine svdw_spatial_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, ps4, max_deriv, &
-                                     f0, f1_r, f2_rr, f3_rrr, f4_rrrr)
+   pure module subroutine svdw_spatial_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, ps4, &
+                                     max_deriv, f0, f1_r, f2_rr, f3_rrr, f4_rrrr)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -758,6 +766,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -805,6 +816,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -833,8 +846,9 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   f2_r_rA      d^2S/(dr dR_A); index order (spatial, nuclear)
    !> @param[out]   f3_rr_rA     d^3S/(dr^2 dR_A); index order (spatial, spatial, nuclear)
    !> @param[out]   f4_rrr_rA    d^4S/(dr^3 dR_A); index order (spatial x 3, nuclear)
-   pure module subroutine svdw_nuclear_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, at0, at1, at2, &
-                                     at3, at4, max_deriv, f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA)
+   pure module subroutine svdw_nuclear_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, at0, &
+                                     at1, at2, at3, at4, max_deriv, f1_rA, f2_r_rA, f3_rr_rA, &
+                                     f4_rrr_rA)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -843,6 +857,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -896,6 +913,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -922,8 +941,9 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   f2_r_rad     d^2S/(dr dR_a)
    !> @param[out]   f3_rr_rad    d^3S/(dr^2 dR_a)
    !> @param[out]   f4_rrr_rad   d^4S/(dr^3 dR_a)
-   pure module subroutine svdw_radius_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, atd0, atd1, atd2, &
-                                    atd3, max_deriv, f1_rad, f2_r_rad, f3_rr_rad, f4_rrr_rad)
+   pure module subroutine svdw_radius_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, atd0, &
+                                    atd1, atd2, atd3, max_deriv, f1_rad, f2_r_rad, f3_rr_rad, &
+                                    f4_rrr_rad)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -932,6 +952,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -986,6 +1009,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -1016,8 +1041,9 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   f2_rArB      d^2S/(dR_A dR_B); index order (s, t)
    !> @param[out]   f3_r_rArB    d^3S/(dr dR_A dR_B); index order (spatial, s, t)
    !> @param[out]   f4_rr_rArB   d^4S/(dr^2 dR_A dR_B); index order (spatial, spatial, s, t)
-   pure module subroutine svdw_pair_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, at0, at1, at2, at3, bt0, &
-                                  bt1, bt2, bt3, max_deriv, f2_rArB, f3_r_rArB, f4_rr_rArB)
+   pure module subroutine svdw_pair_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, at0, at1, &
+                                  at2, at3, bt0, bt1, bt2, bt3, max_deriv, f2_rArB, f3_r_rArB, &
+                                  f4_rr_rArB)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -1026,6 +1052,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -1074,6 +1103,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -1098,8 +1129,9 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   f2_rArB      d^2S/(dR_A dR_B); index order (s, t)
    !> @param[out]   f3_r_rArB    d^3S/(dr dR_A dR_B); index order (spatial, s, t)
    !> @param[out]   f4_rr_rArB   d^4S/(dr^2 dR_A dR_B); index order (spatial, spatial, s, t)
-   pure module subroutine svdw_pair_diag_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, at0, at1, at2, at3, &
-                                       at4, max_deriv, f2_rArB, f3_r_rArB, f4_rr_rArB)
+   pure module subroutine svdw_pair_diag_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, at0, &
+                                       at1, at2, at3, at4, max_deriv, f2_rArB, f3_r_rArB, &
+                                       f4_rr_rArB)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -1108,6 +1140,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -1161,6 +1196,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -1187,9 +1224,9 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   f2_radrad    d^2S/(dR_a dR_b)
    !> @param[out]   f3_r_radrad  d^3S/(dr dR_a dR_b)
    !> @param[out]   f4_rr_radrad d^4S/(dr^2 dR_a dR_b)
-   pure module subroutine svdw_radpair_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, atd0, atd1, atd2, &
-                                     btd0, btd1, btd2, max_deriv, f2_radrad, f3_r_radrad, &
-                                     f4_rr_radrad)
+   pure module subroutine svdw_radpair_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, atd0, &
+                                     atd1, atd2, btd0, btd1, btd2, max_deriv, f2_radrad, &
+                                     f3_r_radrad, f4_rr_radrad)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -1198,6 +1235,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -1248,6 +1288,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -1274,8 +1316,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   f2_radrad    d^2S/(dR_a dR_b)
    !> @param[out]   f3_r_radrad  d^3S/(dr dR_a dR_b)
    !> @param[out]   f4_rr_radrad d^4S/(dr^2 dR_a dR_b)
-   pure module subroutine svdw_radpair_diag_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, atd0, atd1, &
-                                          atd2, atdd0, atdd1, atdd2, max_deriv, f2_radrad, &
+   pure module subroutine svdw_radpair_diag_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, atd0, &
+                                          atd1, atd2, atdd0, atdd1, atdd2, max_deriv, f2_radrad, &
                                           f3_r_radrad, f4_rr_radrad)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
@@ -1285,6 +1327,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -1345,6 +1390,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -1373,9 +1420,9 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   f2_rA_rad    d^2S/(dR_A dR_b); trailing index is A's component
    !> @param[out]   f3_r_rA_rad  d^3S/(dr dR_A dR_b); index order (spatial, s)
    !> @param[out]   f4_rr_rA_rad d^4S/(dr^2 dR_A dR_b); index order (spatial, spatial, s)
-   pure module subroutine svdw_nucrad_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, at0, at1, at2, at3, &
-                                    btd0, btd1, btd2, max_deriv, f2_rA_rad, f3_r_rA_rad, &
-                                    f4_rr_rA_rad)
+   pure module subroutine svdw_nucrad_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, at0, at1, &
+                                    at2, at3, btd0, btd1, btd2, max_deriv, f2_rA_rad, &
+                                    f3_r_rA_rad, f4_rr_rA_rad)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -1384,6 +1431,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -1432,6 +1482,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -1462,9 +1514,9 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   f2_rA_rad    d^2S/(dR_A dR_b); trailing index is A's component
    !> @param[out]   f3_r_rA_rad  d^3S/(dr dR_A dR_b); index order (spatial, s)
    !> @param[out]   f4_rr_rA_rad d^4S/(dr^2 dR_A dR_b); index order (spatial, spatial, s)
-   pure module subroutine svdw_nucrad_diag_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, at0, at1, at2, &
-                                         at3, atd0, atd1, atd2, atd3, max_deriv, f2_rA_rad, &
-                                         f3_r_rA_rad, f4_rr_rA_rad)
+   pure module subroutine svdw_nucrad_diag_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, at0, &
+                                         at1, at2, at3, atd0, atd1, atd2, atd3, max_deriv, &
+                                         f2_rA_rad, f3_r_rA_rad, f4_rr_rA_rad)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -1473,6 +1525,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -1533,6 +1588,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -1559,9 +1616,9 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   tangent_f1_r sum_B v_B . d/dR_B of dS/dr
    !> @param[out]   tangent_f2_rr sum_B v_B . d/dR_B of d^2S/dr^2
    !> @param[out]   tangent_f3_rrr sum_B v_B . d/dR_B of d^3S/dr^3
-   pure module subroutine svdw_tangent_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, ws0, ws1, ws2, &
-                                     ws3, max_deriv, tangent_f0, tangent_f1_r, tangent_f2_rr, &
-                                     tangent_f3_rrr)
+   pure module subroutine svdw_tangent_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, ws0, &
+                                     ws1, ws2, ws3, max_deriv, tangent_f0, tangent_f1_r, &
+                                     tangent_f2_rr, tangent_f3_rrr)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -1570,6 +1627,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -1626,6 +1686,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -1662,9 +1724,9 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   hvp_f1_rA    sum_B v_B . d^2S/(dR_A dR_B); trailing index is A's component
    !> @param[out]   hvp_f2_r_rA  sum_B v_B . d^3S/(dr dR_A dR_B); trailing index is A's component
    !> @param[out]   hvp_f3_rr_rA sum_B v_B . d^4S/(dr^2 dR_A dR_B); trailing index is A's component
-   pure module subroutine svdw_hvp_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ws0, ws1, ws2, at0, at1, &
-                                 at2, at3, aw0, aw1, aw2, aw3, max_deriv, hvp_f1_rA, hvp_f2_r_rA, &
-                                 hvp_f3_rr_rA)
+   pure module subroutine svdw_hvp_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ws0, ws1, ws2, &
+                                 at0, at1, at2, at3, aw0, aw1, aw2, aw3, max_deriv, hvp_f1_rA, &
+                                 hvp_f2_r_rA, hvp_f3_rr_rA)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -1673,6 +1735,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -1748,6 +1813,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -1783,8 +1850,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   hvp_f1_rad   sum_B v_B . d^2S/(dR_a dR_B) + sum_B vr_B d^2S/(dR_a dR_b)
    !> @param[out]   hvp_f2_r_rad the same for dS/dr
    !> @param[out]   hvp_f3_rr_rad the same for d^2S/dr^2
-   pure module subroutine svdw_radius_hvp_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ws0, ws1, ws2, &
-                                        atd0, atd1, atd2, awd0, awd1, awd2, max_deriv, &
+   pure module subroutine svdw_radius_hvp_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ws0, &
+                                        ws1, ws2, atd0, atd1, atd2, awd0, awd1, awd2, max_deriv, &
                                         hvp_f1_rad, hvp_f2_r_rad, hvp_f3_rr_rad)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
@@ -1794,6 +1861,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -1871,6 +1941,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -1894,8 +1966,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !>                            contracted over all nine entries
    !> @param[out]   vjp_f1_rA    w0 f1_rA + w1 . f2_r_rA + w2 : f3_rr_rA of this atom; the index is
    !>                            the nuclear component s
-   pure module subroutine svdw_vjp_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, at0, at1, at2, at3, w0, &
-                                 w1, w2, vjp_f1_rA)
+   pure module subroutine svdw_vjp_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, at0, at1, at2, &
+                                 at3, w0, w1, w2, vjp_f1_rA)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -1904,6 +1976,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -1961,6 +2036,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -1982,8 +2059,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !>                            contracted over all nine entries
    !> @param[out]   vjp_f1_rad   w0 f1_rad + w1 . f2_r_rad + w2 : f3_rr_rad of this atom; a scalar,
    !>                            since a radius carries no derivative index
-   pure module subroutine svdw_radius_vjp_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, atd0, atd1, atd2, &
-                                        w0, w1, w2, vjp_f1_rad)
+   pure module subroutine svdw_radius_vjp_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, atd0, &
+                                        atd1, atd2, w0, w1, w2, vjp_f1_rad)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -1992,6 +2069,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -2060,6 +2140,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -2087,8 +2169,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   hvp_vjp_ws2  d/d ws2 of the weighted hvp row; index order (spatial, spatial,
    !>                            nuclear s, kind), the symmetric pair's coefficient split evenly
    !>                            over both orderings
-   pure module subroutine svdw_hvp_vjp_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, at0, at1, at2, at3, &
-                                     w0, w1, w2, hvp_vjp_ws0, hvp_vjp_ws1, hvp_vjp_ws2)
+   pure module subroutine svdw_hvp_vjp_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, at0, at1, &
+                                     at2, at3, w0, w1, w2, hvp_vjp_ws0, hvp_vjp_ws1, hvp_vjp_ws2)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -2097,6 +2179,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -2162,6 +2247,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
    !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
    !>                            4 = q)
@@ -2187,8 +2274,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !>                            contracted over all nine entries
    !> @param[out]   vjp_f2_rArA  w0 f2_rArA + w1 . f3_r_rArA + w2 : f4_rr_rArA of this atom; index
    !>                            order (nuclear s, nuclear t), symmetric
-   pure module subroutine svdw_vjp_diag_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, at0, at1, at2, at3, &
-                                      at4, w0, w1, w2, vjp_f2_rArA)
+   pure module subroutine svdw_vjp_diag_eval(blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, at0, at1, &
+                                      at2, at3, at4, w0, w1, w2, vjp_f2_rArA)
       !> Blending sharpness k of u = exp(-(k/3) d)
       real(wp), intent(in) :: blend_k
       !> One-body blending weight blend_1b
@@ -2197,6 +2284,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
       !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(nkind)
@@ -2311,6 +2401,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !>   groups packed (sorted tuples, last index slowest)
    !> - `np <= svdw_strip_width(0) = 32`; requires `Z > 0` for every point (escape is the caller's
    !>   test on the power sums)
+   !> - every output is `lsf_scale` times the jet of S, applied as the last multiply of each
+   !>   component
    !> - weights used as given: no low-atom-count guard
    !>
    !> @param[in]    np           Live points in the strip, 1..32
@@ -2318,10 +2410,12 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Order-0 power sums of the strip, point-first; last index the kind
    !>                            (1 = p1, 2 = p2, 3 = p3, 4 = q)
    !> @param[out]   lsf0         Level-set value S = -log(Z)/blend_k
-   pure module subroutine svdw_strip_lift_o0(np, blend_k, s_1, s_2, s_3, ps0, lsf0)
+   pure module subroutine svdw_strip_lift_o0(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, lsf0)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -2332,6 +2426,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 = p2, 3 = p3,
       !> 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -2428,6 +2525,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !>   symmetric groups packed (sorted tuples, last index slowest)
    !> - `np <= svdw_strip_width(1) = 32`; requires `Z > 0` for every point (escape is the caller's
    !>   test on the power sums)
+   !> - every output is `lsf_scale` times the jet of S, applied as the last multiply of each
+   !>   component
    !> - weights used as given: no low-atom-count guard
    !>
    !> @param[in]    np           Live points in the strip, 1..32
@@ -2435,6 +2534,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Order-0 power sums of the strip, point-first; last index the kind
    !>                            (1 = p1, 2 = p2, 3 = p3, 4 = q)
    !> @param[in]    ps1          Order-1 power sums of the strip, point-first; middle index the
@@ -2442,7 +2543,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !>                            = q)
    !> @param[out]   lsf0         Level-set value S = -log(Z)/blend_k
    !> @param[out]   lsf1_r       Spatial gradient dS/dr
-   pure module subroutine svdw_strip_lift_o1(np, blend_k, s_1, s_2, s_3, ps0, ps1, lsf0, lsf1_r)
+   pure module subroutine svdw_strip_lift_o1(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, lsf0, &
+                                      lsf1_r)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -2453,6 +2555,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 = p2, 3 = p3,
       !> 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -2560,6 +2665,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !>   point-last, symmetric groups packed (sorted tuples, last index slowest)
    !> - `np <= svdw_strip_width(2) = 32`; requires `Z > 0` for every point (escape is the caller's
    !>   test on the power sums)
+   !> - every output is `lsf_scale` times the jet of S, applied as the last multiply of each
+   !>   component
    !> - weights used as given: no low-atom-count guard
    !>
    !> @param[in]    np           Live points in the strip, 1..32
@@ -2567,6 +2674,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Order-0 power sums of the strip, point-first; last index the kind
    !>                            (1 = p1, 2 = p2, 3 = p3, 4 = q)
    !> @param[in]    ps1          Order-1 power sums of the strip, point-first; middle index the
@@ -2578,8 +2687,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   lsf0         Level-set value S = -log(Z)/blend_k
    !> @param[out]   lsf1_r       Spatial gradient dS/dr
    !> @param[out]   lsf2_rr      Spatial Hessian, packed (6)
-   pure module subroutine svdw_strip_lift_o2(np, blend_k, s_1, s_2, s_3, ps0, ps1, ps2, lsf0, lsf1_r, &
-                                      lsf2_rr)
+   pure module subroutine svdw_strip_lift_o2(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, lsf0, &
+                                      lsf1_r, lsf2_rr)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -2590,6 +2699,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 = p2, 3 = p3,
       !> 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -2708,6 +2820,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !>   `lsf3_rrr` point-last, symmetric groups packed (sorted tuples, last index slowest)
    !> - `np <= svdw_strip_width(3) = 16`; requires `Z > 0` for every point (escape is the caller's
    !>   test on the power sums)
+   !> - every output is `lsf_scale` times the jet of S, applied as the last multiply of each
+   !>   component
    !> - weights used as given: no low-atom-count guard
    !>
    !> @param[in]    np           Live points in the strip, 1..16
@@ -2715,6 +2829,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Order-0 power sums of the strip, point-first; last index the kind
    !>                            (1 = p1, 2 = p2, 3 = p3, 4 = q)
    !> @param[in]    ps1          Order-1 power sums of the strip, point-first; middle index the
@@ -2730,8 +2846,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   lsf1_r       Spatial gradient dS/dr
    !> @param[out]   lsf2_rr      Spatial Hessian, packed (6)
    !> @param[out]   lsf3_rrr     Third spatial derivative, packed (10)
-   pure module subroutine svdw_strip_lift_o3(np, blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, lsf0, &
-                                      lsf1_r, lsf2_rr, lsf3_rrr)
+   pure module subroutine svdw_strip_lift_o3(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, &
+                                      lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
       !> Live points in the strip, 1..16
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -2742,6 +2858,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 = p2, 3 = p3,
       !> 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -2872,6 +2991,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !>   slowest)
    !> - `np <= svdw_strip_width(4) = 8`; requires `Z > 0` for every point (escape is the caller's
    !>   test on the power sums)
+   !> - every output is `lsf_scale` times the jet of S, applied as the last multiply of each
+   !>   component
    !> - weights used as given: no low-atom-count guard
    !>
    !> @param[in]    np           Live points in the strip, 1..8
@@ -2879,6 +3000,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is lsf_scale
+   !>                            times the unscaled derivative of S
    !> @param[in]    ps0          Order-0 power sums of the strip, point-first; last index the kind
    !>                            (1 = p1, 2 = p2, 3 = p3, 4 = q)
    !> @param[in]    ps1          Order-1 power sums of the strip, point-first; middle index the
@@ -2898,8 +3021,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   lsf2_rr      Spatial Hessian, packed (6)
    !> @param[out]   lsf3_rrr     Third spatial derivative, packed (10)
    !> @param[out]   lsf4_rrrr    Fourth spatial derivative, packed (15)
-   pure module subroutine svdw_strip_lift_o4(np, blend_k, s_1, s_2, s_3, ps0, ps1, ps2, ps3, ps4, lsf0, &
-                                      lsf1_r, lsf2_rr, lsf3_rrr, lsf4_rrrr)
+   pure module subroutine svdw_strip_lift_o4(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, ps2, ps3, &
+                                      ps4, lsf0, lsf1_r, lsf2_rr, lsf3_rrr, lsf4_rrrr)
       !> Live points in the strip, 1..8
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -2910,6 +3033,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the unscaled
+      !> derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 = p2, 3 = p3,
       !> 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -2949,6 +3075,9 @@ module moist_cavity_drop_lsf_svdw_kernel
    !>   applied here
    !> - feeds `svdw_strip_vjp`; a `lam` row of a kind with a zero blending weight (`q` at
    !>   `blend_2b = 0`) is exactly zero
+   !> - `lam` is the adjoint of `lsf_scale*S`: the only place the reverse pipeline applies
+   !>   `lsf_scale`; `svdw_strip_vjp` is linear in `lam` and takes no scale, so its `res`
+   !>   carries `lsf_scale` exactly once
    !> - `np <= svdw_strip_width(2) = 32`; requires `Z > 0` for every point (escape is the
    !>   caller's test on the power sums)
    !> - weights used as given: no low-atom-count guard
@@ -2958,6 +3087,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]    s_1          One-body blending weight blend_1b
    !> @param[in]    s_2          Two-body blending weight blend_2b
    !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    lsf_scale    Constant multiplier of the level set; every output is
+   !>                            lsf_scale times the unscaled derivative of S
    !> @param[in]    ps0          Order-0 power sums of the strip, point-first; last index
    !>                            the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
    !> @param[in]    ps1          Order-1 power sums of the strip, point-first; middle
@@ -2973,8 +3104,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[out]   lam0         Adjoint of the order-0 power sums, layout of `ps0`
    !> @param[out]   lam1         Adjoint of the order-1 power sums, layout of `ps1`
    !> @param[out]   lam2         Adjoint of the order-2 power sums, layout of `ps2`
-   pure module subroutine svdw_strip_lift_vjp(np, blend_k, s_1, s_2, s_3, ps0, ps1, ps2, w0, &
-                                       w1, w2, lam0, lam1, lam2)
+   pure module subroutine svdw_strip_lift_vjp(np, blend_k, s_1, s_2, s_3, lsf_scale, ps0, ps1, &
+                                       ps2, w0, w1, w2, lam0, lam1, lam2)
       !> Live points in the strip, 1..32
       integer, intent(in) :: np
       !> Blending sharpness k of u = exp(-(k/3) d)
@@ -2985,6 +3116,9 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body blending weight blend_3b
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set; every output is lsf_scale times the
+      !> unscaled derivative of S
+      real(wp), intent(in) :: lsf_scale
       !> Order-0 power sums of the strip, point-first; last index the kind (1 = p1, 2 =
       !> p2, 3 = p3, 4 = q)
       real(wp), intent(in) :: ps0(np, nkind)
@@ -3016,6 +3150,8 @@ module moist_cavity_drop_lsf_svdw_kernel
    !>   `lam` from `svdw_strip_lift_vjp`; `at3` is never formed: the radial chain `at(J) =
    !>   sum_j c_J,j(d, 1/x) g^(j)(d_A)` is contracted with `lam` first and the four kinds
    !>   are summed on the radial derivatives `g^(j)`
+   !> - linear in `lam`: `res` inherits `lsf_scale` from `svdw_strip_lift_vjp`, which
+   !>   applies it; no scale here
    !> - reads the geometry cache of `svdw_strip_powersums_o2` for the same strip
    !>   (`cache_x`, `cache_inv_x`, `cache_u`, all `(np, nat)`), so there is no second exp;
    !>   `points`, `centers`, `radii`, `blend_k`, `include_q`, `fade_start`, `fade_width`
@@ -3219,13 +3355,15 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]  s_1        One-body weight
    !> @param[in]  s_2        Two-body weight
    !> @param[in]  s_3        Three-body weight
+   !> @param[in]  lsf_scale  Constant multiplier of the level set; every output is
+   !>                        lsf_scale times the unscaled derivative of S
    !> @param[in]  max_deriv  Highest spatial-derivative order (0..4)
    !> @param[out] f0         Level-set value
    !> @param[out] f1_r       Spatial gradient
    !> @param[out] f2_rr      Spatial Hessian
    !> @param[out] f3_rrr     Third spatial derivative
    !> @param[out] f4_rrrr    Fourth spatial derivative
-   pure module subroutine svdw_lsf_spatial(d, radii, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_spatial(d, radii, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                     f0, f1_r, f2_rr, f3_rrr, f4_rrrr)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -3239,6 +3377,8 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> Level-set value
@@ -3261,12 +3401,14 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]  s_1         One-body weight
    !> @param[in]  s_2         Two-body weight
    !> @param[in]  s_3         Three-body weight
+   !> @param[in]  lsf_scale   Constant multiplier of the level set; every output is
+   !>                         lsf_scale times the unscaled derivative of S
    !> @param[in]  max_deriv   Highest *spatial* derivative order (0..3)
    !> @param[out] f1_rA       dS/dR_A, shape (3, n_active)
    !> @param[out] f2_r_rA     d^2S/(dr dR_A), shape (3, 3, n_active)
    !> @param[out] f3_rr_rA    d^3S/(dr^2 dR_A), shape (3, 3, 3, n_active)
    !> @param[out] f4_rrr_rA   d^4S/(dr^3 dR_A), shape (3, 3, 3, 3, n_active)
-   pure module subroutine svdw_lsf_nuclear(d, radii, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_nuclear(d, radii, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                     f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -3280,6 +3422,8 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> dS/dR_A
@@ -3306,12 +3450,14 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]  s_1        One-body weight
    !> @param[in]  s_2        Two-body weight
    !> @param[in]  s_3        Three-body weight
+   !> @param[in]  lsf_scale  Constant multiplier of the level set; every output is
+   !>                        lsf_scale times the unscaled derivative of S
    !> @param[in]  max_deriv  Highest spatial-derivative order (0..3)
    !> @param[out] f1_rad     dS/dR_a per atom
    !> @param[out] f2_r_rad   d^2S/(dr dR_a) per atom
    !> @param[out] f3_rr_rad  d^3S/(dr^2 dR_a) per atom
    !> @param[out] f4_rrr_rad d^4S/(dr^3 dR_a) per atom
-   pure module subroutine svdw_lsf_radius(d, radii, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_radius(d, radii, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                    f1_rad, f2_r_rad, f3_rr_rad, f4_rrr_rad)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -3325,6 +3471,8 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> dS/dR_a
@@ -3349,11 +3497,13 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]  s_1           One-body weight
    !> @param[in]  s_2           Two-body weight
    !> @param[in]  s_3           Three-body weight
+   !> @param[in]  lsf_scale     Constant multiplier of the level set; every output is
+   !>                           lsf_scale times the unscaled derivative of S
    !> @param[in]  max_deriv     Highest *spatial* derivative order (0..2)
    !> @param[out] f2_rArB       d^2S/(dR_A dR_B), shape (3, n, 3, n)
    !> @param[out] f3_r_rArB     d^3S/(dr dR_A dR_B), shape (3, 3, n, 3, n)
    !> @param[out] f4_rr_rArB    d^4S/(dr^2 dR_A dR_B), shape (3, 3, 3, n, 3, n)
-   pure module subroutine svdw_lsf_pair(d, radii, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_pair(d, radii, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                  f2_rArB, f3_r_rArB, f4_rr_rArB)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -3367,6 +3517,8 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> d^2S/(dR_A dR_B)
@@ -3386,12 +3538,14 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]  s_1            One-body weight
    !> @param[in]  s_2            Two-body weight
    !> @param[in]  s_3            Three-body weight
+   !> @param[in]  lsf_scale      Constant multiplier of the level set; every output is
+   !>                            lsf_scale times the unscaled derivative of S
    !> @param[in]  max_deriv      Highest spatial-derivative order (0..3)
    !> @param[out] tangent_f0     sum_B v_B . dS/dR_B
    !> @param[out] tangent_f1_r   sum_B v_B . d/dR_B of dS/dr
    !> @param[out] tangent_f2_rr  sum_B v_B . d/dR_B of d^2S/dr^2
    !> @param[out] tangent_f3_rrr sum_B v_B . d/dR_B of d^3S/dr^3
-   pure module subroutine svdw_lsf_tangent(d, radii, v, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_tangent(d, radii, v, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                     tangent_f0, tangent_f1_r, tangent_f2_rr, &
                                     tangent_f3_rrr, vrad)
       !> Displacements r - R_A
@@ -3408,6 +3562,8 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> Contracted value derivative
@@ -3432,11 +3588,13 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]  s_1           One-body weight
    !> @param[in]  s_2           Two-body weight
    !> @param[in]  s_3           Three-body weight
+   !> @param[in]  lsf_scale     Constant multiplier of the level set; every output is
+   !>                           lsf_scale times the unscaled derivative of S
    !> @param[in]  max_deriv     Highest spatial-derivative order (0..2)
    !> @param[out] hvp_f1_rA     shape (3, n_active)
    !> @param[out] hvp_f2_r_rA   shape (3, 3, n_active)
    !> @param[out] hvp_f3_rr_rA  shape (3, 3, 3, n_active)
-   pure module subroutine svdw_lsf_hvp(d, radii, v, blend_k, s_1, s_2, s_3, max_deriv, &
+   pure module subroutine svdw_lsf_hvp(d, radii, v, blend_k, s_1, s_2, s_3, lsf_scale, max_deriv, &
                                 hvp_f1_rA, hvp_f2_r_rA, hvp_f3_rr_rA, vrad)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -3452,6 +3610,8 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> Contracted nuclear Hessian
@@ -3486,12 +3646,14 @@ module moist_cavity_drop_lsf_svdw_kernel
    !> @param[in]  s_1            One-body weight
    !> @param[in]  s_2            Two-body weight
    !> @param[in]  s_3            Three-body weight
+   !> @param[in]  lsf_scale      Constant multiplier of the level set; every output is
+   !>                            lsf_scale times the unscaled derivative of S
    !> @param[in]  max_deriv      Highest spatial-derivative order (0..2)
    !> @param[out] hvp_f1_rad     Contracted radius Hessian row
    !> @param[out] hvp_f2_r_rad   Contracted mixed third derivative
    !> @param[out] hvp_f3_rr_rad  Contracted mixed fourth derivative
    pure module subroutine svdw_lsf_radius_hvp(d, radii, v, vrad, blend_k, s_1, s_2, s_3, &
-                                       max_deriv, hvp_f1_rad, hvp_f2_r_rad, &
+                                       lsf_scale, max_deriv, hvp_f1_rad, hvp_f2_r_rad, &
                                        hvp_f3_rr_rad)
       !> Displacements r - R_A
       real(wp), intent(in) :: d(:, :)
@@ -3509,6 +3671,8 @@ module moist_cavity_drop_lsf_svdw_kernel
       real(wp), intent(in) :: s_2
       !> Three-body weight
       real(wp), intent(in) :: s_3
+      !> Constant multiplier of the level set
+      real(wp), intent(in) :: lsf_scale
       !> Highest spatial-derivative order
       integer, intent(in) :: max_deriv
       !> Contracted radius Hessian row

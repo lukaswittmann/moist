@@ -36,6 +36,11 @@ Optional settings:
 ``blend_3b`` (:math:`s_3`, real, default ``3.0``)
    Three-body smoothing.
 
+``scale`` (:math:`\alpha`, real, default ``1.0``)
+   Constant multiplier on the level set and all of its derivatives; see :ref:`drop-lsf-scale`.
+   At one a single atom has :math:`\lVert\nabla S\rVert = 1`.
+   Should not be changed.
+
 ``fade_enabled`` (logical, default ``true``)
    Fade every atom term smoothly to zero over a finite switching region, with the switching function :math:`f_\mathrm{fade}` of `Fade`_.
    The end of the switching region is the atom reach, so ``screening_threshold`` is not used by SvdW while the fade is on.
