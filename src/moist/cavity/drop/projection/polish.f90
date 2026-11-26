@@ -10,10 +10,9 @@
 !> the jet Newton left there, and re-polishes escaped saddles, constrained maxima
 !> included, with batched Newton passes
 !>
-!> Run context read only, shared by the worker threads: traces gated by
-!> verbosity 6 (`debug` raises to it), written straight to `ctx%unit` inside the
-!> context's own `moist_context_io` critical; no timers, warnings or debug
-!> messages
+!> Run context read only, shared by the worker threads: per-anchor traces through
+!> `ctx%message` at verbosity 6 (`debug` raises to it), per-iteration detail
+!> through `ctx%debug_message`; no timers or warnings
 !>
 !> Every level set evaluation goes through the LSF's `evaluate_batch`, the third
 !> derivative of the degenerate test included; a point beyond the level set
@@ -25,6 +24,8 @@ module moist_cavity_drop_projection_polish
    use moist_context, only: moist_context_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_math_packed, only: packed_full_contract3
+   use moist_utils_format, only: to_string
+   use moist_utils_mem, only: grow_array
    use moist_cavity_drop_projection_batch, only: projection_batch_type, &
                                                 point_pending, point_converged, point_accepted, point_captured, &
                                                 point_failed
@@ -65,7 +66,7 @@ module moist_cavity_drop_projection_polish
    !> Per-anchor cache of escaped saddles for symmetry-safe duplicate skipping
    !>
    !> - keyed by an anchor key (`1..nkey`): the run index within one batch, or the
-   !>   caller's anchor index, persistent across the rounds of the extended search
+   !>   run's `run_key`, persistent across the rounds of the extended search
    !> - one entry per non-isotropic saddle: its position, the unit 3D escape
    !>   direction of its first walk, whether the two signs were near-symmetric,
    !>   and per direction (first, opposite) its state: free, led by a walk not yet
@@ -130,7 +131,7 @@ contains
    !>     the previous one, so its first visit of a saddle never waits, and the
    !>     outcome depends on the column order of the batch only
    !>
-   !> @param[in]    ctx          Run context, read only; traces at verbosity 6
+   !> @param[in]    ctx          Run context, read only; traces at verbosity 6, detail on the debug stream
    !> @param[inout] batch        Points with Newton's final jets
    !> @param[inout] lsf          Thread-local level set
    !> @param[in]    cfg          Polish settings
@@ -140,18 +141,29 @@ contains
    !> @param[out]   error        LSF evaluation failure (build-fatal)
    !> @param[in]    first        First column (default 1)
    !> @param[in]    last         Last column (default `batch%n`)
-   !> @param[inout] saddle_cache Persistent per-anchor saddle cache (keyed by `batch%run_anchor`)
+   !> @param[inout] saddle_cache Persistent per-anchor saddle cache (keyed by `batch%run_key`)
    subroutine polish_batch(ctx, batch, lsf, cfg, ncfg, phi_alpha, nscratch, error, first, last, saddle_cache)
+      !> Run context, read only; traces at verbosity 6, detail on the debug stream
       type(moist_context_type), intent(in) :: ctx
+      !> Points with Newton's final jets
       type(projection_batch_type), intent(inout) :: batch
+      !> Thread-local level set
       class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
+      !> Polish settings
       type(drop_polish_parameters_type), intent(in) :: cfg
+      !> Newton settings for the re-polish
       type(drop_solve_parameters_type), intent(in) :: ncfg
+      !> Anchor objective weight
       real(wp), intent(in) :: phi_alpha
+      !> Newton scratch
       type(newton_scratch_type), intent(inout) :: nscratch
+      !> LSF evaluation failure (build-fatal)
       type(error_type), allocatable, intent(out) :: error
+      !> First column (default 1)
       integer, intent(in), optional :: first
+      !> Last column (default `batch%n`)
       integer, intent(in), optional :: last
+      !> Persistent per-anchor saddle cache (keyed by `batch%run_key`)
       type(saddle_cache_type), intent(inout), optional, target :: saddle_cache
 
       type(error_type), allocatable :: escape_error
@@ -225,7 +237,7 @@ contains
             j = sad_col(k)
             irun = batch%run_of(j)
             skey = irun
-            if (present(saddle_cache)) skey = batch%run_anchor(irun)
+            if (present(saddle_cache)) skey = batch%run_key(irun)
             sad_entry(k) = 0
             sad_sign(k) = 1
             if (allocated(avoid)) deallocate (avoid)
@@ -252,10 +264,8 @@ contains
             end if
 
             if (ctx%verbosity(6)) then
-               !$omp critical (moist_context_io)
-               write (ctx%unit, "(1x,i12,1x,a)") batch%run_anchor(irun), &
-                  "[optimality] Saddle point detected, attempting escape ..."
-               !$omp end critical (moist_context_io)
+               call ctx%message("[optimality] anchor "//to_string(batch%run_id(irun))// &
+                                ": Saddle point detected, attempting escape ...", level=6)
             end if
             if (do_cap) cap_run = irun
             call riemannian_newton_escape(ctx, cfg, phi_alpha, ncfg%max_step, lsf, batch%x(:, j), &
@@ -318,10 +328,8 @@ contains
                      batch%status(j) = point_failed
                   else if (saddle) then
                      if (ctx%verbosity(6)) then
-                        !$omp critical (moist_context_io)
-                        write (ctx%unit, "(1x,i12,1x,a)") batch%run_anchor(batch%run_of(j)), &
-                           "[optimality] Failed to escape saddle point!"
-                        !$omp end critical (moist_context_io)
+                        call ctx%message("[optimality] anchor "//to_string(batch%run_id(batch%run_of(j)))// &
+                                         ": Failed to escape saddle point!", level=6)
                      end if
                      batch%status(j) = point_failed
                   else
@@ -365,14 +373,13 @@ contains
          irun = batch%run_of(j)
          call check_constrained_optimality(ctx, cfg, phi_alpha, lsf, batch%x(:, j), batch%run_xyz(:, irun), &
                                            batch%lambda(j), class_error, is_saddle=saddle, is_kkt=kkt, &
-                                           anchor_id=batch%run_anchor(irun), jet_S=batch%S(j), &
+                                           anchor_id=batch%run_id(irun), jet_S=batch%S(j), &
                                            jet_grad=batch%gradS(:, j), jet_hess=batch%hessS(:, j), &
                                            lsf_error=error, mu_min_out=mu_min, mu_max_out=mu_max)
          if (.not. allocated(class_error)) return
          if (ctx%verbosity(6)) then
-            !$omp critical (moist_context_io)
-            write (ctx%unit, "(1x,i12,1x,a,a)") batch%run_anchor(irun), "[optimality] ", trim(class_error%message)
-            !$omp end critical (moist_context_io)
+            call ctx%message("[optimality] anchor "//to_string(batch%run_id(irun))//": "// &
+                             trim(class_error%message), level=6)
          end if
       end subroutine classify
 
@@ -404,7 +411,7 @@ contains
    !> @param[out]   is_saddle    Saddle or inflection
    !> @param[out]   is_kkt       Feasible and stationary
    !> @param[out]   is_converged Strict local minimum
-   !> @param[in]    anchor_id    Anchor index for traces
+   !> @param[in]    anchor_id    Global anchor ID for traces
    !> @param[in]    jet_S        Level set value at `r_star`, skips the evaluation
    !> @param[in]    jet_grad     Level set gradient at `r_star`
    !> @param[in]    jet_hess     Level set Hessian at `r_star`, packed (6)
@@ -480,10 +487,8 @@ contains
       norm_grad_S = norm2(grad_S)
       if (norm_grad_S < cfg%kkt_tol_grad) then
          if (ctx%verbosity(6)) then
-            !$omp critical (moist_context_io)
-            write (ctx%unit, "(1x,i12,1x,a,es12.4)") id, &
-               "[KKT check] Degenerate LSF gradient ||grad_S|| = ", norm_grad_S
-            !$omp end critical (moist_context_io)
+            call ctx%message("[KKT check] anchor "//to_string(id)//": Degenerate LSF gradient ||grad_S|| = "// &
+                             to_string(norm_grad_S, "(es12.4)"), level=6)
          end if
          ! Cannot classify, but an infeasible point is no KKT point
          if (present(is_kkt)) is_kkt = res_feas <= cfg%kkt_tol_feas
@@ -491,22 +496,19 @@ contains
       end if
 
       if (ctx%debug) then
-         ! One block, so no other thread's line lands inside it
-         !$omp critical (moist_context_io)
-         write (ctx%unit, "(1x,a)") "KKT verification:"
-         write (ctx%unit, "(3x,a,es12.4,a,es12.4,a)") &
-            "Feasibility   |S(r*)| = ", res_feas, "  (tol: ", cfg%kkt_tol_feas, ")"
-         write (ctx%unit, "(3x,a,es12.4,a,es12.4,a)") &
-            "Stationarity  ||dL||  = ", res_stat, "  (tol: ", cfg%kkt_tol_stat, ")"
-         !$omp end critical (moist_context_io)
+         ! One message, so no other thread's line lands inside it
+         call ctx%debug_message(" KKT verification, anchor "//to_string(id)//":"//new_line("a")// &
+                                "   Feasibility   |S(r*)| = "//to_string(res_feas, "(es12.4)")// &
+                                "  (tol: "//to_string(cfg%kkt_tol_feas, "(es12.4)")//")"//new_line("a")// &
+                                "   Stationarity  ||dL||  = "//to_string(res_stat, "(es12.4)")// &
+                                "  (tol: "//to_string(cfg%kkt_tol_stat, "(es12.4)")//")")
       end if
 
       if (res_feas > cfg%kkt_tol_feas .or. res_stat > cfg%kkt_tol_stat) then
          if (ctx%verbosity(6)) then
-            !$omp critical (moist_context_io)
-            write (ctx%unit, "(1x,i12,1x,a,es12.4,a,es12.4)") id, &
-               "[KKT check] Not at KKT point: |S| = ", res_feas, ", ||dL|| = ", res_stat
-            !$omp end critical (moist_context_io)
+            call ctx%message("[KKT check] anchor "//to_string(id)//": Not at KKT point: |S| = "// &
+                             to_string(res_feas, "(es12.4)")//", ||dL|| = "//to_string(res_stat, "(es12.4)"), &
+                             level=6)
          end if
          if (present(is_kkt)) is_kkt = .false.
          return
@@ -521,9 +523,8 @@ contains
       if (present(mu_max_out)) mu_max_out = mu_max
 
       if (ctx%debug) then
-         !$omp critical (moist_context_io)
-         write (ctx%unit, "(3x,a,3es14.6)") "Reduced Hessian eigenvalues: ", mu_min, mu_max
-         !$omp end critical (moist_context_io)
+         call ctx%debug_message("   Reduced Hessian eigenvalues, anchor "//to_string(id)//": "// &
+                                to_string(mu_min, "(es14.6)")//" "//to_string(mu_max, "(es14.6)"))
       end if
 
       if (mu_min < -eig_tol) then
@@ -555,10 +556,8 @@ contains
       end if
 
       if (ctx%debug) then
-         !$omp critical (moist_context_io)
-         write (ctx%unit, "(3x,a,2es16.8,a,es16.8)") "Reduced eigs = ", mu_min, mu_max, &
-            ", D3 L[d,d,d] = ", D3_ddd
-         !$omp end critical (moist_context_io)
+         call ctx%debug_message("   Reduced eigs, anchor "//to_string(id)//" = "//to_string(mu_min, "(es16.8)")// &
+                                " "//to_string(mu_max, "(es16.8)")//", D3 L[d,d,d] = "//to_string(D3_ddd, "(es16.8)"))
       end if
 
       if (abs(D3_ddd) > tol_D3) then
@@ -597,8 +596,10 @@ contains
    !> - an iterate beyond the level set reach ends the walk with `error`
    !> - with `capture_run`: stops as `captured` at a converged point, or before an
    !>   uncapped Newton step on a convex patch, that lands on a captor of the run
+   !> - `iter = 0..escape_max_iter`: a first step, then up to `escape_max_iter`
+   !>   more
    !>
-   !> @param[in]    ctx          Run context, read only
+   !> @param[in]    ctx          Run context, read only; iterations on the debug stream
    !> @param[in]    cfg          Polish settings
    !> @param[in]    phi_alpha    Anchor objective weight
    !> @param[in]    max_step     Longest Newton step (Bohr), the Newton `max_step`
@@ -859,10 +860,10 @@ contains
          lambda_out = lambda_curr
 
          if (ctx%debug) then
-            !$omp critical (moist_context_io)
-            write (ctx%unit, "(i4,1x,es12.4,1x,f12.6,1x,es12.4,1x,es10.2,1x,es12.4,1x,l1)") &
-               iter, phi_curr, norm2(r_curr - anchor), norm_g_tan, alpha, mu_min, escaping
-            !$omp end critical (moist_context_io)
+            call ctx%debug_message("   escape "//to_string(iter)//" "//to_string(phi_curr, "(es12.4)")//" "// &
+                                   to_string(norm2(r_curr - anchor), "(f12.6)")//" "// &
+                                   to_string(norm_g_tan, "(es12.4)")//" "//to_string(alpha, "(es10.2)")//" "// &
+                                   to_string(mu_min, "(es12.4)")//" "//merge("T", "F", escaping))
          end if
       end do
 
@@ -1137,46 +1138,34 @@ contains
       logical, intent(in) :: near_sym
       integer, intent(out) :: idx
 
-      integer, allocatable :: th(:), tn(:), tk(:), tl(:, :)
-      real(wp), allocatable :: tx(:, :), td(:, :)
-      logical, allocatable :: ts(:)
       integer :: cap
 
       idx = 0
       if (key < 1) return
       if (key > self%nkey) then
          if (.not. allocated(self%head)) then
-            allocate (self%head(max(64, key)), source=0)
+            call grow_array(self%head, max(64, key))
          else if (key > size(self%head)) then
-            cap = max(key, 2*size(self%head))
-            allocate (th(cap), source=0)
-            if (self%nkey > 0) th(1:self%nkey) = self%head(1:self%nkey)
-            call move_alloc(th, self%head)
-         else
-            self%head(self%nkey + 1:key) = 0
+            call grow_array(self%head, max(key, 2*size(self%head)))
          end if
+         ! Slots past `nkey` may hold lists of an earlier reset
+         self%head(self%nkey + 1:key) = 0
          self%nkey = key
       end if
 
+      cap = 0
       if (.not. allocated(self%next)) then
          cap = 64
-         allocate (self%next(cap), self%key(cap), self%lead(2, cap), self%near_sym(cap))
-         allocate (self%x(3, cap), self%dir(3, cap))
       else if (self%n + 1 > size(self%next)) then
          cap = 2*size(self%next)
-         allocate (tn(cap), tk(cap), tl(2, cap), ts(cap), tx(3, cap), td(3, cap))
-         tn(1:self%n) = self%next(1:self%n)
-         tk(1:self%n) = self%key(1:self%n)
-         tl(:, 1:self%n) = self%lead(:, 1:self%n)
-         ts(1:self%n) = self%near_sym(1:self%n)
-         tx(:, 1:self%n) = self%x(:, 1:self%n)
-         td(:, 1:self%n) = self%dir(:, 1:self%n)
-         call move_alloc(tn, self%next)
-         call move_alloc(tk, self%key)
-         call move_alloc(tl, self%lead)
-         call move_alloc(ts, self%near_sym)
-         call move_alloc(tx, self%x)
-         call move_alloc(td, self%dir)
+      end if
+      if (cap > 0) then
+         call grow_array(self%next, cap)
+         call grow_array(self%key, cap)
+         call grow_array(self%lead, 2, cap)
+         call grow_array(self%near_sym, cap)
+         call grow_array(self%x, 3, cap)
+         call grow_array(self%dir, 3, cap)
       end if
 
       self%n = self%n + 1

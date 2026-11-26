@@ -111,6 +111,7 @@ contains
                call pp%step("Seed lattice", self%ctx%timer%last())
                if (self%ctx%verbosity(4)) call seeder%report(pp)
             end if
+            self%seed_axes = seeder%frame%axes
          end if
 
          call self%ctx%timer%start(trim(pass_name(ipass)))

@@ -77,6 +77,7 @@ program tester
    use test_cavity_drop_projector, only: collect_cavity_drop_projector
    use test_cavity_drop_projection, only: collect_cavity_drop_projection
    use test_cavity_drop_properties, only: collect_cavity_drop_properties
+   use test_cavity_drop_threads, only: collect_cavity_drop_threads
    use test_model_component_pcm_amat_kernel, only: collect_model_component_pcm_amat_kernel
    use test_model_component_pcm_amat_assembly, only: collect_model_component_pcm_amat_assembly
    use test_model_component_pcm_amat_adjoint, only: collect_model_component_pcm_amat_adjoint
@@ -167,6 +168,7 @@ program tester
       & new_testsuite("cavity_drop_projector", collect_cavity_drop_projector), &
       & new_testsuite("cavity_drop_projection", collect_cavity_drop_projection), &
       & new_testsuite("cavity_drop_properties", collect_cavity_drop_properties), &
+      & new_testsuite("cavity_drop_threads", collect_cavity_drop_threads), &
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
       & new_testsuite("cavity_numsa", collect_cavity_numsa), &
       & new_testsuite("cavity_symmetry", collect_cavity_symmetry), &

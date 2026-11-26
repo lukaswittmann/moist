@@ -1,6 +1,6 @@
 module moist_utils_prettyprint
    use, intrinsic :: iso_fortran_env, only: output_unit, real64
-   use moist_utils_format, only: value_to_string, fixed_fmt, exp_fmt, int_fmt, logical_fmt, value_fmt
+   use moist_utils_format, only: to_string, value_to_string, fixed_fmt, exp_fmt, int_fmt, logical_fmt, value_fmt
    implicit none(type, external)
    private
    public :: prettyprinter, new_prettyprinter
@@ -135,8 +135,7 @@ contains
 
       if (present(unit)) pp%iu = unit
       if (present(active)) pp%active = active
-      if (.not. pp%active) return
-
+      ! Layout applies while inactive too, so a printer turned on later keeps it
       call pp%set_layout(col_value=col_value, col_value2=col_value2, indent_step=indent_step, &
          & dot_gap=dot_gap, dot_right=dot_right, dot_total=dot_total, fmt_len=fmt_len, &
          & fmt_int=fmt_int, fmt_real=fmt_real, fmt_exp=fmt_exp, fmt_logical=fmt_logical)
@@ -479,16 +478,16 @@ contains
    !> @param[in]    desc    Step name
    !> @param[in]    seconds Wall time spent in the step (s)
    subroutine step(self, desc, seconds)
+      !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
+      !> Step name
       character(*), intent(in) :: desc
+      !> Wall time spent in the step (s)
       real(real64), intent(in) :: seconds
 
-      character(len=32) :: time
-
       if (.not. self%active) return
-      ! Fixed width keeps the leading zero, which F0.d may drop
-      write (time, "(f20.2)") seconds
-      call self%kv(desc, "done ("//trim(adjustl(time))//"s)")
+      ! Fixed width keeps the leading zero, which F0.d may drop; to_string strips the blanks
+      call self%kv(desc, "done ("//to_string(seconds, "(f20.2)")//"s)")
    end subroutine step
 
 end module moist_utils_prettyprint

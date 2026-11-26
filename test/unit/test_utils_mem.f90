@@ -35,6 +35,7 @@ contains
                   new_unittest("shrink_int64_1d_reports", test_shrink_int64_1d_reports), &
                   new_unittest("grow_int_2d_contracts", test_grow_int_2d_contracts), &
                   new_unittest("shrink_int_2d_reports", test_shrink_int_2d_reports), &
+                  new_unittest("dim1_change_int_2d_reports", test_dim1_change_int_2d_reports), &
                   new_unittest("filter_int_1d_contracts", test_filter_int_1d_contracts), &
                   new_unittest("grow_logical_1d_contracts", test_grow_logical_1d_contracts), &
                   new_unittest("filter_logical_1d_contracts", test_filter_logical_1d_contracts) &
@@ -601,8 +602,7 @@ contains
 
    end subroutine test_grow_int_2d_contracts
 
-   !> The rank-2 integer specific reports a shrink and a new first extent, and
-   !> keeps the array
+   !> The rank-2 integer specific reports a shrink and keeps the array
    subroutine test_shrink_int_2d_reports(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -617,21 +617,38 @@ contains
       call check(error, index(refused%message, "grow_array_int_2d: Cannot shrink") > 0, &
                  "message identifies the specific and the refused operation")
       if (allocated(error)) return
+      call check(error, size(a, 1), 3, "array kept its first extent")
+      if (allocated(error)) return
       call check(error, size(a, 2), 5, "array kept its second extent")
       if (allocated(error)) return
+      call check(error, all(a == 7), "refusal preserves every element")
+
+   end subroutine test_shrink_int_2d_reports
+
+   !> The rank-2 integer specific reports a new first extent and keeps the array
+   subroutine test_dim1_change_int_2d_reports(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, allocatable :: a(:, :)
+      type(moist_error_type), allocatable :: refused
+
+      allocate (a(3, 5), source=7)
 
       !> Second extent grows here, so only the first-extent guard can fire
       call grow_array(a, 4, 6, error=refused)
       call check(error, allocated(refused), "first-extent change reported")
       if (allocated(error)) return
-      call check(error, index(refused%message, "first dimension") > 0, &
-                 "message names the first dimension")
+      call check(error, index(refused%message, "grow_array_int_2d: Cannot change first dimension") > 0, &
+                 "message identifies the specific and names the first dimension")
       if (allocated(error)) return
       call check(error, size(a, 1), 3, "array kept its first extent")
       if (allocated(error)) return
-      call check(error, all(a == 7), "refusals preserve every element")
+      call check(error, size(a, 2), 5, "array kept its second extent")
+      if (allocated(error)) return
+      call check(error, all(a == 7), "refusal preserves every element")
 
-   end subroutine test_shrink_int_2d_reports
+   end subroutine test_dim1_change_int_2d_reports
 
    !> Verify selection, stable order, prefix extent, empty masks, and allocation
    subroutine test_filter_int_1d_contracts(error)

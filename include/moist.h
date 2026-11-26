@@ -169,8 +169,9 @@ typedef struct moist_response_s* moist_response;
 ///   parallel evaluation loops, and fails the enclosing moist_update_cavity(),
 ///   moist_build_cavity(), moist_update_model() or moist_build_model()
 ///   with a moist_error naming the returned status
-/// - Only abort path from inside a callback; without it moist builds a
-///   cavity from whatever is in the buffers
+/// - Abort paths from inside a callback: nonzero status, or a non-finite
+///   value in a requested buffer; otherwise moist builds a cavity from
+///   whatever is in the buffers
 /// - Status value opaque to moist, echoed verbatim in the error message; may
 ///   carry host-defined error codes
 ///

@@ -4,11 +4,10 @@
 !> building blocks
 module test_cavity_drop_projection
    use, intrinsic :: iso_fortran_env, only: int64
-   use mctc_env, only: wp, moist_error_type => error_type
-   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf, ieee_is_nan
+   use mctc_env, only: wp, moist_error_type => error_type, fatal_error
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf, ieee_is_nan, ieee_is_finite
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
-   use mctc_io_convert, only: aatoau
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_radii, only: default_cpcm_radii
@@ -17,7 +16,7 @@ module test_cavity_drop_projection
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_utils_format, only: to_string
    use moist_math_sorter, only: sort_index
-   use test_helpers, only: expect_error
+   use test_helpers, only: expect_error, get_test_cross
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type, &
                                            drop_polish_parameters_type, drop_finalize_parameters_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
@@ -37,8 +36,13 @@ module test_cavity_drop_projection
    use moist_cavity_drop_branching, only: branch_weight_type
    use moist_cavity_drop_projection_seed, only: projection_seeder_type, seeder_scratch_type, seed_request_type, &
                                                 seed_build_type
+   use moist_cavity_drop_projection_seed_lattice, only: evaluate_slices
    use moist_cavity_drop_projection_parameters, only: drop_seed_parameters_type
    use moist_cavity_drop_projection_worker, only: projection_worker_type
+   use moist_cavity_drop_threads, only: drop_worker_slots_type
+   use moist_cavity_grid_model_symmetry, only: grid_model_symmetry_type, new_grid_model_symmetry, &
+                                               moist_cavity_grid_model_symmetry_parameters_type
+   use moist_math_linalg_geometry, only: identity3
    implicit none(type, external)
    private
 
@@ -67,6 +71,25 @@ module test_cavity_drop_projection
       !> Evaluate as the SvdW level set, then replace the value at `poisoned`
       procedure :: evaluate_batch => nan_value_evaluate_batch
    end type nan_value_svdw_type
+
+   !> Derivative factor of [[flat_svdw_type]]: `|g|^2` subnormal, so `S/|g|^2` overflows
+   real(wp), parameter :: flat_scale = 1.0e-160_wp
+
+   !> SvdW values with the derivatives times [[flat_scale]]
+   !>
+   !> - the same crossings, a gradient whose square is subnormal
+   type, extends(moist_cavity_drop_lsf_svdw_type) :: flat_svdw_type
+   contains
+      !> Evaluate as the SvdW level set, then scale the derivatives
+      procedure :: evaluate_batch => flat_evaluate_batch
+   end type flat_svdw_type
+
+   !> SvdW level set whose evaluations with a gradient fail
+   type, extends(moist_cavity_drop_lsf_svdw_type) :: gradient_failing_svdw_type
+   contains
+      !> Fail at order 1 and above, else evaluate as the SvdW level set
+      procedure :: evaluate_batch => gradient_failing_evaluate_batch
+   end type gradient_failing_svdw_type
 
 contains
 
@@ -127,6 +150,22 @@ contains
          & new_unittest("bad_lattice_cone_scale", test_bad_lattice_cone_scale, should_fail=.true.), &
          & new_unittest("bad_lattice_cone_scale_infinite", test_bad_lattice_cone_scale_infinite, should_fail=.true.), &
          & new_unittest("bad_lattice_anchors_without_atoms", test_bad_lattice_anchors_without_atoms, should_fail=.true.), &
+         & new_unittest("bad_lattice_centers_nonfinite", test_bad_lattice_centers_nonfinite, should_fail=.true.), &
+         & new_unittest("bad_lattice_reach_infinite", test_bad_lattice_reach_infinite, should_fail=.true.), &
+         & new_unittest("bad_lattice_anchors_nonfinite", test_bad_lattice_anchors_nonfinite, should_fail=.true.), &
+         & new_unittest("bad_lattice_radius_max_size", test_bad_lattice_radius_max_size, should_fail=.true.), &
+         & new_unittest("bad_lattice_radius_max_nonfinite", test_bad_lattice_radius_max_nonfinite, &
+                        should_fail=.true.), &
+         & new_unittest("bad_lattice_depth", test_bad_lattice_depth, should_fail=.true.), &
+         & new_unittest("bad_lattice_request_radius", test_bad_lattice_request_radius, should_fail=.true.), &
+         & new_unittest("bad_lattice_request_radius_infinite", test_bad_lattice_request_radius_infinite, &
+                        should_fail=.true.), &
+         & new_unittest("bad_lattice_slice_order", test_bad_lattice_slice_order, should_fail=.true.), &
+         & new_unittest("bad_lattice_slice_gradient", test_bad_lattice_slice_gradient, should_fail=.true.), &
+         & new_unittest("bad_lattice_slice_hessian", test_bad_lattice_slice_hessian, should_fail=.true.), &
+         & new_unittest("lattice_failed_build_clears", test_lattice_failed_build_clears), &
+         & new_unittest("lattice_flat_gradient_finite_samples", test_lattice_flat_gradient), &
+         & new_unittest("lattice_follows_grid_model_axes", test_lattice_grid_model_axes), &
          & new_unittest("lattice_back_facing_needs_owner", test_lattice_back_facing_needs_owner), &
          & new_unittest("bad_batch_target_size", test_bad_batch_target_size, should_fail=.true.), &
          & new_unittest("bad_newton_unreached_anchor", test_bad_newton_unreached_anchor, should_fail=.true.), &
@@ -580,8 +619,6 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Point and matching indices
       integer :: i, j, matches
-      !> Matching diagnostic
-      character(len=256) :: message
       !> Smallest displacement to a finder point
       real(wp) :: closest
 
@@ -592,12 +629,12 @@ contains
             closest = min(closest, norm2(reference(:, i) - actual(:, j)))
             if (norm2(reference(:, i) - actual(:, j)) < 1.0e-6_wp) matches = matches + 1
          end do
-         write (message, "(a,i0,a,i0,a,es12.4,a,3es20.10)") &
-            "Brute-force branch ", i, ": matches=", matches, ", nearest=", closest, &
-            ", point=", reference(:, i)
          ! Raw suppressed candidates can coincide at this matching tolerance
          ! Admissible duplicates are checked separately by the geometry test
-         call check(error, closest < 1.0e-6_wp, message=trim(message))
+         call check(error, closest < 1.0e-6_wp, message="Brute-force branch "//to_string(i)// &
+                    ": matches="//to_string(matches)//", nearest="//to_string(closest, "(es12.4)")// &
+                    ", point="//to_string(reference(1, i), "(es20.10)")//" "// &
+                    to_string(reference(2, i), "(es20.10)")//" "//to_string(reference(3, i), "(es20.10)"))
          if (allocated(error)) return
       end do
    end subroutine check_branch_sets
@@ -667,7 +704,7 @@ contains
       ncfg%max_iter = param%solve%max_iter
       call batch%init(size(leaves, 2) + 1, error)
       if (allocated(error)) return
-      call batch%begin_run(1, anchor, 1)
+      call batch%begin_run(1, 1, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol)
       do i = 1, size(leaves, 2)
          call batch%append(leaves(:, i), 0.0_wp, icol)
@@ -803,12 +840,7 @@ contains
       !> Development fixture geometry
       type(structure_type) :: mol
 
-      call new(mol, [6, 6, 6, 6, 6], reshape([ &
-                                             0.00_wp, 4.21_wp, 0.00_wp, &
-                                             0.00_wp, 0.00_wp, 4.22_wp, &
-                                             0.00_wp, -4.18_wp, 0.00_wp, &
-                                             0.00_wp, 0.00_wp, -4.15_wp, &
-                                             0.02_wp, 0.10_wp, -0.20_wp], [3, 5])*aatoau)
+      call get_test_cross(mol)
 
       call check_cluster_branches(error, "branching_xyz_cross (5C)", &
                                   mol, 110, 1.0_wp)
@@ -933,8 +965,6 @@ contains
       integer, allocatable :: first(:), last(:)
       !> Point indices, matching count, anchor slot, relevant comparison rows
       integer :: i, j, aid, matches, nrelevant
-      !> Branch comparison message
-      character(len=256) :: message
 
       call new_context(ctx, verbosity=0, nthreads=1)
       allocate (cavity)
@@ -971,9 +1001,8 @@ contains
                if (norm2(comparison%xyz(:, i) - fine%xyz(:, j)) <= 1.0e-6_wp) matches = matches + 1
             end do
          end if
-         write (message, "(a,a,i0,a,i0)") title, ": anchor ", cavity%anchor%id(aid), &
-            ", matching level-4 branches ", matches
-         call check(error, matches, 1, message=trim(message))
+         call check(error, matches, 1, message=title//": anchor "//to_string(cavity%anchor%id(aid))// &
+                    ", matching level-4 branches "//to_string(matches))
          if (allocated(error)) return
       end do
       call check(error, nrelevant > 0, message="Comparison set contains no admissible minimum")
@@ -1282,7 +1311,7 @@ contains
          end if
          call check(error, ibatch, expected_batch(ia), "anchor lands in the expected flush")
          if (allocated(error)) return
-         call batch%begin_run(ia, [real(ia, wp), 0.0_wp, 0.0_wp], 1)
+         call batch%begin_run(ia, ia, [real(ia, wp), 0.0_wp, 0.0_wp], 1)
          do k = 1, sizes(ia)
             call batch%append([real(ia, wp), real(k, wp), 0.0_wp], 0.0_wp, icol)
          end do
@@ -1307,7 +1336,7 @@ contains
                  "clear keeps the storage")
       if (allocated(error)) return
 
-      call batch%begin_run(7, [0.0_wp, 0.0_wp, 0.0_wp], 2)
+      call batch%begin_run(7, 7, [0.0_wp, 0.0_wp, 0.0_wp], 2)
       call batch%append([0.0_wp, 0.0_wp, 0.0_wp], 0.0_wp, icol)
       irun = batch%run_of(icol)
       call batch%set_anchor_jet(irun, 0.5_wp, [1.0_wp, 2.0_wp, 3.0_wp])
@@ -1372,7 +1401,7 @@ contains
 
       call batch%init(8, failed)
       do k = 1, 4
-         call batch%begin_run(k, anchors(:, k), 1)
+         call batch%begin_run(k, k, anchors(:, k), 1)
          call batch%append(anchors(:, k), 0.0_wp, icol)
       end do
       call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed, steps=nsteps)
@@ -1440,7 +1469,7 @@ contains
       if (allocated(error)) return
 
       call batch%init(8, failed)
-      call batch%begin_run(1, anchor, 1)
+      call batch%begin_run(1, 1, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol_anchor)
       call batch%append(far(:, 1), 0.0_wp, icol_far)
       call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed)
@@ -1495,7 +1524,7 @@ contains
       if (allocated(error)) return
 
       call batch%init(4, failed)
-      call batch%begin_run(1, anchor(:, 1), 1)
+      call batch%begin_run(1, 1, anchor(:, 1), 1)
       call batch%append(anchor(:, 1), 0.0_wp, icol)
       call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
@@ -1550,7 +1579,7 @@ contains
       lsf%probe = seed
       do k = 1, 2
          call batch%clear()
-         call batch%begin_run(1, anchor, 1)
+         call batch%begin_run(1, 1, anchor, 1)
          call batch%append(seed, lambdas(k), icol)
          lsf%n_probe_hess = 0
          call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed, steps=nsteps)
@@ -1620,7 +1649,7 @@ contains
       call batch%init(4, failed)
       do k = 1, 2
          call batch%clear()
-         call batch%begin_run(1, anchor, 1)
+         call batch%begin_run(1, 1, anchor, 1)
          call batch%append(start(:, 1), lambdas(k), icol)
          call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed, steps=nsteps)
          if (allocated(failed)) then
@@ -1670,7 +1699,7 @@ contains
       nsteps_alone = -1
       do k = 1, 2
          call batch%clear()
-         call batch%begin_run(1, anchor, 1)
+         call batch%begin_run(1, 1, anchor, 1)
          call batch%append(anchor, 0.0_wp, icol)
          if (k == 2) then
             call batch%append(seed, 0.0_wp, icol)
@@ -1718,7 +1747,7 @@ contains
       call new_context(ctx, verbosity=0, nthreads=1)
 
       call batch%init(4, failed)
-      call batch%begin_run(1, anchor, 1)
+      call batch%begin_run(1, 1, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol)
       call batch%append([-rs, 0.0_wp, 0.0_wp], 0.0_wp, icol)
       call newton_solve_batch(batch, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
@@ -1773,7 +1802,7 @@ contains
       call new_context(ctx, verbosity=0, nthreads=1)
 
       call batch%init(4, failed)
-      call batch%begin_run(1, anchor, 1)
+      call batch%begin_run(1, 1, anchor, 1)
       call batch%append([rs, 0.0_wp, 0.0_wp], 0.0_wp, icol)
       call newton_solve_batch(batch, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
@@ -1853,7 +1882,7 @@ contains
       anchor = saddle(:, 1) - (lambda/w)*g(:, 1)
 
       call batch%init(4, failed)
-      call batch%begin_run(1, anchor, 1)
+      call batch%begin_run(1, 1, anchor, 1)
       do j = 1, 4
          call batch%append(saddle(:, 1), lambda, icol)
       end do
@@ -2022,7 +2051,7 @@ contains
 
       ! Accepted point on the +x side
       call local%init(4, failed)
-      call local%begin_run(1, anchor, 1)
+      call local%begin_run(1, 1, anchor, 1)
       call local%append([0.6_wp, 2.6_wp, 0.0_wp], 0.0_wp, icol)
       call newton_solve_batch(local, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
       if (.not. allocated(failed)) call polish_batch(ctx, local, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
@@ -2036,7 +2065,7 @@ contains
       call batch%init(32, failed)
       do run = 1, 2
          call batch%clear()
-         call batch%begin_run(1, anchor, 1)
+         call batch%begin_run(1, 1, anchor, 1)
          call batch%append_copy(local, 1, icol)
          do k = -10, 10
             call batch%append([0.1_wp*k, 2.6_wp, 0.0_wp], 0.0_wp, icol)
@@ -2153,7 +2182,7 @@ contains
       call new_context(ctx, verbosity=0, nthreads=1)
 
       call local%init(4, failed)
-      call local%begin_run(1, anchor, 1)
+      call local%begin_run(1, 1, anchor, 1)
       call local%append(anchor, 0.0_wp, icol)
       call newton_solve_batch(local, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
       if (.not. allocated(failed)) call polish_batch(ctx, local, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
@@ -2184,7 +2213,7 @@ contains
       call batch%init(4, failed)
       do k = 1, 3
          call batch%clear()
-         call batch%begin_run(1, anchor, 1)
+         call batch%begin_run(1, 1, anchor, 1)
          call batch%append_copy(local, 1, icol)
          call batch%append(start(:, 1), lambdas(k), icol)
          call newton_solve_batch(batch, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
@@ -2315,6 +2344,93 @@ contains
       end do
    end subroutine nan_value_evaluate_batch
 
+   !> Evaluate as the SvdW level set, then scale the derivatives by [[flat_scale]]
+   !>
+   !> @param[inout] self              Flat level set
+   !> @param[in]    points            Evaluation points (3, n)
+   !> @param[in]    order             Highest spatial derivative to write
+   !> @param[out]   lsf0              Values (n)
+   !> @param[out]   lsf1_r            Gradients (3, n)
+   !> @param[out]   lsf2_rr_packed    Packed Hessians (6, n)
+   !> @param[out]   lsf3_rrr          Packed third derivatives (10, n)
+   !> @param[out]   lsf4_rrrr         Packed fourth derivatives (15, n)
+   !> @param[in]    candidate_indices Shared atom list
+   !> @param[out]   error             Evaluation failure
+   subroutine flat_evaluate_batch(self, points, order, lsf0, lsf1_r, lsf2_rr_packed, &
+                                  lsf3_rrr, lsf4_rrrr, candidate_indices, error)
+      !> Flat level set
+      class(flat_svdw_type), intent(inout) :: self
+      !> Evaluation points (3, n)
+      real(wp), intent(in), contiguous :: points(:, :)
+      !> Highest spatial derivative to write
+      integer, intent(in) :: order
+      !> Values (n)
+      real(wp), intent(out), contiguous :: lsf0(:)
+      !> Gradients (3, n)
+      real(wp), intent(out), optional, contiguous :: lsf1_r(:, :)
+      !> Packed Hessians (6, n)
+      real(wp), intent(out), optional, contiguous :: lsf2_rr_packed(:, :)
+      !> Packed third derivatives (10, n)
+      real(wp), intent(out), optional, contiguous :: lsf3_rrr(:, :)
+      !> Packed fourth derivatives (15, n)
+      real(wp), intent(out), optional, contiguous :: lsf4_rrrr(:, :)
+      !> Shared atom list
+      integer, intent(in), optional :: candidate_indices(:)
+      !> Evaluation failure
+      type(moist_error_type), allocatable, intent(out) :: error
+
+      call self%moist_cavity_drop_lsf_svdw_type%evaluate_batch(points, order, lsf0, lsf1_r, &
+                                                               lsf2_rr_packed, lsf3_rrr, lsf4_rrrr, &
+                                                               candidate_indices, error)
+      if (allocated(error)) return
+      if (order >= 1 .and. present(lsf1_r)) lsf1_r = flat_scale*lsf1_r
+      if (order >= 2 .and. present(lsf2_rr_packed)) lsf2_rr_packed = flat_scale*lsf2_rr_packed
+   end subroutine flat_evaluate_batch
+
+   !> Fail at order 1 and above, else evaluate as the SvdW level set
+   !>
+   !> @param[inout] self              Level set failing with a gradient
+   !> @param[in]    points            Evaluation points (3, n)
+   !> @param[in]    order             Highest spatial derivative to write
+   !> @param[out]   lsf0              Values (n)
+   !> @param[out]   lsf1_r            Gradients (3, n)
+   !> @param[out]   lsf2_rr_packed    Packed Hessians (6, n)
+   !> @param[out]   lsf3_rrr          Packed third derivatives (10, n)
+   !> @param[out]   lsf4_rrrr         Packed fourth derivatives (15, n)
+   !> @param[in]    candidate_indices Shared atom list
+   !> @param[out]   error             Failure at order 1 and above
+   subroutine gradient_failing_evaluate_batch(self, points, order, lsf0, lsf1_r, lsf2_rr_packed, &
+                                              lsf3_rrr, lsf4_rrrr, candidate_indices, error)
+      !> Level set failing with a gradient
+      class(gradient_failing_svdw_type), intent(inout) :: self
+      !> Evaluation points (3, n)
+      real(wp), intent(in), contiguous :: points(:, :)
+      !> Highest spatial derivative to write
+      integer, intent(in) :: order
+      !> Values (n)
+      real(wp), intent(out), contiguous :: lsf0(:)
+      !> Gradients (3, n)
+      real(wp), intent(out), optional, contiguous :: lsf1_r(:, :)
+      !> Packed Hessians (6, n)
+      real(wp), intent(out), optional, contiguous :: lsf2_rr_packed(:, :)
+      !> Packed third derivatives (10, n)
+      real(wp), intent(out), optional, contiguous :: lsf3_rrr(:, :)
+      !> Packed fourth derivatives (15, n)
+      real(wp), intent(out), optional, contiguous :: lsf4_rrrr(:, :)
+      !> Shared atom list
+      integer, intent(in), optional :: candidate_indices(:)
+      !> Failure at order 1 and above
+      type(moist_error_type), allocatable, intent(out) :: error
+
+      if (order >= 1) then
+         call fatal_error(error, "test level set: no gradient")
+         return
+      end if
+      call self%moist_cavity_drop_lsf_svdw_type%evaluate_batch(points, order, lsf0, lsf1_r, &
+                                                               lsf2_rr_packed, lsf3_rrr, lsf4_rrrr, &
+                                                               candidate_indices, error)
+   end subroutine gradient_failing_evaluate_batch
+
    !> The canonical branch order is lexicographic with a tie tolerance
    !>
    !> @param[out] error Wrong order
@@ -2400,13 +2516,11 @@ contains
          integer, intent(in) :: v(:)
          !> Bracketed list
          character(len=:), allocatable, intent(out) :: s
-         character(len=12) :: buf
          integer :: i
 
          s = "["
          do i = 1, size(v)
-            write (buf, "(i0)") v(i)
-            s = s//trim(buf)
+            s = s//to_string(v(i))
             if (i < size(v)) s = s//", "
          end do
          s = s//"]"
@@ -2456,7 +2570,7 @@ contains
 
       ! The anchor and two nearby starts all reach the same point
       call batch%init(4, failed)
-      call batch%begin_run(anchor%index, anchor%xyz, 1)
+      call batch%begin_run(anchor%index, anchor%index, anchor%xyz, 1)
       call batch%append(anchor%xyz, 0.0_wp, icol)
       call batch%append(anchor%xyz + [1.0e-3_wp, 0.0_wp, 0.0_wp], 0.0_wp, icol)
       call batch%append(point, 0.0_wp, icol)
@@ -2557,7 +2671,7 @@ contains
 
       ! One start near each atom's near pole
       call batch%init(4, failed)
-      call batch%begin_run(anchor%index, anchor%xyz, 1)
+      call batch%begin_run(anchor%index, anchor%index, anchor%xyz, 1)
       call batch%append([-(h - rs), 0.0_wp, 0.0_wp], 0.0_wp, icol)
       call batch%append([h - rs, 0.0_wp, 0.0_wp], 0.0_wp, icol)
       call newton_solve_batch(batch, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
@@ -2755,7 +2869,12 @@ contains
       end if
       anchor = [80.0_wp, 0.0_wp, 0.0_wp]
       call batch%init(8, failed)
-      call batch%begin_run(7, anchor, 1)
+      if (allocated(failed)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         failed%stat = 0
+         return
+      end if
+      call batch%begin_run(7, 7, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol)
       call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed)
       call expect_error(error, failed, &
@@ -3044,12 +3163,7 @@ contains
       logical, allocatable :: lost(:)
       integer :: i, n, ia, ib, matches
 
-      call new(mol, [6, 6, 6, 6, 6], reshape([ &
-                                             0.00_wp, 4.21_wp, 0.00_wp, &
-                                             0.00_wp, 0.00_wp, 4.22_wp, &
-                                             0.00_wp, -4.18_wp, 0.00_wp, &
-                                             0.00_wp, 0.00_wp, -4.15_wp, &
-                                             0.02_wp, 0.10_wp, -0.20_wp], [3, 5])*aatoau)
+      call get_test_cross(mol)
       call new_context(ctx, verbosity=0, nthreads=1)
       allocate (cavity)
       call build_cluster_anchors(cavity, ctx, mol, 302, 1.0_wp, lsf, native_error)
@@ -3206,12 +3320,7 @@ contains
       type(moist_error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
 
-      call new(mol, [6, 6, 6, 6, 6], reshape([ &
-                                             0.00_wp, 4.21_wp, 0.00_wp, &
-                                             0.00_wp, 0.00_wp, 4.22_wp, &
-                                             0.00_wp, -4.18_wp, 0.00_wp, &
-                                             0.00_wp, 0.00_wp, -4.15_wp, &
-                                             0.02_wp, 0.10_wp, -0.20_wp], [3, 5])*aatoau)
+      call get_test_cross(mol)
       call build_cluster_anchors(cavity, ctx, mol, 302, 5.5_wp, lsf, error)
    end subroutine soft_cross_cluster
 
@@ -3242,7 +3351,6 @@ contains
       integer, allocatable :: nrows2(:), nrows3(:), first(:), last(:)
       integer :: aid
       logical :: same
-      character(len=64) :: message
       !> Level 2's distance below which a fully open local point is finalized (Bohr)
       real(wp), parameter :: close_pdist = 0.5_wp
 
@@ -3292,8 +3400,7 @@ contains
                same = same .and. rows_covered(cavity, w3%rows, w2%rows, aid)
             end if
          end if
-         write (message, "(a,i0)") "Level 2 and level 3 rows differ, anchor ", cavity%anchor%id(aid)
-         call check(error, same, message=trim(message))
+         call check(error, same, message="Level 2 and level 3 rows differ, anchor "//to_string(cavity%anchor%id(aid)))
          if (allocated(error)) return
       end do
       deallocate (cavity)
@@ -3328,7 +3435,6 @@ contains
       type(moist_error_type), allocatable :: native_error
       integer, allocatable :: nrows(:)
       integer :: aid
-      character(len=64) :: message
 
       call new_context(ctx, verbosity=0, nthreads=1)
       allocate (cavity)
@@ -3392,8 +3498,8 @@ contains
       call check(error, w2%n_seeds < w_cone%n_seeds, message="The narrower tangent cone cut no seed")
       if (allocated(error)) return
       do aid = 1, cavity%anchor%ngrid
-         write (message, "(a,i0)") "The level-2 filters lost a relevant row, anchor ", cavity%anchor%id(aid)
-         call check(error, rows_covered(cavity, w_cone_only%rows, w2%rows, aid), message=trim(message))
+         call check(error, rows_covered(cavity, w_cone_only%rows, w2%rows, aid), &
+                    message="The level-2 filters lost a relevant row, anchor "//to_string(cavity%anchor%id(aid)))
          if (allocated(error)) return
       end do
       deallocate (cavity)
@@ -3708,6 +3814,43 @@ contains
       geometry%reach = 5.67_wp
    end subroutine single_atom_input
 
+   !> Single-atom level set, a seeder with the default settings and its build input
+   !>
+   !> - a fixture failure is discarded with stat 0, so the test-drive finalizer
+   !>   does not escalate; a `should_fail` test then returns clean and fails
+   !>
+   !> @param[out]   lsf      Single-atom SvdW level set ([[sphere_lsf]])
+   !> @param[inout] seeder   Seeder, initialized
+   !> @param[out]   geometry One-atom build input ([[single_atom_input]])
+   !> @param[out]   ok       Whether the fixture is set up
+   subroutine single_atom_seeder(lsf, seeder, geometry, ok)
+      !> Single-atom level set
+      type(moist_cavity_drop_lsf_svdw_type), intent(out) :: lsf
+      !> Seeder
+      type(projection_seeder_type), intent(inout) :: seeder
+      !> Build input
+      type(seed_build_type), intent(out) :: geometry
+      !> Whether the fixture is set up
+      logical, intent(out) :: ok
+      !> Surface radius, unused
+      real(wp) :: rs
+      !> Fixture failure, discarded
+      type(error_type), allocatable :: setup
+      !> Refused settings
+      type(moist_error_type), allocatable :: failed
+
+      ok = .false.
+      call sphere_lsf(lsf, rs, setup)
+      if (allocated(setup)) then
+         setup%stat = 0
+         return
+      end if
+      call init_seeder(seeder, failed)
+      if (allocated(failed)) return
+      call single_atom_input(geometry)
+      ok = .true.
+   end subroutine single_atom_seeder
+
    !> Initialize a lattice seeder from the default seed settings and the given overrides
    !>
    !> @param[inout] seeder             Seeder
@@ -3791,21 +3934,14 @@ contains
       type(projection_seeder_type) :: seeder
       type(seeder_scratch_type) :: scratch
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
       type(seed_request_type) :: request
       type(moist_error_type), allocatable :: failed
-      real(wp) :: rs
-      !> Fixture failure, discarded: a clean return fails the inverted test
-      type(error_type), allocatable :: setup
+      logical :: ok
 
-      call sphere_lsf(lsf, rs, setup)
-      if (allocated(setup)) then
-         ! Discarded with stat 0, so the test-drive finalizer does not escalate
-         setup%stat = 0
-         return
-      end if
-      call init_seeder(seeder, failed)
-      if (allocated(failed)) return
-      request%anchor = [rs, 0.0_wp, 0.0_wp]
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      request%anchor = geometry%anchors(:, 1)
       request%pdist_start = 1.0_wp
       call seeder%seed(scratch, lsf, request, failed)
       call expect_error(error, failed, "Lattice seeder: seed before build")
@@ -3818,19 +3954,10 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(seed_build_type) :: geometry
       type(moist_error_type), allocatable :: failed
-      real(wp) :: rs
-      !> Fixture failure, discarded: a clean return fails the inverted test
-      type(error_type), allocatable :: setup
+      logical :: ok
 
-      call sphere_lsf(lsf, rs, setup)
-      if (allocated(setup)) then
-         ! Discarded with stat 0, so the test-drive finalizer does not escalate
-         setup%stat = 0
-         return
-      end if
-      call init_seeder(seeder, failed)
-      if (allocated(failed)) return
-      call single_atom_input(geometry)
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
       geometry%radii = [3.0_wp, 3.0_wp]
       call seeder%build(lsf, geometry, failed)
       call expect_error(error, failed, "Lattice seeder: one radius per atom center required")
@@ -3843,19 +3970,10 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(seed_build_type) :: geometry
       type(moist_error_type), allocatable :: failed
-      real(wp) :: rs
-      !> Fixture failure, discarded: a clean return fails the inverted test
-      type(error_type), allocatable :: setup
+      logical :: ok
 
-      call sphere_lsf(lsf, rs, setup)
-      if (allocated(setup)) then
-         ! Discarded with stat 0, so the test-drive finalizer does not escalate
-         setup%stat = 0
-         return
-      end if
-      call init_seeder(seeder, failed)
-      if (allocated(failed)) return
-      call single_atom_input(geometry)
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
       geometry%reach = 0.0_wp
       call seeder%build(lsf, geometry, failed)
       call expect_error(error, failed, "Lattice seeder: reach must be positive")
@@ -3868,19 +3986,10 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(seed_build_type) :: geometry
       type(moist_error_type), allocatable :: failed
-      real(wp) :: rs
-      !> Fixture failure, discarded: a clean return fails the inverted test
-      type(error_type), allocatable :: setup
+      logical :: ok
 
-      call sphere_lsf(lsf, rs, setup)
-      if (allocated(setup)) then
-         ! Discarded with stat 0, so the test-drive finalizer does not escalate
-         setup%stat = 0
-         return
-      end if
-      call init_seeder(seeder, failed)
-      if (allocated(failed)) return
-      call single_atom_input(geometry)
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
       ! A reflection: orthonormal, determinant -1
       geometry%axes(:, 3) = -geometry%axes(:, 3)
       call seeder%build(lsf, geometry, failed)
@@ -3894,18 +4003,10 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(seed_build_type) :: geometry
       type(moist_error_type), allocatable :: failed
-      real(wp) :: rs
-      !> Fixture failure, discarded: a clean return fails the inverted test
-      type(error_type), allocatable :: setup
+      logical :: ok
 
-      call sphere_lsf(lsf, rs, setup)
-      if (allocated(setup)) then
-         ! Discarded with stat 0, so the test-drive finalizer does not escalate
-         setup%stat = 0
-         return
-      end if
-      call init_seeder(seeder, failed)
-      if (allocated(failed)) return
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
       geometry%centers = reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.0e8_wp, 0.0_wp, 0.0_wp], [3, 2])
       geometry%radii = [3.0_wp, 3.0_wp]
       geometry%anchors = reshape([3.0_wp, 0.0_wp, 0.0_wp], [3, 1])
@@ -3952,19 +4053,10 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(seed_build_type) :: geometry
       type(moist_error_type), allocatable :: failed
-      real(wp) :: rs
-      !> Fixture failure, discarded: a clean return fails the inverted test
-      type(error_type), allocatable :: setup
+      logical :: ok
 
-      call sphere_lsf(lsf, rs, setup)
-      if (allocated(setup)) then
-         ! Discarded with stat 0, so the test-drive finalizer does not escalate
-         setup%stat = 0
-         return
-      end if
-      call init_seeder(seeder, failed)
-      if (allocated(failed)) return
-      call single_atom_input(geometry)
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
       deallocate (geometry%centers, geometry%radii)
       allocate (geometry%centers(3, 0), geometry%radii(0))
       call seeder%build(lsf, geometry, failed)
@@ -4042,9 +4134,368 @@ contains
 
    end subroutine test_lattice_back_facing_needs_owner
 
-   !* ================================================================================= *!
-   !*                              Spherical chart seeder                               *!
-   !* ================================================================================= *!
+   !> Non-finite atom centers are refused
+   subroutine test_bad_lattice_centers_nonfinite(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      logical :: ok
 
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      geometry%centers(2, 1) = ieee_value(1.0_wp, ieee_quiet_nan)
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Lattice seeder: atom centers must be finite")
+   end subroutine test_bad_lattice_centers_nonfinite
+
+   !> An infinite reach is refused
+   subroutine test_bad_lattice_reach_infinite(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      logical :: ok
+
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      geometry%reach = ieee_value(1.0_wp, ieee_positive_inf)
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Lattice seeder: reach must be finite")
+   end subroutine test_bad_lattice_reach_infinite
+
+   !> Non-finite anchors are refused
+   subroutine test_bad_lattice_anchors_nonfinite(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      logical :: ok
+
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      geometry%anchors(3, 1) = ieee_value(1.0_wp, ieee_positive_inf)
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Lattice seeder: anchors must be finite")
+   end subroutine test_bad_lattice_anchors_nonfinite
+
+   !> Largest search radii that do not match the anchors are refused
+   subroutine test_bad_lattice_radius_max_size(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      logical :: ok
+
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      geometry%radius_max = [2.0_wp, 2.0_wp]
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Lattice seeder: one largest search radius per anchor required")
+   end subroutine test_bad_lattice_radius_max_size
+
+   !> Non-finite largest search radii are refused
+   subroutine test_bad_lattice_radius_max_nonfinite(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      logical :: ok
+
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      geometry%radius_max = [ieee_value(1.0_wp, ieee_positive_inf)]
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Lattice seeder: largest search radii must be finite")
+   end subroutine test_bad_lattice_radius_max_nonfinite
+
+   !> A refinement too deep for the lattice keys is refused at the build
+   subroutine test_bad_lattice_depth(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      logical :: ok
+
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      ! Valid as a setting: the depth depends on the lattice the build places
+      call init_seeder(seeder, failed, refine_levels=100)
+      if (allocated(failed)) return
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Lattice seeder: the region does not fit the lattice keys; "// &
+                        "raise the sample size or split the geometry")
+   end subroutine test_bad_lattice_depth
+
+   !> A request without a positive radius is refused on a lattice with samples
+   subroutine test_bad_lattice_request_radius(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(seeder_scratch_type) :: scratch
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(seed_request_type) :: request
+      type(moist_error_type), allocatable :: failed
+      logical :: ok
+
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      call seeder%build(lsf, geometry, failed)
+      if (allocated(failed)) return
+      if (seeder%nsample == 0) return
+      request%anchor = geometry%anchors(:, 1)
+      request%pdist_start = 0.0_wp
+      call seeder%seed(scratch, lsf, request, failed)
+      call expect_error(error, failed, "Lattice seeder: request radius must be positive")
+   end subroutine test_bad_lattice_request_radius
+
+   !> A request with an infinite radius is refused on a lattice with samples
+   subroutine test_bad_lattice_request_radius_infinite(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(seeder_scratch_type) :: scratch
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(seed_request_type) :: request
+      type(moist_error_type), allocatable :: failed
+      logical :: ok
+
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      call seeder%build(lsf, geometry, failed)
+      if (allocated(failed)) return
+      if (seeder%nsample == 0) return
+      request%anchor = geometry%anchors(:, 1)
+      request%pdist_start = ieee_value(1.0_wp, ieee_positive_inf)
+      call seeder%seed(scratch, lsf, request, failed)
+      call expect_error(error, failed, "Lattice seeder: request radius must be finite")
+   end subroutine test_bad_lattice_request_radius_infinite
+
+   !> A build's level set call beyond order 2 is refused
+   subroutine test_bad_lattice_slice_order(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type), target :: lsf
+      type(seed_build_type) :: geometry
+      type(drop_worker_slots_type) :: slots
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: value(1), grad(3, 1), hess(6, 1)
+      logical :: reached(1), ok
+
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      call slots%init(1)
+      call evaluate_slices(slots, lsf, geometry%anchors, 3, 8, value, reached, failed, grad=grad, hess=hess)
+      call expect_error(error, failed, "Lattice seeder: level set order 3 outside 0..2")
+   end subroutine test_bad_lattice_slice_order
+
+   !> A build's level set call at order 1 without gradients is refused
+   subroutine test_bad_lattice_slice_gradient(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type), target :: lsf
+      type(seed_build_type) :: geometry
+      type(drop_worker_slots_type) :: slots
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: value(1)
+      logical :: reached(1), ok
+
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      call slots%init(1)
+      call evaluate_slices(slots, lsf, geometry%anchors, 1, 8, value, reached, failed)
+      call expect_error(error, failed, "Lattice seeder: level set order 1 without gradients")
+   end subroutine test_bad_lattice_slice_gradient
+
+   !> A build's level set call at order 2 without Hessians is refused
+   subroutine test_bad_lattice_slice_hessian(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type), target :: lsf
+      type(seed_build_type) :: geometry
+      type(drop_worker_slots_type) :: slots
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: value(1), grad(3, 1)
+      logical :: reached(1), ok
+
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) return
+      call slots%init(1)
+      call evaluate_slices(slots, lsf, geometry%anchors, 2, 8, value, reached, failed, grad=grad)
+      call expect_error(error, failed, "Lattice seeder: level set order 2 without Hessians")
+   end subroutine test_bad_lattice_slice_hessian
+
+   !> A build that fails leaves the seeder as after `init`
+   !>
+   !> - the level set fails at order 1, in the retraction, after the node probes
+   !>   and the crossings; three threads, so several slices fail
+   !> - the lattice centroid off the origin, so a kept frame would show
+   !> - the same seeder then builds on a working level set
+   !>
+   !> @param[out] error State left by the failed build
+   subroutine test_lattice_failed_build_clears(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Single-atom level set and its copy failing with a gradient
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(gradient_failing_svdw_type) :: failing
+      type(projection_seeder_type) :: seeder
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: rs
+      logical :: ok
+
+      call single_atom_seeder(lsf, seeder, geometry, ok)
+      if (.not. ok) then
+         call test_failed(error, "single-atom fixture failed")
+         return
+      end if
+      call sphere_lsf(failing%moist_cavity_drop_lsf_svdw_type, rs, error)
+      if (allocated(error)) return
+      geometry%centers(:, 1) = [0.25_wp, 0.5_wp, 0.75_wp]
+      geometry%nthreads = 3
+      call seeder%build(failing, geometry, failed)
+      call check(error, allocated(failed), "the build on a failing level set returned clean")
+      if (allocated(error)) return
+      call check(error, failed%message == "test level set: no gradient", &
+                 "not the level set's failure: "//failed%message)
+      if (allocated(error)) return
+      call check(error, seeder%initialized .and. .not. seeder%built .and. seeder%nsample == 0 &
+                 .and. .not. allocated(seeder%y) .and. .not. allocated(seeder%bin_first), &
+                 "the failed build left a lattice")
+      if (allocated(error)) return
+      call check(error, seeder%n_probes == 0 .and. seeder%n_order1 == 0 &
+                 .and. seeder%n_order2 == 0 .and. seeder%n_unresolved == 0 .and. seeder%lattice_bytes == 0, &
+                 "the failed build left tallies")
+      if (allocated(error)) return
+      call check(error, all(seeder%frame%origin == 0.0_wp) .and. .not. seeder%frame%rotated, &
+                 "the failed build left its lattice frame")
+      if (allocated(error)) return
+
+      deallocate (failed)
+      call seeder%build(lsf, geometry, failed)
+      if (allocated(failed)) then
+         call test_failed(error, "build after a failed one: "//failed%message)
+         return
+      end if
+      call check(error, seeder%built .and. seeder%nsample > 0, "no lattice after a failed build")
+   end subroutine test_lattice_failed_build_clears
+
+   !> Retraction on a level set whose squared gradient underflows keeps the samples finite
+   !>
+   !> - the single-atom level set with its derivatives times [[flat_scale]]:
+   !>   same crossings, but `|g|^2` subnormal, so the Newton quotient `S/|g|^2`
+   !>   overflows; each step then moves one edge length along `-sign(S) g`
+   !>
+   !> @param[out] error A sample is not finite, or the fixture does not underflow
+   subroutine test_lattice_flat_gradient(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(flat_svdw_type) :: lsf
+      type(projection_seeder_type) :: seeder
+      type(seeder_scratch_type) :: scratch
+      type(seed_build_type) :: geometry
+      type(seed_request_type) :: request
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: rs, value(1), grad(3, 1)
+
+      call sphere_lsf(lsf%moist_cavity_drop_lsf_svdw_type, rs, error)
+      if (allocated(error)) return
+      call init_seeder(seeder, failed)
+      if (.not. allocated(failed)) then
+         call single_atom_input(geometry)
+         call seeder%build(lsf, geometry, failed)
+      end if
+      if (allocated(failed)) then
+         call test_failed(error, "build: "//failed%message)
+         return
+      end if
+      call check(error, seeder%nsample > 0, "the lattice holds no sample")
+      if (allocated(error)) return
+
+      ! Non-vacuity: at the first sample's edge midpoint the gradient is not zero, the Newton step not finite
+      call lsf%evaluate_batch(seeder%edge_mid(:, 1:1), 1, value, lsf1_r=grad, error=failed)
+      if (allocated(failed)) then
+         call test_failed(error, "probe: "//failed%message)
+         return
+      end if
+      call check(error, norm2(grad(:, 1)) > 0.0_wp .and. &
+                 .not. all(ieee_is_finite((value(1)/norm2(grad(:, 1))**2)*grad(:, 1))), &
+                 "the fixture's Newton step is finite")
+      if (allocated(error)) return
+
+      call check(error, all(ieee_is_finite(seeder%y(:, 1:seeder%nsample))), "a retracted sample is not finite")
+      if (allocated(error)) return
+      call check(error, all(ieee_is_finite(seeder%normal(:, 1:seeder%nsample))) .and. &
+                 all(ieee_is_finite(seeder%form(:, 1:seeder%nsample))), "a sample's normal or form is not finite")
+      if (allocated(error)) return
+      call check(error, ieee_is_finite(seeder%cover), "the covering radius is not finite")
+      if (allocated(error)) return
+
+      ! The seeds of the whole ball, pre-step included
+      request%anchor = geometry%anchors(:, 1)
+      request%pdist_start = geometry%reach
+      call seeder%seed(scratch, lsf, request, failed)
+      if (allocated(failed)) then
+         call test_failed(error, "seed: "//failed%message)
+         return
+      end if
+      call check(error, scratch%n_points > 0, "no seed in the ball")
+      if (allocated(error)) return
+      call check(error, all(ieee_is_finite(scratch%points(:, 1:scratch%n_points))), "a seed is not finite")
+   end subroutine test_lattice_flat_gradient
+
+   !> The seeder of a cavity with a symmetry model is built along the model's lattice axes
+   !>
+   !> - molecular orientation without a group: the lattice is the inertia frame
+   !>   of a triangle off the lab axes
+   !>
+   !> @param[out] error Seeder frame and grid model axes differ
+   subroutine test_lattice_grid_model_axes(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop), allocatable :: cavity
+      type(grid_model_symmetry_type) :: model
+      type(moist_cavity_grid_model_symmetry_parameters_type) :: settings
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(moist_cavity_drop_parameters_type) :: param
+      type(structure_type) :: mol
+      type(moist_error_type), allocatable :: failed
+      !> Lattice axes of the grid model
+      real(wp) :: axes(3, 3)
+
+      call new(mol, [6, 6, 6], reshape([0.0_wp, 0.0_wp, 0.0_wp, &
+                                        5.2_wp, 0.3_wp, 0.0_wp, &
+                                        2.4_wp, 4.6_wp, 0.7_wp], [3, 3]))
+      call new_context(ctx, verbosity=0, nthreads=1)
+      settings%orientation = "molecular"
+      call new_grid_model_symmetry(model, failed, param=settings)
+      if (.not. allocated(failed)) then
+         param%num_leb = 110
+         call lsf%new()
+         allocate (cavity)
+         call new_cavity_drop(cavity, default_cpcm_radii(), lsf, failed, param=param, ctx=ctx, grid_model=model)
+      end if
+      if (.not. allocated(failed)) call cavity%update(mol, failed)
+      if (allocated(failed)) then
+         call test_failed(error, failed%message)
+         return
+      end if
+      call check(error, cavity%n_searched > 0, "no anchor was searched, the seeder was not built")
+      if (allocated(error)) return
+      call cavity%grid_model%lattice_axes(axes)
+      call check(error, any(abs(axes - identity3) > 1.0e-3_wp), "the grid model keeps the lab axes")
+      if (allocated(error)) return
+      call check(error, all(cavity%seed_axes == axes), "the seeder was not built along the grid model's axes")
+      deallocate (cavity)
+      call ctx%delete()
+   end subroutine test_lattice_grid_model_axes
 
 end module test_cavity_drop_projection

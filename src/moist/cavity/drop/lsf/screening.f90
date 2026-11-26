@@ -312,8 +312,8 @@ contains
       !> Number of matching atoms
       integer, intent(out) :: nfound
 
-      real(wp) :: blo(3), bhi(3), tlo(3), thi(3), elo(3), ehi(3), upper(3), margin(3)
-      integer :: ilo(3), ihi(3), ix, iy, iz, ic, s, k
+      real(wp) :: blo(3), bhi(3)
+      integer :: ilo(3), ihi(3), ix, iy, iz, ic, s
 
       box_lo = 0.0_wp
       box_hi = 0.0_wp
@@ -322,43 +322,7 @@ contains
 
       blo = min(lo, hi)
       bhi = max(lo, hi)
-      if (.not. (all(ieee_is_finite(blo)) .and. all(ieee_is_finite(bhi)))) then
-         error stop "moist cell list: query region must be finite"
-      end if
-
-      if (self%full_scan) then
-         do s = 1, self%natoms
-            if (slot_hit(self, s, blo, bhi, [0.0_wp, 0.0_wp, 0.0_wp], 0.0_wp, .false.)) then
-               if (nfound == 0) then
-                  box_lo = self%slot_geom(1:3, s)
-                  box_hi = self%slot_geom(1:3, s)
-               else
-                  box_lo = min(box_lo, self%slot_geom(1:3, s))
-                  box_hi = max(box_hi, self%slot_geom(1:3, s))
-               end if
-               nfound = nfound + 1
-            end if
-         end do
-         return
-      end if
-
-      do k = 1, 3
-         margin(k) = self%walk_reach + walk_slack*max(abs(blo(k)), abs(bhi(k)))
-      end do
-      upper = self%origin + real([self%nx, self%ny, self%nz], wp)*self%cell_side
-      elo = min(max(blo - margin, self%origin - self%cell_side), upper + self%cell_side)
-      ehi = min(max(bhi + margin, self%origin - self%cell_side), upper + self%cell_side)
-      tlo = (elo - self%origin)*self%inv_cell
-      thi = (ehi - self%origin)*self%inv_cell
-      if (any(thi < 0.0_wp)) return
-      if (tlo(1) >= real(self%nx, wp) .or. tlo(2) >= real(self%ny, wp) &
-          .or. tlo(3) >= real(self%nz, wp)) return
-
-      ilo = int(max(0.0_wp, tlo))
-      ihi(1) = int(min(real(self%nx - 1, wp), thi(1)))
-      ihi(2) = int(min(real(self%ny - 1, wp), thi(2)))
-      ihi(3) = int(min(real(self%nz - 1, wp), thi(3)))
-
+      call cell_box_range(self, blo, bhi, 0.0_wp, ilo, ihi)
       do iz = ilo(3), ihi(3)
          do iy = ilo(2), ihi(2)
             do ix = ilo(1), ihi(1)
@@ -463,8 +427,7 @@ contains
       !> Number of atoms found
       integer, intent(out) :: nout
 
-      real(wp) :: tlo(3), thi(3), elo(3), ehi(3), upper(3), margin(3)
-      integer :: ilo(3), ihi(3), ix, iy, iz, ic, s, j, k, first, ncell_hit
+      integer :: ilo(3), ihi(3), ix, iy, iz, ic, s, j, first, ncell_hit
 
       nout = 0
       if (self%natoms <= 0) return
@@ -472,10 +435,7 @@ contains
          error stop "moist cell list: output buffer smaller than the atom count"
       end if
 
-      if (.not. (all(ieee_is_finite(blo)) .and. all(ieee_is_finite(bhi)) &
-                 .and. ieee_is_finite(r))) then
-         error stop "moist cell list: query region must be finite"
-      end if
+      call cell_box_range(self, blo, bhi, r, ilo, ihi)
       if (r >= sqrt(huge(0.0_wp))) then
          do j = 1, self%natoms
             out(j) = j
@@ -483,35 +443,6 @@ contains
          nout = self%natoms
          return
       end if
-
-      if (self%full_scan) then
-         do s = 1, self%natoms
-            if (slot_hit(self, s, blo, bhi, center, r, sphere)) then
-               nout = nout + 1
-               out(nout) = self%slot_atom(s)
-            end if
-         end do
-         return
-      end if
-
-      ! Widened hit radius plus the rounding of the corners themselves
-      do k = 1, 3
-         margin(k) = self%walk_reach + walk_slack*(r + max(abs(blo(k)), abs(bhi(k))))
-      end do
-      ! Clamp to one cell beyond the grid before scaling, so far boxes cannot overflow
-      upper = self%origin + real([self%nx, self%ny, self%nz], wp)*self%cell_side
-      elo = min(max(blo - margin, self%origin - self%cell_side), upper + self%cell_side)
-      ehi = min(max(bhi + margin, self%origin - self%cell_side), upper + self%cell_side)
-      tlo = (elo - self%origin)*self%inv_cell
-      thi = (ehi - self%origin)*self%inv_cell
-      if (any(thi < 0.0_wp)) return
-      if (tlo(1) >= real(self%nx, wp) .or. tlo(2) >= real(self%ny, wp) &
-          .or. tlo(3) >= real(self%nz, wp)) return
-
-      ilo = int(max(0.0_wp, tlo))
-      ihi(1) = int(min(real(self%nx - 1, wp), thi(1)))
-      ihi(2) = int(min(real(self%ny - 1, wp), thi(2)))
-      ihi(3) = int(min(real(self%nz - 1, wp), thi(3)))
 
       ncell_hit = 0
       do iz = ilo(3), ihi(3)
@@ -539,6 +470,66 @@ contains
          end if
       end if
    end subroutine collect
+
+   !> Cell index range walked for the box `[blo, bhi]` widened by the ball radius `r`
+   !>
+   !> - error stop on a non-finite corner or radius
+   !> - full-scan mode: the single cell, every slot in id order
+   !> - grid mode: widened by the walk reach and `walk_slack`, clamped to one cell
+   !>   beyond the grid; an empty range (`ihi < ilo`) when the box misses the grid
+   !>
+   !> @param[in]  self  cell list
+   !> @param[in]  blo   lower box corner
+   !> @param[in]  bhi   upper box corner
+   !> @param[in]  r     ball radius, zero in box mode
+   !> @param[out] ilo   first cell index per axis, zero-based
+   !> @param[out] ihi   last cell index per axis, zero-based
+   pure subroutine cell_box_range(self, blo, bhi, r, ilo, ihi)
+      !> Cell list
+      type(cell_list_type), intent(in) :: self
+      !> Lower box corner
+      real(wp), intent(in) :: blo(3)
+      !> Upper box corner
+      real(wp), intent(in) :: bhi(3)
+      !> Ball radius
+      real(wp), intent(in) :: r
+      !> First cell index per axis
+      integer, intent(out) :: ilo(3)
+      !> Last cell index per axis
+      integer, intent(out) :: ihi(3)
+
+      real(wp) :: tlo(3), thi(3), elo(3), ehi(3), upper(3), margin(3)
+      integer :: k
+
+      if (.not. (all(ieee_is_finite(blo)) .and. all(ieee_is_finite(bhi)) &
+                 .and. ieee_is_finite(r))) then
+         error stop "moist cell list: query region must be finite"
+      end if
+      ilo = 0
+      ihi = 0
+      if (self%full_scan) return
+
+      ! Widened hit radius plus the rounding of the corners themselves
+      do k = 1, 3
+         margin(k) = self%walk_reach + walk_slack*(r + max(abs(blo(k)), abs(bhi(k))))
+      end do
+      ! Clamp to one cell beyond the grid before scaling, so far boxes cannot overflow
+      upper = self%origin + real([self%nx, self%ny, self%nz], wp)*self%cell_side
+      elo = min(max(blo - margin, self%origin - self%cell_side), upper + self%cell_side)
+      ehi = min(max(bhi + margin, self%origin - self%cell_side), upper + self%cell_side)
+      tlo = (elo - self%origin)*self%inv_cell
+      thi = (ehi - self%origin)*self%inv_cell
+      if (any(thi < 0.0_wp) .or. tlo(1) >= real(self%nx, wp) .or. tlo(2) >= real(self%ny, wp) &
+          .or. tlo(3) >= real(self%nz, wp)) then
+         ihi = -1
+         return
+      end if
+
+      ilo = int(max(0.0_wp, tlo))
+      ihi(1) = int(min(real(self%nx - 1, wp), thi(1)))
+      ihi(2) = int(min(real(self%ny - 1, wp), thi(2)))
+      ihi(3) = int(min(real(self%nz - 1, wp), thi(3)))
+   end subroutine cell_box_range
 
    !> Whether the atom in slot `s` meets the query region
    !>

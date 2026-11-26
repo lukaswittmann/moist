@@ -6,6 +6,7 @@ module moist_cavity_drop
    use mctc_env, only: error_type, fatal_error, wp
    use moist_output_citations, only: citation
    use moist_math_linalg, only: setup_tangent_frame
+   use moist_math_linalg_geometry, only: identity3
    use moist_math_grid_angular_lebedev, only: lebedev_order_from_num
    use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base, update_cavity_base, build_cavity_base, &
@@ -187,6 +188,9 @@ module moist_cavity_drop
       integer :: n_full_reach = 0
       !> Largest search radius of an anchor in the last projection (Bohr)
       real(wp) :: pdist_search_max = 0.0_wp
+      !> Lattice axes of the last projection's seeder, as columns; the lab axes
+      !> without a search
+      real(wp) :: seed_axes(3, 3) = identity3
 
       !> Position of each row among the rows of its anchor, in canonical order (ngrid)
       integer, allocatable :: branch(:)

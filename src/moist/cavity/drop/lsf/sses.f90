@@ -232,6 +232,7 @@ contains
    !>
    !> @param[inout] self Level set
    subroutine reset_history(self)
+      !> Level set
       class(moist_cavity_drop_lsf_sses_type), intent(inout) :: self
 
       call sses_cache_forget(self%cache)

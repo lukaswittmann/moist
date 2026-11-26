@@ -618,7 +618,10 @@ contains
          if (allocated(error)) return
          if (nout == 0) then
             call check(error, all(blo_g == 0.0_wp) .and. all(bhi_g == 0.0_wp), &
-                       more="empty query_box_bounds must zero bounds")
+                       more="empty grid query_box_bounds must zero bounds")
+            if (allocated(error)) return
+            call check(error, all(blo_f == 0.0_wp) .and. all(bhi_f == 0.0_wp), &
+                       more="empty full-scan query_box_bounds must zero bounds")
             if (allocated(error)) return
          else
             ref_lo = xyz(:, out(1))

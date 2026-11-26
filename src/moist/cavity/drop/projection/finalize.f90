@@ -32,6 +32,7 @@ module moist_cavity_drop_projection_finalize
    use moist_math_linalg, only: cross_product, setup_tangent_frame
    use moist_math_packed, only: packed_index
    use moist_math_smoothstep, only: moist_math_smoothstep_type
+   use moist_utils_mem, only: grow_array
    use moist_cavity_drop_branching, only: branch_weight_type, branch_pdist2_max
    use moist_cavity_drop_projection_batch, only: projection_batch_type, point_accepted
    use moist_cavity_drop_projection_parameters, only: drop_finalize_parameters_type
@@ -655,51 +656,18 @@ contains
 
       if (required <= self%capacity) return
       cap = max(16, 2*self%capacity, required)
-      call grow_i(self%anchor)
-      call grow_i(self%branch)
-      call grow_r2(self%xyz)
-      call grow_r2(self%normal)
-      call grow_r(self%lambda)
-      call grow_r(self%pdist)
-      call grow_r(self%phi)
-      call grow_r(self%wleb)
-      call grow_r(self%wbranch)
-      call grow_r(self%cpjac)
-      call grow_r(self%w_f)
+      call grow_array(self%anchor, cap)
+      call grow_array(self%branch, cap)
+      call grow_array(self%xyz, 3, cap)
+      call grow_array(self%normal, 3, cap)
+      call grow_array(self%lambda, cap)
+      call grow_array(self%pdist, cap)
+      call grow_array(self%phi, cap)
+      call grow_array(self%wleb, cap)
+      call grow_array(self%wbranch, cap)
+      call grow_array(self%cpjac, cap)
+      call grow_array(self%w_f, cap)
       self%capacity = cap
-
-   contains
-
-      !> Grow one real vector
-      subroutine grow_r(a)
-         real(wp), allocatable, intent(inout) :: a(:)
-         real(wp), allocatable :: tmp(:)
-
-         allocate (tmp(cap))
-         if (allocated(a) .and. self%n > 0) tmp(1:self%n) = a(1:self%n)
-         call move_alloc(tmp, a)
-      end subroutine grow_r
-
-      !> Grow one (3, n) real array
-      subroutine grow_r2(a)
-         real(wp), allocatable, intent(inout) :: a(:, :)
-         real(wp), allocatable :: tmp(:, :)
-
-         allocate (tmp(3, cap))
-         if (allocated(a) .and. self%n > 0) tmp(:, 1:self%n) = a(:, 1:self%n)
-         call move_alloc(tmp, a)
-      end subroutine grow_r2
-
-      !> Grow one integer vector
-      subroutine grow_i(a)
-         integer, allocatable, intent(inout) :: a(:)
-         integer, allocatable :: tmp(:)
-
-         allocate (tmp(cap))
-         if (allocated(a) .and. self%n > 0) tmp(1:self%n) = a(1:self%n)
-         call move_alloc(tmp, a)
-      end subroutine grow_i
-
    end subroutine rows_reserve
 
    !> Release the storage

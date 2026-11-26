@@ -15,6 +15,8 @@ contains
    !>   than the edge
    !> - a sample whose level set is unreached or flat keeps its position and gets
    !>   no normal
+   !> - a Newton step whose quotient `S/|g|^2` overflows: one edge length along
+   !>   `-sign(S) g` in the steps, none in the last one
    !> - the covering radius is a cell diagonal plus the longest retraction
    !>
    !> @param[inout] self  Seeder, samples written
@@ -22,9 +24,13 @@ contains
    !> @param[inout] work  Build scratch
    !> @param[out]   error Level set failure
    module subroutine retract_samples(self, lsf, work, error)
+      !> Seeder, samples written
       type(projection_seeder_type), intent(inout) :: self
-      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Level set, the source of the clones
+      class(moist_cavity_drop_lsf_type), intent(in), target :: lsf
+      !> Build scratch
       type(build_type), intent(inout) :: work
+      !> Level set failure
       type(error_type), allocatable, intent(out) :: error
 
       real(wp), allocatable :: y(:, :), val(:), grad(:, :), hess(:, :)
@@ -46,7 +52,7 @@ contains
       y = work%cross(:, 1:n)
       ok = .true.
       do it = 1, retract_steps
-         call evaluate_slices(work%probe, lsf, y, 1, build_chunk, val, reached, error, grad=grad)
+         call evaluate_slices(work%slots, lsf, y, 1, build_chunk, val, reached, error, grad=grad)
          if (allocated(error)) return
          self%n_order1 = self%n_order1 + n
          do k = 1, n
@@ -56,13 +62,13 @@ contains
                ok(k) = .false.
                cycle
             end if
-            step = -(val(k)/(gn*gn))*grad(:, k)
+            step = newton_step(val(k), grad(:, k), gn, work%cross_h(k))
             slen = norm2(step)
             if (slen > work%cross_h(k)) step = step*(work%cross_h(k)/slen)
             y(:, k) = y(:, k) + step
          end do
       end do
-      call evaluate_slices(work%probe, lsf, y, 2, build_chunk, val, reached, error, grad=grad, hess=hess)
+      call evaluate_slices(work%slots, lsf, y, 2, build_chunk, val, reached, error, grad=grad, hess=hess)
       if (allocated(error)) return
       self%n_order2 = self%n_order2 + n
 
@@ -82,8 +88,11 @@ contains
             self%form(3, k) = dot_product(q2, matmul(h3, q2))/gn
             self%kmax(k) = 0.5_wp*abs(self%form(1, k) + self%form(3, k)) &
                            + hypot(0.5_wp*(self%form(1, k) - self%form(3, k)), self%form(2, k))
+            ! A step without a finite quotient is longer than any edge
             step = -(val(k)/(gn*gn))*grad(:, k)
-            if (norm2(step) <= work%cross_h(k)) y(:, k) = y(:, k) + step
+            if (all(ieee_is_finite(step))) then
+               if (norm2(step) <= work%cross_h(k)) y(:, k) = y(:, k) + step
+            end if
          end if
          self%y(:, k) = y(:, k)
          dmax = max(dmax, norm2(y(:, k) - work%cross(:, k)))
@@ -91,12 +100,41 @@ contains
       self%cover = sqrt(3.0_wp)*self%spacing_max + dmax
    end subroutine retract_samples
 
+   !> Normal Newton step `-S g / |g|^2` of a retraction
+   !>
+   !> - where the quotient is not finite (`|g|^2` near underflow) but `S` is:
+   !>   `h` along `-sign(S) g`, none at `S = 0`
+   !>
+   !> @param[in] val  Level set value `S`
+   !> @param[in] grad Gradient `g`
+   !> @param[in] gn   `|g|`, positive
+   !> @param[in] h    Fallback step length (Bohr)
+   pure function newton_step(val, grad, gn, h) result(step)
+      !> Level set value `S`
+      real(wp), intent(in) :: val
+      !> Gradient `g`
+      real(wp), intent(in) :: grad(3)
+      !> `|g|`, positive
+      real(wp), intent(in) :: gn
+      !> Fallback step length (Bohr)
+      real(wp), intent(in) :: h
+      !> Step (Bohr)
+      real(wp) :: step(3)
+
+      step = -(val/(gn*gn))*grad
+      if (all(ieee_is_finite(step)) .or. .not. ieee_is_finite(val)) return
+      step = 0.0_wp
+      if (val /= 0.0_wp) step = -sign(h, val)*grad/gn
+   end function newton_step
+
    !> Sort the samples into cubic bins of edge `edge` by their edge midpoint
    !>
    !> @param[inout] self Seeder
    !> @param[in]    edge Bin edge (Bohr)
    module subroutine build_bins(self, edge)
+      !> Seeder
       type(projection_seeder_type), intent(inout) :: self
+      !> Bin edge (Bohr)
       real(wp), intent(in) :: edge
 
       integer, allocatable :: bin_of(:), order(:), count_of(:)
@@ -110,7 +148,7 @@ contains
       allocate (bin_of(self%nsample))
       nbin = 0
       do k = 1, self%nsample
-         key = lattice_key(bin_coords(self, self%edge_mid(:, k)), key_bias)
+         key = lattice_key(bin_coords(self, self%edge_mid(:, k)))
          b = table_find(self%bins, key)
          if (b == 0) then
             nbin = nbin + 1
@@ -148,14 +186,20 @@ contains
 
    !> Bin coordinates of a point
    !>
+   !> - clamped to `-key_bias .. key_bias` before the conversion, so a point far
+   !>   off the lattice gets a bin out of the key range, not an integer overflow
+   !>
    !> @param[in] self Seeder
    !> @param[in] x    Point
    pure module function bin_coords(self, x) result(j)
+      !> Seeder
       type(projection_seeder_type), intent(in) :: self
+      !> Point
       real(wp), intent(in) :: x(3)
+      !> Bin coordinates
       integer :: j(3)
 
-      j = floor((x - self%bin_origin)/self%bin_size)
+      j = floor(min(max((x - self%bin_origin)/self%bin_size, -real(key_bias, wp)), real(key_bias, wp)))
    end function bin_coords
 
 end submodule moist_cavity_drop_projection_seed_samples

@@ -304,7 +304,7 @@ Surface Projection
         - Reference calculations; most expensive
 
    Higher levels find more branches in concave regions at a higher cost; seeder spacing, refinement and seed filters follow from the level.
-   A search never goes beyond ``branching.reach_off`` and ends at the branch window behind the nearest fully open point (see `Branching`_).
+   A search never goes beyond ``branching.reach_off`` and ends at the branch window behind the nearest fully open point (reach gate ``branching.reach_on`` / ``branching.reach_off``, see `Settings`_).
    The seed lattice only supplies starting points for the Newton solves: every point is an exact projection onto :math:`S=0`, and the level only decides which branches are found.
 
    .. dropdown:: How the branch search works
@@ -357,9 +357,9 @@ Additionally, it can be used in cases where small weights could cause numerical 
 
 ``switching.wleb_prune_level`` (integer, default ``0``)
    Smoothly switches off points whose Lebedev weight after the closest-point
-   scaling is near zero. The switch is a factor of the gate of the point, next
-   to the switches above, so it acts on the switching value :math:`f`. The
-   switch region is derived from the level:
+   scaling is near zero. The switch is a factor of the gate of the point, so it
+   acts on the switching value :math:`f`. The switch region is derived from the
+   level:
 
    .. list-table::
       :header-rows: 1

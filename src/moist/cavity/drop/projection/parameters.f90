@@ -98,7 +98,8 @@ module moist_cavity_drop_projection_parameters
 
    !> Optimality polish settings
    type :: drop_polish_parameters_type
-      !> Iterations of the Riemannian saddle escape
+      !> Iterations of the Riemannian saddle escape after the first one, so up to
+      !> `escape_max_iter + 1` steps
       integer :: escape_max_iter = 150
       !> Initial line-search step of a non-saddle escape update; 1 is the full Newton step
       real(wp) :: escape_alpha_init = 1.0_wp

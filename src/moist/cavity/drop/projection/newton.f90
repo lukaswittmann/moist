@@ -6,7 +6,8 @@
 !>                    [            -S(x)             ]
 !>
 !> - full 4x4 KKT step on order-2 jets; closed-form flat step at `lambda = 0`
-!>   or on singular/non-descent tangent blocks, spatial step capped at `max_step`
+!>   or on singular tangent blocks and, above `residual_test_fnorm`, on non-descent
+!>   ones; spatial step capped at `max_step`
 !> - backtracking on merit `w/2 ||x - a||^2 + mu |S|`, switching to `||F||`
 !>   below `residual_test_fnorm`
 !> - outcomes per column: `point_converged` (order-2 jet), `point_captured`
@@ -18,6 +19,7 @@ module moist_cavity_drop_projection_newton
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
    use moist_math_packed, only: packed_index, packed_contract2
+   use moist_utils_format, only: to_string
    use moist_cavity_drop_projection_parameters, only: drop_solve_parameters_type, drop_polish_parameters_type
    use moist_cavity_drop_projection_batch, only: projection_batch_type, &
                                                 point_pending, point_converged, point_accepted, &
@@ -134,7 +136,6 @@ contains
       integer :: j0, j1, j, k, nact, nkeep, nls, m, m0, ls_round, irun
       real(wp) :: w, a(3), step(4), mu_full, g_len, alpha, captor_tol
       logical :: ok, predicted
-      character(len=16) :: buffer
 
       j0 = 1
       j1 = batch%n
@@ -175,8 +176,7 @@ contains
          if (lsf%unreached(k)) then
             ! The anchor jet is read later by every gate; without it the run is lost
             if (all(batch%x(:, j) == batch%run_xyz(:, irun))) then
-               write (buffer, "(i0)") batch%run_anchor(irun)
-               call fatal_error(error, "Projection Newton: anchor "//trim(buffer)// &
+               call fatal_error(error, "Projection Newton: anchor "//to_string(batch%run_id(irun))// &
                                 " lies beyond the level set reach, no atom screens it")
                return
             end if
@@ -240,20 +240,23 @@ contains
                call full_step(w, batch%x(:, j), a, batch%lambda(j), batch%S(j), batch%gradS(:, j), &
                               batch%hessS(:, j), step, ok)
                if (ok) then
-                  ! Penalty the full step asks for, stored below only with the step taken:
-                  ! the multiplier of a rejected step must not inflate it for good
-                  mu_full = max(scratch%mu(j), abs(batch%lambda(j) + step(4)) + cfg%merit_margin)
-                  ok = merit_slope(w, batch%x(:, j), a, batch%S(j), batch%gradS(:, j), mu_full, &
-                                   step(1:3)) < 0.0_wp
+                  ! Merit descent only away from the solution: near it the residual line
+                  ! search decides, and a full step toward a saddle is no merit descent
+                  if (.not. (scratch%fnorm(j) <= residual_test_fnorm)) then
+                     ! Penalty the full step asks for, stored below only with the step taken:
+                     ! the multiplier of a rejected step must not inflate it for good
+                     mu_full = max(scratch%mu(j), abs(batch%lambda(j) + step(4)) + cfg%merit_margin)
+                     ok = merit_slope(w, batch%x(:, j), a, batch%S(j), batch%gradS(:, j), mu_full, &
+                                      step(1:3)) < 0.0_wp
+                  end if
                else if (.not. singular_tangent_block(w, batch%lambda(j), batch%gradS(:, j), batch%hessS(:, j))) then
-                  ! Singular with a regular tangent block: the constraint gradient
-                  ! vanishes against `lambda Hess S`
+                  ! Singular with a regular tangent block: the constraint gradient vanishes against `lambda Hess S`
                   batch%status(j) = point_failed
                   cycle
                end if
             end if
             ! `lambda = 0`: the full system itself, a prediction; a singular tangent
-            ! block or no merit descent (indefinite tangent block): the fallback
+            ! block or no merit descent away from the solution: the fallback
             ! without the constraint curvature, no prediction
             predicted = ok .or. .not. scratch%has_hess(j)
             if (.not. ok) then

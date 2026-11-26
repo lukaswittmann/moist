@@ -40,7 +40,7 @@ module moist_api
    use moist_cavity_mt, only: cavity_type_mt, &
       & new_cavity_mt, moist_cavity_mt_parameters_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, is_valid_proj_level, &
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, &
                                            drop_solve_parameters_type, drop_branch_parameters_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -84,175 +84,190 @@ module moist_api
       !> Caller allocation size in bytes
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> Maximum Cartesian surface-cell side in bohr
-      real(c_double) :: spacing = 0.0_c_double
+      real(c_double) :: spacing
       !> Target planar patch area in bohr squared
-      real(c_double) :: target_area = 0.0_c_double
+      real(c_double) :: target_area
       !> Relative patch-area tolerance
-      real(c_double) :: area_tolerance = 0.0_c_double
+      real(c_double) :: area_tolerance
       !> Gaussian width scale
-      real(c_double) :: gaussian_scale = 0.0_c_double
+      real(c_double) :: gaussian_scale
       !> Lower low-gradient switch bound
-      real(c_double) :: w_0ls_from = 0.0_c_double
+      real(c_double) :: w_0ls_from
       !> Upper low-gradient switch bound
-      real(c_double) :: w_0ls_to = 0.0_c_double
+      real(c_double) :: w_0ls_to
       !> Low-gradient switch power
-      real(c_double) :: w_0ls_p = 0.0_c_double
+      real(c_double) :: w_0ls_p
       !> Low-gradient switch shape
-      real(c_double) :: w_0ls_a = 0.0_c_double
+      real(c_double) :: w_0ls_a
       !> Minimum retained switch weight
-      real(c_double) :: weight_cutoff = 0.0_c_double
+      real(c_double) :: weight_cutoff
    end type api_mt_options_v1_0
 
+   !> Layout probe for the size constant below; never read
+   type(api_mt_options_v1_0) :: mt_options_layout
    !> Minimum accepted marching-tetrahedra options allocation
-   integer(c_size_t), parameter :: mt_options_min_size = &
-      & c_sizeof(api_mt_options_v1_0())
+   integer(c_size_t), parameter :: mt_options_min_size = c_sizeof(mt_options_layout)
 
    !> 1.0 drop layout, mirrors `moist_drop_options`; the 1.0 API still changes in place
    type, bind(C) :: api_drop_options_v1_0
       !> Caller allocation size in bytes
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> Lebedev points per atom
-      integer(c_int) :: nleb = 194_c_int
+      integer(c_int) :: nleb
       !> Enable fine cavity refinement
-      logical(c_bool) :: do_fine = .false._c_bool
+      logical(c_bool) :: do_fine
       !> Projection convergence tolerance
-      real(c_double) :: tolerance = 1.0e-10_c_double
+      real(c_double) :: tolerance
       !> Maximum projection iterations
-      integer(c_int) :: proj_maxiter = 50_c_int
+      integer(c_int) :: proj_maxiter
       !> Projection refinement level: 1, 2, 3 or 4
-      integer(c_int) :: proj_level = 2_c_int
+      integer(c_int) :: proj_level
       !> Projection-distance excess at which a branch loses all weight (Bohr)
-      real(c_double) :: branch_dpdist_max = 0.2_c_double
+      real(c_double) :: branch_dpdist_max
       !> Grid density kernel length in Bohr
-      real(c_double) :: rho_grid_h = 1.0_c_double
+      real(c_double) :: rho_grid_h
       !> Lebedev pruning level
-      integer(c_int) :: wleb_prune_level = 0_c_int
+      integer(c_int) :: wleb_prune_level
       !> Reach gate open up to this projection distance (Bohr)
-      real(c_double) :: branch_reach_on = 3.78_c_double
+      real(c_double) :: branch_reach_on
       !> Reach gate closed from this projection distance (Bohr)
-      real(c_double) :: branch_reach_off = 5.67_c_double
+      real(c_double) :: branch_reach_off
       !> Horizon switch off-edge, in the signed `n_surf . n_sph`
-      real(c_double) :: w_0hor_off = 0.0_c_double
+      real(c_double) :: w_0hor_off
       !> Horizon switch on-edge; zero switches the horizon factor off
-      real(c_double) :: w_0hor_on = 0.15_c_double
+      real(c_double) :: w_0hor_on
    end type api_drop_options_v1_0
 
+   !> Layout probe for the size constant below; never read
+   type(api_drop_options_v1_0) :: drop_options_layout
    !> Minimum valid caller size, independent of future library extensions
-   integer(c_size_t), parameter :: drop_options_min_size = c_sizeof(api_drop_options_v1_0())
+   integer(c_size_t), parameter :: drop_options_min_size = c_sizeof(drop_options_layout)
 
    !> Frozen 1.0 iswig layout; a future addition needs a new versioned type
    type, bind(C) :: api_iswig_options_v1_0
       !> Caller allocation size in bytes
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> Lebedev points per atom
-      integer(c_int) :: nleb = 110_c_int
+      integer(c_int) :: nleb
       !> Surface-weight cutoff
-      real(c_double) :: cut_a = 0.0_c_double
+      real(c_double) :: cut_a
       !> Switching-factor cutoff
-      real(c_double) :: cut_f = 1.0e-10_c_double
+      real(c_double) :: cut_f
    end type api_iswig_options_v1_0
 
+   !> Layout probe for the size constant below; never read
+   type(api_iswig_options_v1_0) :: iswig_options_layout
    !> Minimum valid caller size, independent of future library extensions
-   integer(c_size_t), parameter :: iswig_options_min_size = c_sizeof(api_iswig_options_v1_0())
+   integer(c_size_t), parameter :: iswig_options_min_size = c_sizeof(iswig_options_layout)
 
    !> Frozen 1.0 svdw layout; a future addition needs a new versioned type
    type, bind(C) :: api_svdw_options_v1_0
       !> Caller allocation size in bytes
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> Soft minimum sharpness
-      real(c_double) :: blend_k = 5.5_c_double
+      real(c_double) :: blend_k
       !> One-body blending weight
-      real(c_double) :: blend_1b = 1.0_c_double
+      real(c_double) :: blend_1b
       !> Two-body blending weight
-      real(c_double) :: blend_2b = 0.0_c_double
+      real(c_double) :: blend_2b
       !> Three-body blending weight
-      real(c_double) :: blend_3b = 3.0_c_double
+      real(c_double) :: blend_3b
       !> Constant level-set multiplier
-      real(c_double) :: scale = 1.0_c_double
+      real(c_double) :: scale
    end type api_svdw_options_v1_0
 
+   !> Layout probe for the size constant below; never read
+   type(api_svdw_options_v1_0) :: svdw_options_layout
    !> Minimum valid caller size, independent of future library extensions
-   integer(c_size_t), parameter :: svdw_options_min_size = c_sizeof(api_svdw_options_v1_0())
+   integer(c_size_t), parameter :: svdw_options_min_size = c_sizeof(svdw_options_layout)
 
    !> Frozen 1.0 cfc layout; a future addition needs a new versioned type
    type, bind(C) :: api_cfc_options_v1_0
       !> Caller allocation size in bytes
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> Atomic-term exponent
-      real(c_double) :: a1 = -15.0_c_double
+      real(c_double) :: a1
       !> Pair-term exponent
-      real(c_double) :: a2 = -9.0_c_double
+      real(c_double) :: a2
       !> Pair-term coupling coefficient
-      real(c_double) :: c = 5.0_c_double
+      real(c_double) :: c
       !> Pair-term polynomial power
-      integer(c_int) :: m = 4_c_int
+      integer(c_int) :: m
       !> Constant level-set multiplier
-      real(c_double) :: scale = 0.25_c_double
+      real(c_double) :: scale
    end type api_cfc_options_v1_0
 
+   !> Layout probe for the size constant below; never read
+   type(api_cfc_options_v1_0) :: cfc_options_layout
    !> Minimum valid caller size, independent of future library extensions
-   integer(c_size_t), parameter :: cfc_options_min_size = c_sizeof(api_cfc_options_v1_0())
+   integer(c_size_t), parameter :: cfc_options_min_size = c_sizeof(cfc_options_layout)
 
    !> Frozen 1.0 isodensity layout; a future addition needs a new versioned type
    type, bind(C) :: api_isodensity_options_v1_0
       !> Caller allocation size in bytes
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> Electron-density isovalue in atomic units
-      real(c_double) :: rho_iso = 1.0e-3_c_double
+      real(c_double) :: rho_iso
       !> Positive level-set scaling factor
-      real(c_double) :: scale = 1000.0_c_double
+      real(c_double) :: scale
       !> Density representation of the internal LSF; ignored by the callback LSF
-      integer(c_int) :: basis = 1_c_int
+      integer(c_int) :: basis
       !> Core fill of ECP nuclei (host nuclear charge below Z)
-      logical(c_bool) :: core_fill = .true._c_bool
+      logical(c_bool) :: core_fill
       !> Core-fill radius as a fraction of the atom's cavity radius
-      real(c_double) :: core_radius_fraction = 0.5_c_double
+      real(c_double) :: core_radius_fraction
    end type api_isodensity_options_v1_0
 
+   !> Layout probe for the size constant below; never read
+   type(api_isodensity_options_v1_0) :: isodensity_options_layout
    !> Minimum valid caller size, independent of future library extensions
-   integer(c_size_t), parameter :: isodensity_options_min_size = c_sizeof(api_isodensity_options_v1_0())
+   integer(c_size_t), parameter :: isodensity_options_min_size = c_sizeof(isodensity_options_layout)
 
    !> PCM numerical controls; callers supply the complete current layout
    type, bind(C) :: api_pcm_options
       !> Caller allocation size in bytes
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> PCM linear solver selector
-      integer(c_int) :: solver = 2_c_int
+      integer(c_int) :: solver
       !> Iteration cap for restarted GMRES
-      integer(c_int) :: solver_maxiter = 1000_c_int
+      integer(c_int) :: solver_maxiter
       !> Number of GMRES steps between restarts
-      integer(c_int) :: solver_restart = 100_c_int
+      integer(c_int) :: solver_restart
       !> Residual threshold for restarted GMRES
-      real(c_double) :: solver_tol = 1.0e-8_c_double
+      real(c_double) :: solver_tol
       !> Matrix storage selection
-      integer(c_int) :: storage = 1_c_int
+      integer(c_int) :: storage
       !> Nonlinear solve tolerance
-      real(c_double) :: newton_tol = 1.0e-10_c_double
+      real(c_double) :: newton_tol
       !> Nonlinear iteration cap
-      integer(c_int) :: newton_maxiter = 50_c_int
+      integer(c_int) :: newton_maxiter
       !> Return the parameter_adjoint response item
-      logical(c_bool) :: parameter_derivatives = .false._c_bool
+      logical(c_bool) :: parameter_derivatives
       !> Couple Gaussian surfaces through point potential integrals
-      logical(c_bool) :: point_potential = .false._c_bool
+      logical(c_bool) :: point_potential
    end type api_pcm_options
 
+   !> Layout probe for the size constant below; never read
+   type(api_pcm_options) :: pcm_options_layout
    !> Minimum valid caller size for the generated PCM controls
-   integer(c_size_t), parameter :: pcm_options_min_size = c_sizeof(api_pcm_options())
+   integer(c_size_t), parameter :: pcm_options_min_size = c_sizeof(pcm_options_layout)
 
    !> Frozen 1.0 GOSTSHYP layout; extend with a new versioned type
    type, bind(C) :: api_gostshyp_options_v1_0
       !> Caller allocation size in bytes
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> Trace magnitude cutoff, bohr**-4; inactive at and below cutoff
-      real(c_double) :: regularization_start = 0.0_c_double
+      real(c_double) :: regularization_start
       !> Trace magnitude cutoff, bohr**-4; exact reciprocal at and above cutoff
-      real(c_double) :: regularization_end = 0.0_c_double
+      real(c_double) :: regularization_end
       !> Suppress negative pressure amplitudes
-      logical(c_bool) :: suppress_negative_amplitudes = .false._c_bool
+      logical(c_bool) :: suppress_negative_amplitudes
    end type api_gostshyp_options_v1_0
 
+   !> Layout probe for the size constant below; never read
+   type(api_gostshyp_options_v1_0) :: gostshyp_options_layout
    !> Frozen minimum caller allocation size
-   integer(c_size_t), parameter :: gostshyp_options_min_size = c_sizeof(api_gostshyp_options_v1_0())
+   integer(c_size_t), parameter :: gostshyp_options_min_size = c_sizeof(gostshyp_options_layout)
 
    !> Frozen 1.0 solvent descriptor layout; a future addition needs a new versioned type
    type, bind(C) :: api_solvent_descriptors_v1_0
@@ -1803,16 +1818,6 @@ contains
       call c_f_pointer(vlsf, lsf)
       if (.not. allocated(lsf%ptr)) then
          call api_error(error%ptr, "new_drop_cavity", "LSF is not initialized")
-         return
-      end if
-      if (o%tolerance <= 0.0_c_double .or. o%rho_grid_h <= 0.0_c_double .or. &
-          o%branch_dpdist_max < 0.0_c_double .or. o%proj_maxiter < 1) then
-         call api_error(error%ptr, "new_drop_cavity", "Invalid DROP options")
-         return
-      end if
-      if (.not. is_valid_proj_level(int(o%proj_level))) then
-         call api_error(error%ptr, "new_drop_cavity", &
-                        "Invalid DROP options: projection level must be 1, 2, 3 or 4")
          return
       end if
       call read_api_radii(vradii, radii, error%ptr)

@@ -135,16 +135,19 @@ module moist_cavity_drop_projection_worker
       integer :: jloc = 0
       !> Its latest run in `passn`, 0 for none
       integer :: tail = 0
-      !> First, last and next seed of its list in `near_seeds`
+      !> First seed of its list in `near_seeds`
       integer :: first = 0
+      !> Last seed of its list in `near_seeds`
       integer :: last = 0
+      !> Next seed of its list in `near_seeds`
       integer :: next = 0
       !> Seeds of its next round
       integer :: take = 0
-      !> Seeder reach of its seeds, the radius its points ask for and the radius
-      !> of the ball its seeds cover (Bohr)
+      !> Seeder reach of its seeds (Bohr)
       real(wp) :: reach = 0.0_wp
+      !> Radius its points ask for (Bohr)
       real(wp) :: radius = 0.0_wp
+      !> Radius of the ball its seeds cover (Bohr)
       real(wp) :: ball = 0.0_wp
    end type queue_entry_type
 
@@ -156,9 +159,11 @@ module moist_cavity_drop_projection_worker
       class(moist_cavity_drop_lsf_type), allocatable :: lsf
       !> Atom centers (3, nat)
       real(wp), allocatable :: centers(:, :)
-      !> Stage parameters
+      !> Solve-stage parameters
       type(drop_solve_parameters_type) :: solve
+      !> Polish-stage parameters
       type(drop_polish_parameters_type) :: polish
+      !> Finalize-stage parameters
       type(drop_finalize_parameters_type) :: finalize
       !> Solve parameters of the seeded pass: `solve` with duplicate capture
       type(drop_solve_parameters_type) :: solve_seeded
@@ -175,16 +180,24 @@ module moist_cavity_drop_projection_worker
       type(projection_seeder_type) :: seeder
       !> This thread's scratch; holds the seeds of the last request
       type(seeder_scratch_type) :: scratch
-      !> Switching functions and branch weight model
-      type(moist_math_smoothstep_sigmoid_type) :: f_crit, f_foc, f_hor, f_wleb
+      !> Gradient-norm switch
+      type(moist_math_smoothstep_sigmoid_type) :: f_crit
+      !> Focal switch on the focal margin `beta_min(B)/phi_alpha`
+      type(moist_math_smoothstep_sigmoid_type) :: f_foc
+      !> Horizon switch on the signed `n_surf . n_sph`
+      type(moist_math_smoothstep_sigmoid_type) :: f_hor
+      !> Prune switch
+      type(moist_math_smoothstep_sigmoid_type) :: f_wleb
       !> Reach gate on the projection distance, falling from `reach_on` to `reach_off`
       type(moist_math_smoothstep_sigmoid_type) :: f_reach
+      !> Branch weight model
       type(branch_weight_type) :: branch_weight
       !> Seeds per anchor in the first round of the extended search, doubled per round
       integer :: nearest_count = default_nearest_count
-      !> Extended-search batch of the current round and of the last one, swapped
-      !> per round
-      type(projection_batch_type), allocatable :: passn, passn_last
+      !> Extended-search batch of the current round, swapped with `passn_last` per round
+      type(projection_batch_type), allocatable :: passn
+      !> Extended-search batch of the last round
+      type(projection_batch_type), allocatable :: passn_last
       !> Pass-2 (seeded) batch
       type(projection_batch_type) :: pass2
       !> Anchors in the extended search
@@ -193,15 +206,17 @@ module moist_cavity_drop_projection_worker
       real(wp), allocatable :: near_seeds(:, :)
       !> Seed solved already from the anchor's smaller ball, never solved again
       logical, allocatable :: near_done(:)
-      !> Scratches
+      !> Newton scratch
       type(newton_scratch_type) :: nscratch
+      !> Finalize scratch
       type(finalize_scratch_type) :: fscratch
       !> Persistent per-anchor saddle cache across rounds of `solve_queue`
       type(saddle_cache_type) :: ext_saddles
       !> Rows appended by every chunk this worker processed
       type(projection_rows_type) :: rows
-      !> Anchors searched (window or extended search), and seeds solved, since `init`
+      !> Anchors searched (window or extended search) since `init`
       integer :: n_seeded = 0
+      !> Seeds solved since `init`
       integer :: n_seeds = 0
       !> Seeds of a grown ball skipped as solved from the smaller one, since `init`
       integer :: n_skipped = 0
@@ -517,7 +532,7 @@ contains
       end if
       do k = 1, size(slots)
          if (fs(k) < self%finalize%wleb_cut) cycle
-         call local%batch%begin_run(k, anchors(:, k), owners(k))
+         call local%batch%begin_run(k, slots(k), anchors(:, k), owners(k))
          call local%batch%append(anchors(:, k), 0.0_wp, icol)
       end do
       if (local%batch%n == 0) return
@@ -536,7 +551,7 @@ contains
 
       ! Only a fully open local point bounds the search by its window
       do r = 1, local%batch%nrun
-         k = local%batch%run_anchor(r)
+         k = local%batch%run_key(r)
          j = local%batch%run_start(r)
          jacc = 0
          if (local%batch%status(j) == point_accepted) jacc = j
@@ -652,13 +667,13 @@ contains
       nnear = 0
       nnear_seeds = 0
       do r = 1, local%batch%nrun
-         k = local%batch%run_anchor(r)
+         k = local%batch%run_key(r)
          j = local%batch%run_start(r)
          select case (local%next(r))
          case (next_finalize)
             call finish_anchor(local%batch, j, j, k)
          case (next_window)
-            call seed_anchor(local%jloc(r), r, k, local%radius(r))
+            call seed_anchor(local%jloc(r), k, local%radius(r))
          case default
             if (local%jloc(r) == 0) self%n_escalated = self%n_escalated + 1
             call queue_search(r, k, local%jloc(r), local%radius(r))
@@ -695,15 +710,19 @@ contains
          request%has_accepted = has_accepted
       end subroutine anchor_request
 
-      !> Seed the window ball of a fully open local point and open its pass-2 run,
-      !> flushing the batch first when full
+      !> Seed the window ball of a fully open local point and open its pass-2 run
+      !>
+      !> - flushes the batch first when full
       !>
       !> @param[in] jacc   Local column of the accepted local point
-      !> @param[in] r1     Local run index
       !> @param[in] k1     Anchor index within the chunk
       !> @param[in] radius Window radius behind the local point (Bohr)
-      subroutine seed_anchor(jacc, r1, k1, radius)
-         integer, intent(in) :: jacc, r1, k1
+      subroutine seed_anchor(jacc, k1, radius)
+         !> Local column of the accepted local point
+         integer, intent(in) :: jacc
+         !> Anchor index within the chunk
+         integer, intent(in) :: k1
+         !> Window radius behind the local point (Bohr)
          real(wp), intent(in) :: radius
          type(seed_request_type) :: request
          integer :: n_new, i
@@ -720,7 +739,7 @@ contains
             call flush_pass2()
             if (allocated(error)) return
          end if
-         call self%pass2%begin_run(k1, anchors(:, k1), owners(k1))
+         call self%pass2%begin_run(k1, slots(k1), anchors(:, k1), owners(k1))
          call self%pass2%append_copy(local%batch, jacc, icol)
          ! Seeds start with a zero multiplier
          do i = 1, self%scratch%n_points
@@ -900,7 +919,7 @@ contains
             run0 = self%passn%nrun + 1
             do ip = 1, npend
                e = pend(ip)
-               k1 = local%batch%run_anchor(self%queue(e)%run)
+               k1 = local%batch%run_key(self%queue(e)%run)
                limit = self%queue(e)%radius + self%queue(e)%reach
                s_last = self%queue(e)%next - 1
                do s = self%queue(e)%next, min(self%queue(e)%last, self%queue(e)%next + self%queue(e)%take - 1)
@@ -924,7 +943,7 @@ contains
                   j_first = self%passn%run_start(self%queue(e)%tail)
                   j_last = j_first + self%passn%run_len(self%queue(e)%tail) - 1
                end if
-               call self%passn%begin_run(e, anchors(:, k1), owners(k1))
+               call self%passn%begin_run(e, slots(k1), anchors(:, k1), owners(k1))
                if (self%queue(e)%tail > 0) then
                   do jn = j_first, j_last
                      if (self%passn%status(jn) == point_accepted) call self%passn%append_own(jn, icol)
@@ -956,8 +975,8 @@ contains
             ! copied columns from prior rounds and the local point were already checked
             if (.not. self%full_reach) then
                do rn = run0, self%passn%nrun
-                  e = self%passn%run_anchor(rn)
-                  k1 = local%batch%run_anchor(self%queue(e)%run)
+                  e = self%passn%run_key(rn)
+                  k1 = local%batch%run_key(self%queue(e)%run)
                   call anchor_record(self, slots(k1), anchors(:, k1), owners(k1), wlebs(k1), fs(k1), rec)
                   do jn = run_new_first(rn - run0 + 1), self%passn%run_start(rn) + self%passn%run_len(rn) - 1
                      if (self%passn%status(jn) /= point_accepted) cycle
@@ -973,7 +992,7 @@ contains
             nkeep = 0
             do ip = 1, npend
                e = pend(ip)
-               k1 = local%batch%run_anchor(self%queue(e)%run)
+               k1 = local%batch%run_key(self%queue(e)%run)
                more = self%queue(e)%next <= self%queue(e)%last
                if (more) then
                   more = norm2(self%near_seeds(:, self%queue(e)%next) - anchors(:, k1)) &
@@ -1024,7 +1043,7 @@ contains
             e = pend(ip)
             rn = self%queue(e)%tail
             if (rn == 0) cycle
-            call self%passn%begin_run(e, last%run_xyz(:, rn), last%run_owner(rn))
+            call self%passn%begin_run(e, last%run_id(rn), last%run_xyz(:, rn), last%run_owner(rn))
             do jn = last%run_start(rn), last%run_start(rn) + last%run_len(rn) - 1
                if (last%status(jn) == point_accepted) call self%passn%append_copy(last, jn, icol)
             end do
@@ -1069,7 +1088,7 @@ contains
             self%n_captured = self%n_captured + count(self%pass2%status(1:self%pass2%n) == point_captured)
          end if
          do r2 = 1, self%pass2%nrun
-            k2 = self%pass2%run_anchor(r2)
+            k2 = self%pass2%run_key(r2)
             first = self%pass2%run_start(r2)
             last = first + self%pass2%run_len(r2) - 1
             call finish_anchor(self%pass2, first, last, k2)

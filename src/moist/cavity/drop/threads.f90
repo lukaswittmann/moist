@@ -48,9 +48,9 @@ module moist_cavity_drop_threads
    !> Per-thread evaluator clones for one parallel grid loop
    !>
    !> `nthreads` is the single source of truth for the team size: it is read
-   !> from the shared context and **must** be pinned on the parallel region
-   !> with `num_threads(slots%nthreads)`, or a larger live team indexes the
-   !> slot arrays out of bounds
+   !> from the shared context (or given) and **must** be pinned on the parallel
+   !> region with `num_threads(slots%nthreads)`, or a larger live team indexes
+   !> the slot arrays out of bounds
    type :: drop_worker_slots_type
       !> Per-thread LSF evaluators, one per slot
       type(lsf_thread_slot), allocatable :: lsf(:)
@@ -60,7 +60,11 @@ module moist_cavity_drop_threads
       integer :: nthreads = 0
    contains
       !> Size the slots for a parallel region, before entering it
-      procedure :: init => worker_slots_init
+      generic :: init => init_context, init_count
+      !> Size the slots for the shared context's team
+      procedure, private :: init_context => worker_slots_init
+      !> Size the slots for a given team
+      procedure, private :: init_count => worker_slots_init_count
       !> Clone the evaluators of one slot, from the thread owning it
       procedure :: fill => worker_slots_fill
       !> Free the evaluators of one slot, from the thread owning it
@@ -117,12 +121,30 @@ contains
       !> Whether per-thread objectives are needed
       logical, intent(in), optional :: objective
 
-      self%nthreads = ctx%get_num_threads()
+      call worker_slots_init_count(self, ctx%get_num_threads(), objective)
+   end subroutine worker_slots_init
+
+   !> Size the per-thread slots for a given team
+   !>
+   !> - for a loop whose team size is not the context's, e.g. the seeder build
+   !>
+   !> @param[out] self      Worker slots
+   !> @param[in]  nthreads  Team size, at least one slot
+   !> @param[in]  objective Whether the slots carry per-thread objectives, default no
+   subroutine worker_slots_init_count(self, nthreads, objective)
+      !> Worker slots
+      class(drop_worker_slots_type), intent(out) :: self
+      !> Team size
+      integer, intent(in) :: nthreads
+      !> Whether per-thread objectives are needed
+      logical, intent(in), optional :: objective
+
+      self%nthreads = max(1, nthreads)
       allocate (self%lsf(self%nthreads))
       if (present(objective)) then
          if (objective) allocate (self%phi(self%nthreads))
       end if
-   end subroutine worker_slots_init
+   end subroutine worker_slots_init_count
 
    !> Clone the evaluators of one slot
    !>

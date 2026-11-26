@@ -2386,8 +2386,10 @@ contains
 
    end subroutine test_lsf_constructor_guards
 
-   !> Cavity constructors refuse each invalid DROP control and a radii handle
-   !> whose model was never set, and return no handle
+   !> Cavity constructors refuse invalid input and return no handle
+   !>
+   !> - each invalid DROP control, and a radii handle whose model was never set
+   !> - each refusal carries the native diagnostic
    subroutine test_cavity_constructor_guards(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
@@ -2397,11 +2399,19 @@ contains
       type(vp_radii), target :: radii
       !> Opaque handles
       type(c_ptr) :: verror, lsf, cavity
-      !> Expected diagnostics: seven option cases, then the two radii cases
-      character(len=48), parameter :: needles(9) = [character(len=48) :: &
-         & "Invalid DROP options", "Invalid DROP options", "Invalid DROP options", &
-         & "Invalid DROP options", "projection level must be 1, 2, 3 or 4", &
-         & "projection level must be 1, 2, 3 or 4", "projection level must be 1, 2, 3 or 4", &
+      !> Native parameter diagnostic, behind the entry point prefix
+      character(len=*), parameter :: invalid = &
+         & "[moist_new_drop_cavity] Invalid DROP numerical parameters: "
+      !> Expected diagnostics: eight option cases, then the two radii cases
+      character(len=112), parameter :: needles(10) = [character(len=112) :: &
+         & invalid//"tolerance must be finite and positive", &
+         & invalid//"rho_grid_h must be finite and positive", &
+         & "[moist_new_drop_cavity] Branch distance window must not be negative", &
+         & invalid//"projection maxiter must be positive", &
+         & invalid//"projection level must be 1, 2, 3 or 4", &
+         & invalid//"projection level must be 1, 2, 3 or 4", &
+         & invalid//"projection level must be 1, 2, 3 or 4", &
+         & invalid//"tolerance must be finite and positive", &
          & "[moist_new_drop_cavity] Radii are not initialized", &
          & "[moist_new_iswig_cavity] Radii are not initialized"]
       integer :: icase
@@ -2432,16 +2442,18 @@ contains
             options%proj_level = 5_c_int
          case (7)
             options%proj_level = -1_c_int
+         case (8)
+            options%tolerance = ieee_value(1.0_c_double, ieee_quiet_nan)
          case default
-            ! Cases 8 and 9 keep the default options
+            ! Cases 9 and 10 keep the default options
             continue
          end select
          select case (icase)
-         case (1:7)
+         case (1:8)
             cavity = drop_on_context(verror, lsf, c_null_ptr, c_loc(options))
-         case (8)
-            cavity = drop_on_context(verror, lsf, c_loc(radii), c_null_ptr)
          case (9)
+            cavity = drop_on_context(verror, lsf, c_loc(radii), c_null_ptr)
+         case (10)
             cavity = iswig_on_context(verror, c_loc(radii), c_null_ptr)
          case default
             error stop "test_api: unhandled case in test_cavity_constructor_guards"

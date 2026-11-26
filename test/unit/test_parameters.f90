@@ -33,6 +33,7 @@ module test_parameters
    use moist_model_continuum_component_pcm_nonlocal, only: model_continuum_component_nonlocal, new_component_nonlocal
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii
+   use moist_utils_format, only: to_string
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use test_helpers, only: expect_error, read_printout, printed_entry
    implicit none(type, external)
@@ -1097,7 +1098,6 @@ contains
                                                       .true., .false., .false., .false., &
                                                       .false., .false., .false., .false.], [4, 4])
       integer :: level
-      character(len=48) :: message
 
       do level = 1, 4
          call param%init_defaults()
@@ -1107,9 +1107,9 @@ contains
             call test_failed(error, err%message)
             return
          end if
-         write (message, "(a,i0)") "seed filters of level ", level
          call check(error, all([param%seed%filter_cone, param%seed%filter_grazing, param%seed%filter_back_facing, &
-                                param%seed%filter_focal] .eqv. expected(:, level)), trim(message))
+                                param%seed%filter_focal] .eqv. expected(:, level)), &
+                    "seed filters of level "//to_string(level))
          if (allocated(error)) return
       end do
 

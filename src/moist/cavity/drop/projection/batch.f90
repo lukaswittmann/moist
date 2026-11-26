@@ -85,8 +85,10 @@ module moist_cavity_drop_projection_batch
       integer, allocatable :: run_start(:)
       !> Columns in the run
       integer, allocatable :: run_len(:)
-      !> Caller's anchor index
-      integer, allocatable :: run_anchor(:)
+      !> Caller's own key of the run, opaque to the batch
+      integer, allocatable :: run_key(:)
+      !> Global anchor ID of the run, for messages only
+      integer, allocatable :: run_id(:)
       !> Owning atom of the anchor
       integer, allocatable :: run_owner(:)
       !> Anchor position (3, run_capacity)
@@ -199,7 +201,8 @@ contains
       if (allocated(self%run_of)) deallocate (self%run_of)
       if (allocated(self%run_start)) deallocate (self%run_start)
       if (allocated(self%run_len)) deallocate (self%run_len)
-      if (allocated(self%run_anchor)) deallocate (self%run_anchor)
+      if (allocated(self%run_key)) deallocate (self%run_key)
+      if (allocated(self%run_id)) deallocate (self%run_id)
       if (allocated(self%run_owner)) deallocate (self%run_owner)
       if (allocated(self%run_xyz)) deallocate (self%run_xyz)
       if (allocated(self%run_S)) deallocate (self%run_S)
@@ -218,20 +221,28 @@ contains
    !> Open the run of one anchor; later appends land in it
    !>
    !> @param[inout] self       Batch
-   !> @param[in]    anchor     Caller's anchor index
+   !> @param[in]    key        Caller's own key of the run, opaque to the batch
+   !> @param[in]    id         Global anchor ID, for messages only
    !> @param[in]    anchor_xyz Anchor position
    !> @param[in]    owner      Owning atom
-   subroutine batch_begin_run(self, anchor, anchor_xyz, owner)
+   subroutine batch_begin_run(self, key, id, anchor_xyz, owner)
+      !> Batch
       class(projection_batch_type), intent(inout) :: self
-      integer, intent(in) :: anchor
+      !> Caller's own key of the run, opaque to the batch
+      integer, intent(in) :: key
+      !> Global anchor ID, for messages only
+      integer, intent(in) :: id
+      !> Anchor position
       real(wp), intent(in) :: anchor_xyz(3)
+      !> Owning atom
       integer, intent(in) :: owner
 
       if (self%nrun + 1 > self%run_capacity) call self%reserve_runs(self%nrun + 1)
       self%nrun = self%nrun + 1
       self%run_start(self%nrun) = self%n + 1
       self%run_len(self%nrun) = 0
-      self%run_anchor(self%nrun) = anchor
+      self%run_key(self%nrun) = key
+      self%run_id(self%nrun) = id
       self%run_owner(self%nrun) = owner
       self%run_xyz(:, self%nrun) = anchor_xyz
       self%run_jet(self%nrun) = .false.
@@ -439,7 +450,8 @@ contains
       cap = grown_capacity(self%run_capacity, required)
       call grow_array(self%run_start, cap)
       call grow_array(self%run_len, cap)
-      call grow_array(self%run_anchor, cap)
+      call grow_array(self%run_key, cap)
+      call grow_array(self%run_id, cap)
       call grow_array(self%run_owner, cap)
       call grow_array(self%run_xyz, 3, cap)
       call grow_array(self%run_S, cap)

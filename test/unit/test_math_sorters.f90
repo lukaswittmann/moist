@@ -254,14 +254,17 @@ contains
       integer(int64), parameter :: shift = 4294967296_int64
       integer, allocatable :: orig(:)
       integer(int64), allocatable :: a(:)
-      integer :: is, ip, n
+      integer :: is, ip, n, ndeep
       !> Result of `label`
       character(len=:), allocatable :: tag
 
+      ndeep = 0
       do is = 1, size(sizes)
          n = sizes(is)
          do ip = 1, npattern
             orig = int_pattern(n, ip)
+            ! Few-valued, constant: depth limit reached, heap sort on constant slices only
+            if (n >= 1000 .and. (ip == 4 .or. ip == 5)) ndeep = ndeep + 1
             a = int(orig, int64)*shift - 7_int64
             call sort(a)
             call label(n, ip, tag)
@@ -270,6 +273,7 @@ contains
             if (allocated(error)) return
          end do
       end do
+      call check(error, ndeep > 0, "fixture never drives the 64-bit sort into its heap sort")
    end subroutine test_sort_int64_ascending
 
    !> Real introsort: ascending values on every fixture
@@ -299,12 +303,14 @@ contains
       call check(error, npart > 0, "fixture never reaches the partitions of sort")
    end subroutine test_sort_real_ascending
 
-   !> `reverse`: non-increasing values
+   !> `reverse`: non-increasing values, 64-bit keys beyond the default-integer range
    subroutine test_sort_reverse(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
+      integer(int64), parameter :: shift = 4294967296_int64
       integer, allocatable :: ia(:), iorig(:)
+      integer(int64), allocatable :: la(:)
       real(wp), allocatable :: ra(:), rorig(:)
       integer :: is, ip, n
       !> Result of `label`
@@ -319,6 +325,11 @@ contains
             call label(n, ip, tag)
             call check(error, all(ia == iorig(stable_reference_int(iorig, .true.))), &
                        "sort (integer, reverse) is not the descending order"//tag)
+            if (allocated(error)) return
+            la = int(iorig, int64)*shift - 7_int64
+            call sort(la, reverse=.true.)
+            call check(error, all(la == int(iorig(stable_reference_int(iorig, .true.)), int64)*shift - 7_int64), &
+                       "sort (64-bit integer, reverse) is not the descending order"//tag)
             if (allocated(error)) return
             rorig = real_pattern(n, ip)
             ra = rorig

@@ -372,8 +372,6 @@ Limitations
 
 - Results can change abruptly where a choice of the molecular frame or of the group is switched (see the warning above).
 - Linear molecules carry D\ :sub:`4h` or C\ :sub:`4v`, not the full linear group.
-- DROP: the octree seeding of the projection (levels 3 and 4, and the retry of level 1) still follows the coordinate axes.
-  Results are rotation invariant whenever the seeding finds every projection branch.
 - The C and Python interfaces do not expose the symmetry model yet.
 
 Available Cavities

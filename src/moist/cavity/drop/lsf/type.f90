@@ -998,6 +998,7 @@ contains
    !>
    !> @param[inout] self LSF instance
    subroutine lsf_base_reset_history(self)
+      !> LSF instance
       class(moist_cavity_drop_lsf_type), intent(inout) :: self
 
       ! Evaluations carry no state by default: `self` is deliberately unused

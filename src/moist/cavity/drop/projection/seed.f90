@@ -47,9 +47,10 @@ module moist_cavity_drop_projection_seed
    use mctc_env, only: error_type, fatal_error
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_projection_parameters, only: drop_seed_parameters_type
-   use moist_cavity_drop_projection_seed_lattice, only: key_bits, key_table_type, table_init, table_find, &
+   use moist_cavity_drop_threads, only: drop_worker_slots_type
+   use moist_cavity_drop_projection_seed_lattice, only: key_bits, key_bias, key_table_type, table_init, table_find, &
                                                        table_insert, lattice_key, segment_crossing, &
-                                                       build_probe_type, evaluate_slices, lattice_frame_type
+                                                       evaluate_slices, lattice_frame_type
    use moist_utils_mem, only: grow_array
    use moist_math_linalg_geometry, only: identity3, is_rotation
    use moist_math_linalg, only: setup_tangent_frame
@@ -61,8 +62,9 @@ module moist_cavity_drop_projection_seed
 
    public :: projection_seeder_type, seeder_scratch_type, seed_request_type, seed_build_type
 
-   !> Coarsest lattice spacing without and with a strong exclusion certificate (Bohr)
+   !> Coarsest lattice spacing without a strong exclusion certificate (Bohr)
    real(wp), parameter :: discovery_size = 1.0_wp
+   !> Coarsest lattice spacing with a strong exclusion certificate (Bohr)
    real(wp), parameter :: discovery_size_certified = 4.0_wp
    !> Maximum dense 3D mask entries (bytes) used during coarse volume discovery
    integer(int64), parameter :: max_mask_cells = 67108864_int64
@@ -70,8 +72,6 @@ module moist_cavity_drop_projection_seed
    integer, parameter :: build_chunk = 256
    !> Capped normal Newton steps of the retraction before the order-2 jet
    integer, parameter :: retract_steps = 2
-   !> Offset making a lattice coordinate non-negative
-   integer, parameter :: key_bias = 2**(key_bits - 1)
    !> Grazing filter: a sample farther than its spacing whose offset from the
    !> anchor makes `|d . n| / |d|` smaller than 0.20 is dropped (squared threshold)
    real(wp), parameter :: grazing_cos2 = 0.04_wp
@@ -109,16 +109,17 @@ module moist_cavity_drop_projection_seed
 
    !> What the seeder's build sees: the geometry and the search ahead
    type :: seed_build_type
-      !> Atom centers (3, nat)
+      !> Atom centers (3, nat), finite
       real(wp), allocatable :: centers(:, :)
       !> Atom radii (nat, Bohr)
       real(wp), allocatable :: radii(:)
-      !> Anchors the search pass will seed (3, n), in anchor order
+      !> Anchors the search pass will seed (3, n), in anchor order, finite
       real(wp), allocatable :: anchors(:, :)
-      !> Largest radius each such anchor's search may ask for (n, Bohr): `radius`
-      !> for a search of one ball, `reach` for an extended search
+      !> Largest radius each such anchor's search may ask for (n, Bohr), finite:
+      !> `radius` for a search of one ball, `reach` for an extended search;
+      !> unallocated, `reach` for every anchor
       real(wp), allocatable :: radius_max(:)
-      !> Largest search radius (Bohr)
+      !> Largest search radius (Bohr), positive and finite
       real(wp) :: reach = 0.0_wp
       !> Threads the build may use; the result must not depend on it
       integer :: nthreads = 1
@@ -146,22 +147,29 @@ module moist_cavity_drop_projection_seed
 
    !> Working state of one build
    type :: build_type
-      !> Level set clones of the build, one per thread
-      type(build_probe_type) :: probe
+      !> Level set clones of the build, one per thread, filled on first use
+      type(drop_worker_slots_type) :: slots
       !> Lattice origin and axes
       type(lattice_frame_type) :: frame
       !> Finest lattice spacing, `h 2^-refine_levels` (Bohr)
       real(wp) :: unit = 1.0_wp
       !> Coarse spacing `h_0` (Bohr)
       real(wp) :: h0 = 1.0_wp
-      !> Level of the sample size `h`, and the deepest level
+      !> Level of the sample size `h`
       integer :: m = 0
+      !> Deepest level
       integer :: depth = 0
       !> Lattice nodes
       type(node_set_type) :: nodes
-      !> Crossings: positions (3, :), edge lengths, edge midpoints (3, :) and axes
+      !> Crossings
       integer :: ncross = 0
-      real(wp), allocatable :: cross(:, :), cross_h(:), cross_mid(:, :)
+      !> Crossing positions (3, :)
+      real(wp), allocatable :: cross(:, :)
+      !> Edge length of each crossing (Bohr)
+      real(wp), allocatable :: cross_h(:)
+      !> Edge midpoint of each crossing (3, :)
+      real(wp), allocatable :: cross_mid(:, :)
+      !> Edge axis of each crossing
       integer, allocatable :: cross_axis(:)
    end type build_type
 
@@ -177,10 +185,16 @@ module moist_cavity_drop_projection_seed
       !> Whether the last request returned only seeds outside `request%pdist_inner`,
       !> so no seed of the inner ball is repeated
       logical :: shell_filtered = .false.
-      !> Candidate samples, their starts, squared distances and sort permutation
+      !> Candidate samples
       integer :: ncand = 0
-      integer, allocatable :: cand(:), cand_perm(:)
-      real(wp), allocatable :: cand_x0(:, :), cand_dist(:)
+      !> Sample index of each candidate
+      integer, allocatable :: cand(:)
+      !> Sort permutation of the candidates
+      integer, allocatable :: cand_perm(:)
+      !> Starting point of each kept candidate (3, :)
+      real(wp), allocatable :: cand_x0(:, :)
+      !> Squared distance of each kept start to the anchor (Bohr^2)
+      real(wp), allocatable :: cand_dist(:)
    end type seeder_scratch_type
 
    !> Build-first lattice seeder; built once, read by every thread
@@ -192,14 +206,14 @@ module moist_cavity_drop_projection_seed
       real(wp) :: sample_size = 1.0_wp
       !> Lattice levels below `h` for a cell without sign change
       integer :: refine_levels = 0
-      !> Seed filters ([[step_candidate]]); all off, every sample is kept:
-      !> tangent cone of an anchor with an accepted local point
+      !> Seed filter ([[step_candidate]]): tangent cone of an anchor with an
+      !> accepted local point; with all four filters off every sample is kept
       logical :: filter_cone = .false.
-      !> patches the anchor sees edge-on
+      !> Seed filter: patches the anchor sees edge-on
       logical :: filter_grazing = .false.
-      !> back-facing samples of an anchor with an accepted local point
+      !> Seed filter: back-facing samples of an anchor with an accepted local point
       logical :: filter_back_facing = .false.
-      !> samples beyond both focal centers of their patch
+      !> Seed filter: samples beyond both focal centers of their patch
       logical :: filter_focal = .false.
       !> Tangent-cone scale in units of `h (1 + r k_max)`
       real(wp) :: cone_scale = 1.5_wp
@@ -224,28 +238,33 @@ module moist_cavity_drop_projection_seed
       real(wp), allocatable :: kmax(:)
       !> Lattice spacing of each sample's edge (Bohr)
       real(wp), allocatable :: spacing(:)
-      !> Midpoint (3, nsample) and axis of each sample's edge; the four cells
-      !> around the edge decide whether a ball sees the sample
+      !> Midpoint of each sample's edge (3, nsample); the four cells around the
+      !> edge decide whether a ball sees the sample
       real(wp), allocatable :: edge_mid(:, :)
+      !> Axis of each sample's edge
       integer, allocatable :: edge_axis(:)
       !> Covering radius of the samples (Bohr)
       real(wp) :: cover = 0.0_wp
       !> Largest sample spacing (Bohr)
       real(wp) :: spacing_max = 0.0_wp
-      !> Bins: origin, edge, key table, first sample of each bin (bin order) and its end
+      !> Bin origin (Bohr)
       real(wp) :: bin_origin(3) = 0.0_wp
+      !> Bin edge (Bohr)
       real(wp) :: bin_size = 1.0_wp
+      !> Key table of the bins
       type(key_table_type) :: bins
+      !> First sample of each bin (bin order) and its end
       integer, allocatable :: bin_first(:)
 
       !* ---------------------------------- Tallies ---------------------------------- *!
 
       !> Cells of the last build that may hold surface but gave no seed, reported
       integer :: n_unresolved = 0
-      !> Order-0 node probes, crossings, order-1 and order-2 evaluations of the build
+      !> Order-0 node probes of the build
       integer :: n_probes = 0
-      integer :: n_cross = 0
+      !> Order-1 evaluations of the build
       integer :: n_order1 = 0
+      !> Order-2 evaluations of the build
       integer :: n_order2 = 0
       !> Bytes held by the built lattice
       integer(int64) :: lattice_bytes = 0_int64
@@ -266,7 +285,7 @@ module moist_cavity_drop_projection_seed
       module subroutine seeder_build(self, lsf, geometry, error)
          implicit none(type, external)
          class(projection_seeder_type), intent(inout) :: self
-         class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+         class(moist_cavity_drop_lsf_type), intent(in), target :: lsf
          type(seed_build_type), intent(in) :: geometry
          type(error_type), allocatable, intent(out) :: error
       end subroutine seeder_build
@@ -297,7 +316,7 @@ module moist_cavity_drop_projection_seed
       module subroutine evaluate_nodes(self, lsf, work, error)
          implicit none(type, external)
          type(projection_seeder_type), intent(inout) :: self
-         class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+         class(moist_cavity_drop_lsf_type), intent(in), target :: lsf
          type(build_type), intent(inout) :: work
          type(error_type), allocatable, intent(out) :: error
       end subroutine evaluate_nodes
@@ -319,7 +338,7 @@ module moist_cavity_drop_projection_seed
       module subroutine discover_volume(self, lsf, geometry, work, error)
          implicit none(type, external)
          type(projection_seeder_type), intent(inout) :: self
-         class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+         class(moist_cavity_drop_lsf_type), intent(in), target :: lsf
          type(seed_build_type), intent(in) :: geometry
          type(build_type), intent(inout) :: work
          type(error_type), allocatable, intent(out) :: error
@@ -329,7 +348,7 @@ module moist_cavity_drop_projection_seed
       module subroutine refine_cells(self, lsf, work, error)
          implicit none(type, external)
          type(projection_seeder_type), intent(inout) :: self
-         class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+         class(moist_cavity_drop_lsf_type), intent(in), target :: lsf
          type(build_type), intent(inout) :: work
          type(error_type), allocatable, intent(out) :: error
       end subroutine refine_cells
@@ -338,7 +357,7 @@ module moist_cavity_drop_projection_seed
       module subroutine retract_samples(self, lsf, work, error)
          implicit none(type, external)
          type(projection_seeder_type), intent(inout) :: self
-         class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+         class(moist_cavity_drop_lsf_type), intent(in), target :: lsf
          type(build_type), intent(inout) :: work
          type(error_type), allocatable, intent(out) :: error
       end subroutine retract_samples
@@ -363,7 +382,7 @@ module moist_cavity_drop_projection_seed
          implicit none(type, external)
          class(projection_seeder_type), intent(in) :: self
          type(seeder_scratch_type), intent(inout) :: scratch
-         class(moist_cavity_drop_lsf_type), intent(inout), target :: lsf
+         class(moist_cavity_drop_lsf_type), intent(in) :: lsf
          type(seed_request_type), intent(in) :: request
          type(error_type), allocatable, intent(out) :: error
       end subroutine seeder_seed

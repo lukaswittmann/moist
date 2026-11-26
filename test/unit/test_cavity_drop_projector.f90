@@ -513,7 +513,7 @@ contains
       !> search already walks Newton away from the maximum
       seed = [-rs - 0.05_wp, 0.0_wp, 0.0_wp]
       call batch%init(4, failed)
-      call batch%begin_run(1, anchor, 1)
+      call batch%begin_run(1, 1, anchor, 1)
       call batch%append(seed, 0.0_wp, icol)
       call newton_solve_batch(batch, fx%lsf, ncfg, fx%param%polish, fx%param%phi_alpha, scratch, failed)
       call check(error, .not. allocated(failed), "Newton succeeds")
@@ -2022,7 +2022,7 @@ contains
       ncfg%max_iter = 1
       call batch%init(4, failed)
       if (allocated(failed)) return
-      call batch%begin_run(1, anchor, 1)
+      call batch%begin_run(1, 1, anchor, 1)
       call batch%append([-rs - 0.05_wp, 0.02_wp, 0.0_wp], 0.0_wp, icol)
       call newton_solve_batch(batch, fx%lsf, ncfg, fx%param%polish, fx%param%phi_alpha, scratch, failed)
       if (allocated(failed)) return
@@ -2789,7 +2789,7 @@ contains
          call test_failed(error, failed%message)
          return
       end if
-      call batch%begin_run(1, anchor, 1)
+      call batch%begin_run(1, 1, anchor, 1)
       do j = 1, size(starts, 2)
          lambda = 0.0_wp
          if (present(lambdas)) lambda = lambdas(j)

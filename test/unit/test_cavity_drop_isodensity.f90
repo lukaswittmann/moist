@@ -6251,13 +6251,27 @@ contains
    end subroutine test_bad_callback_non_finite
 
    !> Finite density and gradient, one NaN in the Hessian when it is requested
+   !>
+   !> @param[in]  context Callback context, must be NULL
+   !> @param[in]  point   Evaluation point (Bohr), finite
+   !> @param[out] rho     Electron density, 1
+   !> @param[out] drho    Density spatial gradient, zero
+   !> @param[out] d2rho   Density spatial Hessian (Fortran (3,3), or NULL), NaN at (2, 3)
+   !> @param[out] d3rho   Density third spatial derivative (Fortran (3,3,3), or NULL), zero
    function nan_hessian_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
+      !> Callback context, must be NULL
       type(c_ptr), value :: context
+      !> Evaluation point (Bohr), finite
       real(c_double), intent(in) :: point(3)
+      !> Electron density, 1
       real(c_double), intent(out) :: rho
+      !> Density spatial gradient, zero
       real(c_double), intent(out) :: drho(3)
+      !> Density spatial Hessian (Fortran (3,3), or NULL), NaN at (2, 3)
       type(c_ptr), value :: d2rho
+      !> Density third spatial derivative (Fortran (3,3,3), or NULL), zero
       type(c_ptr), value :: d3rho
+      !> Zero on success, 1 for a non-NULL context or a NaN point
       integer(c_int) :: status
 
       real(c_double), pointer :: hptr(:, :), tptr(:, :, :)

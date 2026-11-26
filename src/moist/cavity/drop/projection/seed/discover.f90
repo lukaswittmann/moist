@@ -22,10 +22,15 @@ contains
    !> @param[inout] work     Build scratch
    !> @param[out]   error    Level set failure or lattice out of range
    module subroutine discover_volume(self, lsf, geometry, work, error)
+      !> Seeder (tallies)
       type(projection_seeder_type), intent(inout) :: self
-      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Level set (certificates)
+      class(moist_cavity_drop_lsf_type), intent(in), target :: lsf
+      !> Build input
       type(seed_build_type), intent(in) :: geometry
+      !> Build scratch
       type(build_type), intent(inout) :: work
+      !> Level set failure or lattice out of range
       type(error_type), allocatable, intent(out) :: error
 
       integer(int8), allocatable :: mask(:, :, :)
@@ -120,7 +125,7 @@ contains
                   idx = work%nodes%n
                   ijk = step*[ix + ox, iy + oy, iz + oz]
                   work%nodes%ijk(:, idx) = ijk
-                  call table_insert(work%nodes%table, lattice_key(ijk, key_bias), idx)
+                  call table_insert(work%nodes%table, lattice_key(ijk), idx)
                end do
             end do
          end do

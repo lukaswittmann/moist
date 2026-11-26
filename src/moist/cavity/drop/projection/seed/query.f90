@@ -22,14 +22,19 @@ contains
    !>
    !> @param[in]    self    Seeder (built)
    !> @param[inout] scratch Calling thread's scratch
-   !> @param[inout] lsf     Thread-local level set; its stationarity certificate only
-   !> @param[in]    request Anchor request
-   !> @param[out]   error   Seeder used before its build
+   !> @param[in]    lsf     Level set; its stationarity certificate only
+   !> @param[in]    request Anchor request, radius positive and finite
+   !> @param[out]   error   Invalid radius, seeder used before its build
    module subroutine seeder_seed(self, scratch, lsf, request, error)
+      !> Seeder (built)
       class(projection_seeder_type), intent(in) :: self
+      !> Calling thread's scratch
       type(seeder_scratch_type), intent(inout) :: scratch
-      class(moist_cavity_drop_lsf_type), intent(inout), target :: lsf
+      !> Level set; its stationarity certificate only
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Anchor request, radius positive and finite
       type(seed_request_type), intent(in) :: request
+      !> Invalid radius, seeder used before its build
       type(error_type), allocatable, intent(out) :: error
 
       real(wp) :: dx(3), x0(3), n_sph(3), nsph_len
@@ -42,6 +47,14 @@ contains
       scratch%shell_filtered = .false.
       ! `points` is allocated even when no seed follows
       if (.not. allocated(scratch%points)) allocate (scratch%points(3, 32))
+      if (.not. (request%pdist_start > 0.0_wp)) then
+         call fatal_error(error, "Lattice seeder: request radius must be positive")
+         return
+      end if
+      if (.not. ieee_is_finite(request%pdist_start)) then
+         call fatal_error(error, "Lattice seeder: request radius must be finite")
+         return
+      end if
       if (.not. self%built) then
          call fatal_error(error, "Lattice seeder: seed before build")
          return
@@ -50,7 +63,6 @@ contains
       if (self%nsample == 0) return
       scratch%reach = self%cover + self%spacing_max
 
-      if (.not. (request%pdist_start > 0.0_wp)) error stop "moist DROP lattice seeder: request without a radius"
       ! Samples of the cells meeting the ball (or outer shell)
       call ball_query(self, scratch, request%anchor, request%pdist_start, request%pdist_inner, lsf)
       n = scratch%ncand
@@ -104,11 +116,17 @@ contains
    !> @param[in]    inner   Inner excluded ball radius (Bohr), negative for full ball
    !> @param[in]    lsf     Level set whose stationarity certificate prunes bins
    subroutine ball_query(self, scratch, x_lab, radius, inner, lsf)
+      !> Seeder
       type(projection_seeder_type), intent(in) :: self
+      !> Scratch; kept candidates written
       type(seeder_scratch_type), intent(inout) :: scratch
+      !> Point (lab)
       real(wp), intent(in) :: x_lab(3)
+      !> Outer ball radius (Bohr)
       real(wp), intent(in) :: radius
+      !> Inner excluded ball radius (Bohr), negative for full ball
       real(wp), intent(in) :: inner
+      !> Level set whose stationarity certificate prunes bins
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
 
       integer :: lo(3), hi(3), ix, iy, iz, b, k
@@ -179,7 +197,7 @@ contains
                   d_max2 = dy_max2 + dx_max*dx_max
                   if (d_max2 < r_inner2_lo) cycle
                end if
-               b = table_find(self%bins, lattice_key([ix, iy, iz], key_bias))
+               b = table_find(self%bins, lattice_key([ix, iy, iz]))
                if (b == 0) cycle
                if (can_exclude) then
                   if (lsf%stationary_box_excluded(x_lab, self%frame%to_lab(center), half_lab, atom_lower=atom_lo, &
@@ -201,7 +219,9 @@ contains
    !> @param[inout] self Scratch
    !> @param[in]    k    Sample
    subroutine push_candidate(self, k)
+      !> Scratch
       type(seeder_scratch_type), intent(inout) :: self
+      !> Sample
       integer, intent(in) :: k
 
       integer :: cap
@@ -226,7 +246,9 @@ contains
    !> @param[inout] scratch Scratch, `points` allocated
    !> @param[in]    n       Required columns
    subroutine reserve_points(scratch, n)
+      !> Scratch, `points` allocated
       type(seeder_scratch_type), intent(inout) :: scratch
+      !> Required columns
       integer, intent(in) :: n
 
       if (size(scratch%points, 2) < n) call grow_array(scratch%points, 3, max(n, 2*size(scratch%points, 2)))
@@ -238,9 +260,13 @@ contains
    !> @param[in] v    Sample
    !> @param[in] x    Point
    pure function edge_box_distance_sq(self, v, x) result(dist2)
+      !> Seeder
       type(projection_seeder_type), intent(in) :: self
+      !> Sample
       integer, intent(in) :: v
+      !> Point
       real(wp), intent(in) :: x(3)
+      !> Squared distance (Bohr^2)
       real(wp) :: dist2
 
       real(wp) :: half(3), d(3)
@@ -281,16 +307,24 @@ contains
    !> @param[out] keep         Whether the sample survives
    !> @param[out] x0           Starting point (valid when `keep` is `.true.`)
    pure subroutine step_candidate(self, v, anchor, has_accepted, do_hor, n_sph, keep, x0)
+      !> Seeder
       type(projection_seeder_type), intent(in) :: self
+      !> Sample index
       integer, intent(in) :: v
+      !> Anchor position (3)
       real(wp), intent(in) :: anchor(3)
+      !> Whether the anchor already has an accepted local point
       logical, intent(in) :: has_accepted
+      !> Whether to drop back-facing samples
       logical, intent(in) :: do_hor
+      !> Unit outward anchor-sphere direction (`(anchor - owner_center)/r`)
       real(wp), intent(in) :: n_sph(3)
+      !> Whether the sample survives
       logical, intent(out) :: keep
+      !> Starting point (valid when `keep` is `.true.`)
       real(wp), intent(out) :: x0(3)
 
-      real(wp) :: q1(3), q2(3), d(3), nrm(3), sigma, g1, g2, m11, m12, m22, det, t(2), z
+      real(wp) :: q1(3), q2(3), d(3), nrm(3), sigma, g1, g2, m11, m12, m22, det, t(2), tn(2), z
       real(wp) :: tlen2, h, r2, g2_tan, thr, scale2
 
       keep = .true.
@@ -339,6 +373,12 @@ contains
       t(1) = -(m22*g1 - m12*g2)/det
       t(2) = -(-m12*g1 + m11*g2)/det
       tlen2 = t(1)*t(1) + t(2)*t(2)
+      if (.not. ieee_is_finite(tlen2)) then
+         ! Overflow at a tiny `det`: the direction from the numerators, length `h`
+         tn = [m22*g1 - m12*g2, -m12*g1 + m11*g2]
+         t = -tn*(h/norm2(tn))
+         tlen2 = t(1)*t(1) + t(2)*t(2)
+      end if
       ! The tangent step alone first, so `z` stays finite near a focal point
       if (tlen2 > h*h) then
          t = t*(h/sqrt(tlen2))

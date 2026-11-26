@@ -13,8 +13,11 @@ contains
    !> @param[in] work Build scratch
    !> @param[in] s    Level
    pure module function level_step(work, s) result(step)
+      !> Build scratch
       type(build_type), intent(in) :: work
+      !> Level
       integer, intent(in) :: s
+      !> Step in finest units
       integer :: step
 
       step = 2**(work%depth - s)
@@ -27,8 +30,11 @@ contains
    !> @param[in] work Build scratch
    !> @param[in] ijk  Finest-unit coordinates
    pure module function node_position(work, ijk) result(x)
+      !> Build scratch
       type(build_type), intent(in) :: work
+      !> Finest-unit coordinates
       integer, intent(in) :: ijk(3)
+      !> Lattice-frame position (Bohr)
       real(wp) :: x(3)
 
       x = work%frame%origin + work%unit*real(ijk, wp)
@@ -43,9 +49,13 @@ contains
    !> @param[inout] work  Build scratch
    !> @param[out]   error Level set failure
    module subroutine evaluate_nodes(self, lsf, work, error)
+      !> Seeder (tallies)
       type(projection_seeder_type), intent(inout) :: self
-      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Level set (certificates)
+      class(moist_cavity_drop_lsf_type), intent(in), target :: lsf
+      !> Build scratch
       type(build_type), intent(inout) :: work
+      !> Level set failure
       type(error_type), allocatable, intent(out) :: error
 
       real(wp), allocatable :: x(:, :)
@@ -58,7 +68,7 @@ contains
       do k = n0, n1
          x(:, k - n0 + 1) = work%frame%to_lab(node_position(work, work%nodes%ijk(:, k)))
       end do
-      call evaluate_slices(work%probe, lsf, x, 0, build_chunk, work%nodes%val(n0:n1), work%nodes%reached(n0:n1), &
+      call evaluate_slices(work%slots, lsf, x, 0, build_chunk, work%nodes%val(n0:n1), work%nodes%reached(n0:n1), &
                            error)
       if (allocated(error)) return
       do k = n0, n1
@@ -81,13 +91,15 @@ contains
    !> @param[inout] nodes Node set
    !> @param[in]    ijk   Finest-unit coordinates
    module subroutine add_node(nodes, ijk)
+      !> Node set
       type(node_set_type), intent(inout) :: nodes
+      !> Finest-unit coordinates
       integer, intent(in) :: ijk(3)
 
       integer(int64) :: key
       integer :: cap
 
-      key = lattice_key(ijk, key_bias)
+      key = lattice_key(ijk)
       if (table_find(nodes%table, key) > 0) return
       if (.not. allocated(nodes%ijk)) then
          allocate (nodes%ijk(3, 1024), nodes%val(1024), nodes%free(1024), nodes%reached(1024))
@@ -108,6 +120,7 @@ contains
    !>
    !> @param[out] error Refusal
    module subroutine range_error(error)
+      !> Refusal
       type(error_type), allocatable, intent(out) :: error
 
       call fatal_error(error, "Lattice seeder: the region does not fit the lattice keys; "// &

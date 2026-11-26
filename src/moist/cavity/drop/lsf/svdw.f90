@@ -4322,6 +4322,8 @@ contains
    !>   constant work per box, covering every possible subset of atoms in reach
    !> - outward-rounded interval arithmetic includes coordinate rounding
    !> - an inconclusive enclosure keeps the box for subdivision or refinement
+   !> - atom bounds: the supplied pair, else [[lsf_svdw_stationary_region_bounds]]
+   !>   over the box; one of the pair alone is inconclusive (box kept)
    !>
    !> @param[in] self       Positive-mixture SvdW model
    !> @param[in] anchor     Distance origin (3)
@@ -4349,10 +4351,14 @@ contains
       real(wp) :: blo(3), bhi(3), ulo(3), uhi(3), alo(3), ahi(3), vlo(3), vhi(3)
       !> Product and cross-product enclosures
       real(wp) :: plo, phi, qlo, qhi, cross_lo, cross_hi
-      !> Cyclic component indices and matching atom count
-      integer :: k, j, l, nfound
+      !> Cyclic component indices
+      integer :: k, j, l
+      !> Box admits exclusion under its own atom bounds
+      logical :: can_exclude
 
       excluded = .false.
+      ! Half a pair bounds nothing: inconclusive, the box stays
+      if (present(atom_lower) .neqv. present(atom_upper)) return
       if (.not. svdw_stationary_valid(self)) return
       if (.not. all(ieee_is_finite(anchor))) return
       if (.not. all(ieee_is_finite(center))) return
@@ -4368,15 +4374,12 @@ contains
       if (.not. all(ieee_is_finite(uhi))) return
       if (all(ulo <= 0.0_wp .and. uhi >= 0.0_wp)) return
 
-      if (present(atom_lower) .and. present(atom_upper)) then
+      if (present(atom_lower)) then
          alo = atom_lower
          ahi = atom_upper
-      else if (self%reach_current()) then
-         call self%cand_cells%query_box_bounds(blo, bhi, alo, ahi, nfound)
-         if (nfound == 0) return
       else
-         alo = self%center_lower
-         ahi = self%center_upper
+         call lsf_svdw_stationary_region_bounds(self, anchor, blo, bhi, alo, ahi, can_exclude)
+         if (.not. can_exclude) return
       end if
 
       vlo = nearest(anchor - ahi, -1.0_wp)

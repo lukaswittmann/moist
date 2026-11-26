@@ -20,9 +20,13 @@ contains
    !> @param[inout] work  Build scratch
    !> @param[out]   error Level set failure
    module subroutine refine_cells(self, lsf, work, error)
+      !> Seeder (tallies)
       type(projection_seeder_type), intent(inout) :: self
-      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Level set (certificates)
+      class(moist_cavity_drop_lsf_type), intent(in), target :: lsf
+      !> Build scratch
       type(build_type), intent(inout) :: work
+      !> Level set failure
       type(error_type), allocatable, intent(out) :: error
 
       integer, allocatable :: cells(:, :), corners0(:, :), next(:, :)
@@ -76,7 +80,7 @@ contains
             if (nnext + 8 > size(next, 2)) call grow_array(next, 3, max(nnext + 8, 2*size(next, 2)))
             do c = 0, 7
                nnext = nnext + 1
-               next(:, nnext) = base + [iand(c, 1), iand(ishft(c, -1), 1), iand(ishft(c, -2), 1)]
+               next(:, nnext) = base + corner_offset(c)
             end do
          end do
          if (s == 0 .and. allocated(corners0)) deallocate (corners0)
@@ -86,7 +90,6 @@ contains
          call move_alloc(next, cells)
          ncell = nnext
       end do
-      self%n_cross = work%ncross
    end subroutine refine_cells
 
    !> Level-0 cells: cubes whose eight corners are known level-0 nodes, by min corner
@@ -96,8 +99,13 @@ contains
    !> @param[out] corners0 Node indices of each cell's eight corners (8, ncell)
    !> @param[out] ncell    Cells
    subroutine level0_cells(work, cells, corners0, ncell)
+      !> Build scratch
       type(build_type), intent(in) :: work
-      integer, allocatable, intent(out) :: cells(:, :), corners0(:, :)
+      !> Min corners in level-0 coordinates (3, ncell)
+      integer, allocatable, intent(out) :: cells(:, :)
+      !> Node indices of each cell's eight corners (8, ncell)
+      integer, allocatable, intent(out) :: corners0(:, :)
+      !> Cells
       integer, intent(out) :: ncell
 
       integer :: k, step, j(3), corner(8)
@@ -123,19 +131,33 @@ contains
    !> @param[in]  step   Level step in finest units
    !> @param[out] corner Corner nodes, corner `1 + i + 2 j + 4 k`
    subroutine cell_corners(work, j, step, corner)
+      !> Build scratch
       type(build_type), intent(in) :: work
+      !> Min corner in level coordinates
       integer, intent(in) :: j(3)
+      !> Level step in finest units
       integer, intent(in) :: step
+      !> Corner nodes, corner `1 + i + 2 j + 4 k`
       integer, intent(out) :: corner(8)
 
       integer :: c
 
       do c = 0, 7
-         corner(c + 1) = table_find(work%nodes%table, &
-                                    lattice_key(step*(j + [iand(c, 1), iand(ishft(c, -1), 1), &
-                                                           iand(ishft(c, -2), 1)]), key_bias))
+         corner(c + 1) = table_find(work%nodes%table, lattice_key(step*(j + corner_offset(c))))
       end do
    end subroutine cell_corners
+
+   !> Offset of cell corner `1 + c` from the min corner, in steps: the bits `(i, j, k)` of `c`
+   !>
+   !> @param[in] c Corner, 0..7
+   pure function corner_offset(c) result(offset)
+      !> Corner, 0..7
+      integer, intent(in) :: c
+      !> Offset in steps, each 0 or 1
+      integer :: offset(3)
+
+      offset = [iand(c, 1), iand(ishft(c, -1), 1), iand(ishft(c, -2), 1)]
+   end function corner_offset
 
    !> Sign change and surface-free certificate of a cell
    !>
@@ -149,10 +171,15 @@ contains
    !> @param[out] change    Corners on both sides of the surface
    !> @param[out] certified Corner surface-free balls cover the cell
    subroutine classify_cell(work, corner, hs, change, certified)
+      !> Build scratch
       type(build_type), intent(in) :: work
+      !> Corner nodes
       integer, intent(in) :: corner(8)
+      !> Cell edge (Bohr)
       real(wp), intent(in) :: hs
+      !> Corners on both sides of the surface
       logical, intent(out) :: change
+      !> Corner surface-free balls cover the cell
       logical, intent(out) :: certified
 
       integer :: c, k, e
@@ -222,10 +249,15 @@ contains
    !> @param[in]    hs      Edge length (Bohr)
    !> @param[out]   crossed Whether the cell has a sign-change edge between reached corners
    subroutine cell_crossings(work, edges, corner, hs, crossed)
+      !> Build scratch
       type(build_type), intent(inout) :: work
+      !> Edges already seen, by doubled midpoint
       type(key_table_type), intent(inout) :: edges
+      !> Corner nodes
       integer, intent(in) :: corner(8)
+      !> Edge length (Bohr)
       real(wp), intent(in) :: hs
+      !> Whether the cell has a sign-change edge between reached corners
       logical, intent(out) :: crossed
 
       integer :: e, a, b
@@ -242,7 +274,7 @@ contains
          if ((va > 0.0_wp) .eqv. (vb > 0.0_wp)) cycle
          crossed = .true.
          ! Doubled midpoint: unique per edge over all levels, in range with the nodes
-         key = lattice_key(work%nodes%ijk(:, a) + work%nodes%ijk(:, b), key_bias)
+         key = lattice_key(work%nodes%ijk(:, a) + work%nodes%ijk(:, b))
          if (table_find(edges, key) > 0) cycle
          call table_insert(edges, key, 1)
          xa = node_position(work, work%nodes%ijk(:, a))
@@ -261,10 +293,15 @@ contains
    !> @param[in]    mid  Edge midpoint
    !> @param[in]    axis Edge axis
    subroutine push_crossing(work, x, hs, mid, axis)
+      !> Build scratch
       type(build_type), intent(inout) :: work
+      !> Crossing
       real(wp), intent(in) :: x(3)
+      !> Edge length (Bohr)
       real(wp), intent(in) :: hs
+      !> Edge midpoint
       real(wp), intent(in) :: mid(3)
+      !> Edge axis
       integer, intent(in) :: axis
 
       integer :: n

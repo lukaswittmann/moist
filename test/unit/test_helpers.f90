@@ -76,7 +76,7 @@
 module test_helpers
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan
    use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
-   use, intrinsic :: iso_fortran_env, only: int64
+   use, intrinsic :: iso_fortran_env, only: error_unit, int64
    use mctc_env, only: wp
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
@@ -1153,17 +1153,28 @@ contains
    !>
    !> - for `should_fail=.true.` tests, where test-drive inverts the outcome: a
    !>   clean return or a different error fails the test
+   !> - a different error, or a blank `expected`, is no match; the expected and
+   !>   actual messages go to `error_unit`, since test-drive reports no reason
    !>
    !> @param[out] error    Test failure, set only on the expected error
    !> @param[in]  err      Library error, possibly unallocated
    !> @param[in]  expected Text the message of the expected error contains
    subroutine expect_error(error, err, expected)
+      !> Test failure, set only on the expected error
       type(error_type), allocatable, intent(out) :: error
+      !> Library error, possibly unallocated
       type(moist_error_type), allocatable, intent(in) :: err
+      !> Text the message of the expected error contains
       character(len=*), intent(in) :: expected
 
       if (.not. allocated(err)) return
-      if (index(err%message, expected) > 0) call test_failed(error, err%message)
+      if (len_trim(expected) == 0) then
+         write (error_unit, "(a)") "expect_error: blank expected text, got """//err%message//""""
+      else if (index(err%message, expected) > 0) then
+         call test_failed(error, err%message)
+      else
+         write (error_unit, "(a)") "expect_error: expected """//expected//""", got """//err%message//""""
+      end if
    end subroutine expect_error
 
    !> 2-point central finite-difference formula:

@@ -345,11 +345,13 @@ if(MOIST_TESTS)
     math_grid_3d_integration
     math_grid_3d_invariance
     cavity_drop_phi cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference cavity_drop_lsf_screening
+    cavity_drop_lsf_scale
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_branching cavity_drop_nuclear_adjoint
     cavity_drop_potential
     cavity_drop_integration cavity_drop_anchor cavity_drop_projector
     cavity_drop_projection
     cavity_drop_properties
+    cavity_drop_threads
     cavity_iswig cavity_numsa cavity_symmetry cavity_grid cavity_mc cavity_reference cavity_adjoint
     cavity_mt_mesh cavity_mt_patches cavity_mt
     model_component_pcm_amat_kernel
@@ -402,7 +404,13 @@ if(MOIST_TESTS)
     bad_lattice_sample_size bad_lattice_refine_levels bad_lattice_build_before_init
     bad_lattice_seed_before_build bad_lattice_radii bad_lattice_reach bad_lattice_axes bad_lattice_key_range
     bad_lattice_sample_size_infinite bad_lattice_cone_scale bad_lattice_cone_scale_infinite
-    bad_lattice_anchors_without_atoms lattice_back_facing_needs_owner bad_batch_target_size
+    bad_lattice_anchors_without_atoms
+    bad_lattice_centers_nonfinite bad_lattice_reach_infinite bad_lattice_anchors_nonfinite
+    bad_lattice_radius_max_size bad_lattice_radius_max_nonfinite bad_lattice_depth
+    bad_lattice_request_radius bad_lattice_request_radius_infinite bad_lattice_slice_order
+    bad_lattice_slice_gradient bad_lattice_slice_hessian lattice_failed_build_clears
+    lattice_flat_gradient_finite_samples lattice_follows_grid_model_axes
+    lattice_back_facing_needs_owner bad_batch_target_size
     bad_newton_unreached_anchor worker_skipped_anchor_empty_outputs)
 
   # Start priority (ctest COST, higher first), ranked by CI runtime
