@@ -576,7 +576,7 @@ def test_model_parameters_text_lists_every_section(capsys) -> None:
     assert pressure[2:4] == ["2.50E-04", "Eh/bohr^3"] and pressure[-1] == "GPa"
     # 2.5e-4 Eh/bohr^3 is 7.355 GPa
     assert float(pressure[-2]) == approx(7.355, abs=1.0e-3)
-    assert any(line.split()[:3] == ["Number", "of", "Leb."] and "26" in line for line in lines)
+    assert any(line.split()[:2] == ["Lebedev", "points"] and "26" in line for line in lines)
 
     model.print_parameters()
     assert capsys.readouterr().out == text

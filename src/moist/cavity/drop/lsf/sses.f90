@@ -48,6 +48,8 @@ module moist_cavity_drop_lsf_sses
       procedure :: active_atom
       !> Unbounded screening offset
       procedure :: screening_offset
+      !> Print the SSES settings
+      procedure :: print_parameters
       !> Physical smoothing length
       procedure :: length_scale
       !> Atomic partition availability
@@ -1339,5 +1341,18 @@ contains
          end do
       end do
    end subroutine normalized_f01_rA
+
+   !> Print the SSES settings
+   !>
+   !> @param[in] self  LSF instance
+   !> @param[in] unit  Output unit (default `output_unit`)
+   !> @param[in] level Verbosity level of the printout (default: all)
+   subroutine print_parameters(self, unit, level)
+      class(moist_cavity_drop_lsf_sses_type), intent(in) :: self
+      integer, intent(in), optional :: unit
+      integer, intent(in), optional :: level
+
+      call self%param%print(unit=unit, level=level)
+   end subroutine print_parameters
 
 end module moist_cavity_drop_lsf_sses

@@ -28,15 +28,15 @@ Output
 The verbosity of the context sets how much MOIST prints.
 A host calls MOIST in every SCF iteration and geometry step, so each level also bounds how often it prints:
 
-== ============== ===========================================================
+== ============== ==============================================================================================================
 0  silent         nothing
 1  minimal        header block and results, once per run
 2  normal         settings relevant to a calculation, a summary per geometry
-3  detailed       every setting and per-geometry tables
-4  solver summary one block per inner solve, e.g. the DROP projection
-5  solver trace   per-iteration and per-point lines of inner solves
-6  debug          everything; the debug stream itself needs ``debug``
-== ============== ===========================================================
+3  detailed       the remaining settings and per-geometry tables
+4  solver summary numerical internals, one block per inner solve, e.g. the DROP projection
+5  solver detail  additional statistics of inner solves
+6  debug          solver trace: per-iteration and per-point lines of inner solves; the debug stream itself needs ``debug``
+== ============== ==============================================================================================================
 
 Level 2 is the default of the Fortran, C and Python context and suits a production calculation.
 It prints nothing inside the host's SCF iterations, only once per run and once per geometry.

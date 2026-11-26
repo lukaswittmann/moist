@@ -3,8 +3,9 @@
 !> - `to_string`: inline scalar rendering, trimmed; `(i0)` and `(g0)` without a format
 !> - `print_wrapped`: word-wrapped text output at a given column width
 !> - `value_to_string`: polymorphic scalar for pretty printers, zero as `0.0`
-!> - `fixed_fmt`, `exp_fmt`, `int_fmt`: default descriptors from a field width
+!> - `fixed_fmt`, `exp_fmt`, `int_fmt`, `logical_fmt`: default descriptors from a field width
 !> - `magnitude_real_fmt`: fixed or exponential descriptor by the size of a value
+!> - `value_fmt`: descriptor for a polymorphic scalar by its type
 !>
 !> No deferred-length character results: gfortran keeps the hidden result
 !> length of such a call in static storage, even under `-fopenmp`, so threads
@@ -13,7 +14,7 @@ module moist_utils_format
    implicit none(type, external)
    private
    public :: to_string, print_wrapped
-   public :: value_to_string, fixed_fmt, exp_fmt, int_fmt, magnitude_real_fmt
+   public :: value_to_string, fixed_fmt, exp_fmt, int_fmt, logical_fmt, magnitude_real_fmt, value_fmt
 
    !> Format a scalar into a trimmed, left-adjusted string
    interface to_string
@@ -224,6 +225,7 @@ contains
    !> - integers of every kind, `real32`, `real64`, logical and character
    !> - a real zero gives `0.0`, placed where the descriptor puts the units digit
    !> - character values are copied, `fmt` unused
+   !> - a logical under an `A` descriptor gives `yes` or `no`, otherwise `T` or `F`
    !>
    !> @param[in]  val Scalar value
    !> @param[in]  fmt Fortran format without outer parentheses
@@ -261,7 +263,15 @@ contains
          end if
          write (buf, "("//trim(fmt)//")") val
       type is (logical)
-         write (buf, "("//trim(fmt)//")") val
+         if (scan(adjustl(fmt), "Aa") == 1) then
+            if (val) then
+               write (buf, "("//trim(fmt)//")") "yes"
+            else
+               write (buf, "("//trim(fmt)//")") "no"
+            end if
+         else
+            write (buf, "("//trim(fmt)//")") val
+         end if
       type is (character(*))
          buf = val
       class default
@@ -367,5 +377,61 @@ contains
          fmt = fmt_real
       end if
    end subroutine magnitude_real_fmt
+
+   !> Logical descriptor `Aw`, as wide as the integer field of [[int_fmt]]
+   !>
+   !> - [[value_to_string]] writes `yes`/`no` under it, right-aligned with the
+   !>   integers of the same base width
+   !>
+   !> @param[in]  width Base field width of the reals
+   !> @param[out] fmt   Descriptor
+   subroutine logical_fmt(width, fmt)
+      !> Base field width of the reals
+      integer, intent(in) :: width
+      !> Descriptor
+      character(:), allocatable, intent(out) :: fmt
+
+      call int_fmt(width, fmt)
+      fmt = "A"//fmt(2:)
+   end subroutine logical_fmt
+
+   !> Descriptor for a scalar by its type
+   !>
+   !> - integers take `fmt_int`, reals [[magnitude_real_fmt]], logicals
+   !>   `fmt_logical`, anything else `A`
+   !>
+   !> @param[in]  val         Value to print
+   !> @param[in]  fmt_int     Integer descriptor
+   !> @param[in]  fmt_real    Fixed-point descriptor
+   !> @param[in]  fmt_exp     Exponential descriptor
+   !> @param[in]  fmt_logical Logical descriptor
+   !> @param[out] fmt         Selected descriptor
+   subroutine value_fmt(val, fmt_int, fmt_real, fmt_exp, fmt_logical, fmt)
+      !> Value to print
+      class(*), intent(in) :: val
+      !> Descriptors per type
+      character(*), intent(in) :: fmt_int, fmt_real, fmt_exp, fmt_logical
+      !> Selected descriptor
+      character(:), allocatable, intent(out) :: fmt
+
+      select type (val)
+      type is (integer(int8))
+         fmt = fmt_int
+      type is (integer(int16))
+         fmt = fmt_int
+      type is (integer(int32))
+         fmt = fmt_int
+      type is (integer(int64))
+         fmt = fmt_int
+      type is (real(real32))
+         call magnitude_real_fmt(real(val, real64), fmt_real, fmt_exp, fmt)
+      type is (real(real64))
+         call magnitude_real_fmt(val, fmt_real, fmt_exp, fmt)
+      type is (logical)
+         fmt = fmt_logical
+      class default
+         fmt = "A"
+      end select
+   end subroutine value_fmt
 
 end module moist_utils_format

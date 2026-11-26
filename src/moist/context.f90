@@ -23,10 +23,12 @@
 !>   0  silent          nothing (warnings always print)
 !>   1  minimal         header block and results, once per run
 !>   2  normal          key parameters once per run, a summary per geometry
-!>   3  detailed        all parameters and per-geometry tables
-!>   4  solver summary  one block per inner solve (DROP projection, ...)
-!>   5  solver trace    per-iteration and per-point lines of inner solves
-!>   6  debug           everything; the debug stream itself needs `debug`
+!>   3  detailed        the remaining parameters and per-geometry tables
+!>   4  solver summary  numerical internals (DROP switching windows), one block
+!>                      per inner solve (DROP projection, ...)
+!>   5  solver detail   additional statistics of inner solves
+!>   6  debug           solver trace: per-iteration and per-point lines of inner
+!>                      solves; the debug stream itself needs `debug`
 !>
 module moist_context
    use, intrinsic :: iso_fortran_env, only: output_unit, error_unit

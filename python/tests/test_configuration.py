@@ -652,7 +652,7 @@ def test_gostshyp_registered_parameter_printout():
     assert all(len(found) == 1 for found in rows.values())
     assert float(rows["regularization_start"][0][-1]) == 1e-12
     assert float(rows["regularization_end"][0][-1]) == 1e-10
-    assert rows["suppress_negative_amplitudes"][0][-1] == "F"
+    assert rows["suppress_negative_amplitudes"][0][-1] == "no"
 
 
 @pytest.mark.parametrize("lsf", [moist.SvdW(), moist.CFC()])

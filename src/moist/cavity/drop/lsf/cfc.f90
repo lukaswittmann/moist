@@ -379,6 +379,8 @@ module moist_cavity_drop_lsf_cfc
       procedure, public :: vjp_f1_rad => lsf_vjp_f1_rad
       !> Exact radial offset where the CFC contribution equals the threshold
       procedure, public :: screening_offset => lsf_screening_offset
+      !> Print the CFC settings
+      procedure, public :: print_parameters => lsf_print_parameters
       !> Surface-free radius from the value: `|S|/L`, fade on `|tau(S)|`
       procedure, public :: exclusion_radius => lsf_exclusion_radius
       !> Surface-free radius around every unreached point (fade on)
@@ -4322,5 +4324,18 @@ contains
       if (allocated(self%mol%sdf)) deallocate (self%mol%sdf)
       if (allocated(self%mol%pdb)) deallocate (self%mol%pdb)
    end subroutine finalize_lsf_cfc
+
+   !> Print the CFC settings
+   !>
+   !> @param[in] self  LSF instance
+   !> @param[in] unit  Output unit (default `output_unit`)
+   !> @param[in] level Verbosity level of the printout (default: all)
+   subroutine lsf_print_parameters(self, unit, level)
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      integer, intent(in), optional :: unit
+      integer, intent(in), optional :: level
+
+      call self%param%print(unit=unit, level=level)
+   end subroutine lsf_print_parameters
 
 end module moist_cavity_drop_lsf_cfc

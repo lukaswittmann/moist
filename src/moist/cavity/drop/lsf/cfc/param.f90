@@ -157,19 +157,26 @@ contains
 
    !> Print the CFC shape parameters in the verbose cavity diagnostics
    !>
+   !> - level 2: the exponents, coupling and power; level 4: the fade
+   !>
    !> @param[in] self  CFC parameter instance
    !> @param[in] unit  Output unit (default `output_unit`); callers holding a run
    !>                  context pass `ctx%unit` so this honours a log file
-   subroutine print_lsf_cfc_param(self, unit)
+   !> @param[in] level Verbosity level of the printout (default: all)
+   subroutine print_lsf_cfc_param(self, unit, level)
       class(moist_cavity_drop_lsf_cfc_param_type), intent(in) :: self
       !> Output unit override
       integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
       type(prettyprinter) :: pp
-      !> Effective output unit
-      integer :: iu
+      !> Effective output unit and level
+      integer :: iu, lvl
 
       iu = output_unit
       if (present(unit)) iu = unit
+      lvl = huge(1)
+      if (present(level)) lvl = level
 
       pp = new_prettyprinter(unit=iu)
       call pp%push("Implicit surface (CFC):")
@@ -177,8 +184,8 @@ contains
       call pp%kv("Pair exponent (a2)", self%a2)
       call pp%kv("Pair coupling (c)", self%c)
       call pp%kv("Pair power (m)", self%m)
-      call pp%kv("Fade", self%fade_enabled)
-      if (self%fade_enabled) then
+      if (lvl >= 4) call pp%kv("Fade", self%fade_enabled)
+      if (lvl >= 4 .and. self%fade_enabled) then
          call pp%kv("Fade start", self%fade_start, "e-folds")
          call pp%kv("Fade width", self%fade_width, "e-folds")
          if (self%a2 < 0.0_wp) then

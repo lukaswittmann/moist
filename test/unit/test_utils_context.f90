@@ -651,9 +651,9 @@ contains
          end if
          if (index(line, "Log file") > 0) saw_log = index(line, path) > 0
          if (index(line, "Debug ") > 0 .and. index(line, "Debug file") == 0) then
-            saw_debug = line(len_trim(line):len_trim(line)) == "F"
+            saw_debug = line(len_trim(line) - 1:len_trim(line)) == "no"
          end if
-         if (index(line, "Detailed profiling") > 0) saw_profile = line(len_trim(line):len_trim(line)) == "F"
+         if (index(line, "Detailed profiling") > 0) saw_profile = line(len_trim(line) - 1:len_trim(line)) == "no"
          if (index(line, "Start time") > 0) saw_time = index(line, start_time) > 0
       end do
       close (override)

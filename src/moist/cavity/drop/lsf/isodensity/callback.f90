@@ -114,6 +114,8 @@ module moist_cavity_drop_lsf_isodensity_callback
       procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
       procedure, public :: vjp_f1_rA_batch => lsf_vjp_f1_rA_batch
       procedure, public :: screening_offset => lsf_screening_offset
+      !> Print the isodensity settings
+      procedure, public :: print_parameters => lsf_print_parameters
       procedure, public :: exclusion_radius => lsf_exclusion_radius
       procedure, public :: density_adjoint_factor => lsf_density_adjoint_factor
       procedure, public :: check_surface => lsf_check_surface
@@ -584,5 +586,18 @@ contains
 
       call self%core%check_surface(xyz, projected, error)
    end subroutine lsf_check_surface
+
+   !> Print the isodensity settings
+   !>
+   !> @param[in] self  LSF instance
+   !> @param[in] unit  Output unit (default `output_unit`)
+   !> @param[in] level Verbosity level of the printout (default: all)
+   subroutine lsf_print_parameters(self, unit, level)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      integer, intent(in), optional :: unit
+      integer, intent(in), optional :: level
+
+      call self%param%print(unit=unit, level=level)
+   end subroutine lsf_print_parameters
 
 end module moist_cavity_drop_lsf_isodensity_callback

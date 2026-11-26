@@ -298,6 +298,8 @@ module moist_cavity_drop_lsf_base
       !> Exact radial offset from the atom surface at which this LSF's
       !> contribution equals `screening_threshold`
       procedure(lsf_screening_offset_iface), deferred :: screening_offset
+      !> Print the level-set settings for a verbosity level
+      procedure(lsf_print_parameters_iface), deferred :: print_parameters
       !> Geometric bound query 1 of 2: how far a *surface* can be from a point
       !> with a known LSF value (see the "Two geometric-bound queries" note above)
       procedure :: exclusion_radius => lsf_base_exclusion_radius
@@ -582,6 +584,19 @@ module moist_cavity_drop_lsf_base
          real(wp), intent(in) :: radius
          real(wp) :: offset
       end function lsf_screening_offset_iface
+
+      !> Print the level-set settings
+      !>
+      !> @param[in] self  LSF instance
+      !> @param[in] unit  Output unit (default `output_unit`)
+      !> @param[in] level Verbosity level of the printout (default: all)
+      subroutine lsf_print_parameters_iface(self, unit, level)
+         import :: moist_cavity_drop_lsf_type
+         implicit none(type, external)
+         class(moist_cavity_drop_lsf_type), intent(in) :: self
+         integer, intent(in), optional :: unit
+         integer, intent(in), optional :: level
+      end subroutine lsf_print_parameters_iface
 
    end interface
 

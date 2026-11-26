@@ -2,7 +2,7 @@
 module test_utils_format
    use, intrinsic :: iso_fortran_env, only: int32, int64, real64
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   use moist_utils_format, only: to_string
+   use moist_utils_format, only: to_string, logical_fmt, value_fmt, value_to_string
    implicit none(type, external)
    private
 
@@ -20,7 +20,8 @@ contains
                   new_unittest("int64_as_i0", test_int64_as_i0), &
                   new_unittest("real_as_g0", test_real_as_g0), &
                   new_unittest("real_with_format", test_real_with_format), &
-                  new_unittest("failed_write", test_failed_write) &
+                  new_unittest("failed_write", test_failed_write), &
+                  new_unittest("descriptor_by_type", test_descriptor_by_type) &
                   ]
 
    end subroutine collect_utils_format
@@ -109,5 +110,50 @@ contains
       if (allocated(error)) return
       call check(error, to_string(1.0_real64, "(f6.2"), "*", "unbalanced parentheses")
    end subroutine test_failed_write
+
+   !> Each scalar type selects its descriptor; logicals print as words aligned with integers
+   subroutine test_descriptor_by_type(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Selected descriptor and rendered text
+      character(len=:), allocatable :: fmt_logical, fmt, text, text_int
+
+      call logical_fmt(16, fmt_logical)
+      call check(error, fmt_logical, "A9", "logical descriptor as wide as I9")
+      if (allocated(error)) return
+
+      call value_fmt(3_int32, "I9", "F16.6", "ES16.2", fmt_logical, fmt)
+      call check(error, fmt, "I9", "int32 takes the integer descriptor")
+      if (allocated(error)) return
+      call value_fmt(3_int64, "I9", "F16.6", "ES16.2", fmt_logical, fmt)
+      call check(error, fmt, "I9", "int64 takes the integer descriptor")
+      if (allocated(error)) return
+      call value_fmt(0.5_real64, "I9", "F16.6", "ES16.2", fmt_logical, fmt)
+      call check(error, fmt, "F16.6", "moderate real takes the fixed descriptor")
+      if (allocated(error)) return
+      call value_fmt(1.0e-10_real64, "I9", "F16.6", "ES16.2", fmt_logical, fmt)
+      call check(error, fmt, "ES16.2", "small real takes the exponential descriptor")
+      if (allocated(error)) return
+      call value_fmt("x", "I9", "F16.6", "ES16.2", fmt_logical, fmt)
+      call check(error, fmt, "A", "character falls back to A")
+      if (allocated(error)) return
+      call value_fmt(.true., "I9", "F16.6", "ES16.2", fmt_logical, fmt)
+      call check(error, fmt, "A9", "logical takes the logical descriptor")
+      if (allocated(error)) return
+
+      ! The word ends in the units column of an integer
+      call value_to_string(7_int32, "I9", text_int)
+      call value_to_string(.true., fmt, text)
+      call check(error, text, repeat(" ", 6)//"yes", "true as yes")
+      if (allocated(error)) return
+      call check(error, len(text), len(text_int), "yes ends in the units column")
+      if (allocated(error)) return
+      call value_to_string(.false., fmt, text)
+      call check(error, text, repeat(" ", 7)//"no", "false as no")
+      if (allocated(error)) return
+      ! An L descriptor keeps T and F
+      call value_to_string(.false., "L3", text)
+      call check(error, text, "  F", "L descriptor writes F")
+   end subroutine test_descriptor_by_type
 
 end module test_utils_format

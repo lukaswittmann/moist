@@ -83,13 +83,18 @@ contains
 
    !> Print physical parameters
    !>
-   !> @param[in] self Parameter values
-   !> @param[in] unit Output unit override
-   subroutine print(self, unit)
+   !> - every SSES setting is a normal one, printed at any level
+   !>
+   !> @param[in] self  Parameter values
+   !> @param[in] unit  Output unit override
+   !> @param[in] level Verbosity level of the printout, unused (shared signature)
+   subroutine print(self, unit, level)
       !> Parameter values
       class(moist_cavity_drop_lsf_sses_param_type), intent(in) :: self
       !> Output unit override
       integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
       type(prettyprinter) :: pp
       integer :: iu
 

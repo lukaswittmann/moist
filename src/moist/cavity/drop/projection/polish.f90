@@ -11,7 +11,7 @@
 !> included, with batched Newton passes
 !>
 !> Run context read only, shared by the worker threads: traces gated by
-!> verbosity 5 or `debug`, written straight to `ctx%unit` inside the
+!> verbosity 6 (`debug` raises to it), written straight to `ctx%unit` inside the
 !> context's own `moist_context_io` critical; no timers, warnings or debug
 !> messages
 !>
@@ -130,7 +130,7 @@ contains
    !>     the previous one, so its first visit of a saddle never waits, and the
    !>     outcome depends on the column order of the batch only
    !>
-   !> @param[in]    ctx          Run context, read only; traces at verbosity 5
+   !> @param[in]    ctx          Run context, read only; traces at verbosity 6
    !> @param[inout] batch        Points with Newton's final jets
    !> @param[inout] lsf          Thread-local level set
    !> @param[in]    cfg          Polish settings
@@ -251,7 +251,7 @@ contains
                end if
             end if
 
-            if (ctx%verbosity(5)) then
+            if (ctx%verbosity(6)) then
                !$omp critical (moist_context_io)
                write (ctx%unit, "(1x,i12,1x,a)") batch%run_anchor(irun), &
                   "[optimality] Saddle point detected, attempting escape ..."
@@ -317,7 +317,7 @@ contains
                   if (.not. kkt) then
                      batch%status(j) = point_failed
                   else if (saddle) then
-                     if (ctx%verbosity(5)) then
+                     if (ctx%verbosity(6)) then
                         !$omp critical (moist_context_io)
                         write (ctx%unit, "(1x,i12,1x,a)") batch%run_anchor(batch%run_of(j)), &
                            "[optimality] Failed to escape saddle point!"
@@ -369,7 +369,7 @@ contains
                                            jet_grad=batch%gradS(:, j), jet_hess=batch%hessS(:, j), &
                                            lsf_error=error, mu_min_out=mu_min, mu_max_out=mu_max)
          if (.not. allocated(class_error)) return
-         if (ctx%verbosity(5)) then
+         if (ctx%verbosity(6)) then
             !$omp critical (moist_context_io)
             write (ctx%unit, "(1x,i12,1x,a,a)") batch%run_anchor(irun), "[optimality] ", trim(class_error%message)
             !$omp end critical (moist_context_io)
@@ -479,7 +479,7 @@ contains
       end if
       norm_grad_S = norm2(grad_S)
       if (norm_grad_S < cfg%kkt_tol_grad) then
-         if (ctx%verbosity(5)) then
+         if (ctx%verbosity(6)) then
             !$omp critical (moist_context_io)
             write (ctx%unit, "(1x,i12,1x,a,es12.4)") id, &
                "[KKT check] Degenerate LSF gradient ||grad_S|| = ", norm_grad_S
@@ -502,7 +502,7 @@ contains
       end if
 
       if (res_feas > cfg%kkt_tol_feas .or. res_stat > cfg%kkt_tol_stat) then
-         if (ctx%verbosity(5) .or. ctx%debug) then
+         if (ctx%verbosity(6)) then
             !$omp critical (moist_context_io)
             write (ctx%unit, "(1x,i12,1x,a,es12.4,a,es12.4)") id, &
                "[KKT check] Not at KKT point: |S| = ", res_feas, ", ||dL|| = ", res_stat

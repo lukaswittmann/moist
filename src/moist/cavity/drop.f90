@@ -25,9 +25,7 @@ module moist_cavity_drop
    use moist_cavity_drop_gaussian, only: moist_cavity_drop_iswig, new_iswig
    use moist_math_adjacency, only: adjacency_list_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
-   use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
-   use moist_cavity_drop_lsf_sses, only: moist_cavity_drop_lsf_sses_type
    use moist_cavity_drop_lsf_isodensity, only: &
       moist_cavity_drop_lsf_isodensity_internal_type, &
       moist_cavity_drop_lsf_isodensity_callback_type
@@ -658,20 +656,7 @@ contains
       call pp%blank()
 
       ! The level set the cavity is built on, then the DROP settings
-      if (allocated(self%lsf_model)) then
-         select type (m => self%lsf_model)
-         type is (moist_cavity_drop_lsf_svdw_type)
-            call m%param%print(unit=iu)
-         type is (moist_cavity_drop_lsf_cfc_type)
-            call m%param%print(unit=iu)
-         type is (moist_cavity_drop_lsf_sses_type)
-            call m%param%print(unit=iu)
-         type is (moist_cavity_drop_lsf_isodensity_internal_type)
-            call m%param%print(unit=iu, level=lvl)
-         type is (moist_cavity_drop_lsf_isodensity_callback_type)
-            call m%param%print(unit=iu, level=lvl)
-         end select
-      end if
+      if (allocated(self%lsf_model)) call self%lsf_model%print_parameters(unit=iu, level=lvl)
       call self%param%print(unit=iu, level=lvl)
 
    end subroutine print_parameters_drop

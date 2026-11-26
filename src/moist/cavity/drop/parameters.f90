@@ -587,11 +587,15 @@ contains
 
    !> Print current parameter values
    !>
-   !> @param[in] self Parameter container to display
-   !> @param[in] unit Output unit (default `output_unit`); callers holding a run
-   !>                 context pass `ctx%unit` so this honours a log file
-   !> @param[in] level Verbosity level; below 3 only the normal settings print
-   !>                  (default: all)
+   !> - level 2: Lebedev points, main tolerance, projection level
+   !> - level 3: projection, seed, branching and screening settings, the
+   !>   optional properties
+   !> - level 4: the switching windows
+   !>
+   !> @param[in] self  Parameter container to display
+   !> @param[in] unit  Output unit (default `output_unit`); callers holding a run
+   !>                  context pass `ctx%unit` so this honours a log file
+   !> @param[in] level Verbosity level of the printout (default: all)
    subroutine print_parameters(self, unit, level)
       class(moist_cavity_drop_parameters_type), intent(in) :: self
       !> Output unit override
@@ -599,35 +603,66 @@ contains
       !> Verbosity level of the printout
       integer, intent(in), optional :: level
       type(prettyprinter) :: pp
-      !> Effective output unit
-      integer :: iu
-      !> Whether the detailed settings print
-      logical :: detailed
+      !> Effective output unit and level
+      integer :: iu, lvl
+      !> Names of the optional properties switched on
+      character(len=:), allocatable :: props
 
       iu = output_unit
       if (present(unit)) iu = unit
-      detailed = .true.
-      if (present(level)) detailed = level >= 3
+      lvl = huge(1)
+      if (present(level)) lvl = level
 
       pp = new_prettyprinter(unit=iu)
 
       call pp%push("DROP Parameters:")
-
-      call pp%push("Discretization:")
-      call pp%kv("Number of Leb. points", self%num_leb)
-      call pp%pop()
-
-      call pp%push("Tolerance:")
+      call pp%kv("Lebedev points", self%num_leb)
       call pp%kv("Main tolerance", self%tolerance)
-      if (detailed) then
-         call pp%kv("Projection tol.", self%solve%tol)
-         call pp%kv("Screening threshold", self%screening_threshold)
-         call pp%kv("Weight cutoff", self%finalize%wleb_cut)
-         call pp%kv("Branch sep. cutoff", self%branch%sep_cut)
-      end if
-      call pp%pop()
+      call pp%kv("Projection level", self%proj_level, self%proj_level_label())
 
-      if (detailed) then
+      if (lvl >= 3) then
+         call pp%push("Projection:")
+         call pp%kv("Tolerance", self%solve%tol)
+         call pp%kv("Maximum iterations", self%solve%max_iter)
+         call pp%kv("Objective alpha", self%phi_alpha)
+         call pp%kv("Batch size", self%batch_size)
+         call pp%pop()
+
+         call pp%push("Seeds:")
+         call pp%kv("Spacing", self%seed%seed_size, "Bohr")
+         call pp%kv("Tangent cone filter", self%seed%filter_cone)
+         if (self%seed%filter_cone) call pp%kv("Tangent cone scale", self%seed%cone_scale)
+         call pp%kv("Grazing filter", self%seed%filter_grazing)
+         call pp%kv("Back-facing filter", self%seed%filter_back_facing)
+         call pp%kv("Focal filter", self%seed%filter_focal)
+         call pp%pop()
+
+         call pp%push("Branching:")
+         call pp%kv("Reach on", self%branch%reach_on, "Bohr")
+         call pp%kv("Reach off", self%branch%reach_off, "Bohr")
+         call pp%kv("Max. distance excess", self%branch%dpdist_max, "Bohr")
+         call pp%kv("Separation cutoff", self%branch%sep_cut)
+         call pp%pop()
+
+         call pp%push("Screening:")
+         call pp%kv("Threshold", self%screening_threshold)
+         call pp%kv("Point weight cutoff", self%finalize%wleb_cut)
+         call pp%kv("Full cell scan below", self%cell_grid_full_scan_below, "atoms")
+         call pp%pop()
+
+         props = ""
+         if (self%do_grid_density) props = props//", grid density"
+         if (self%do_curvature) props = props//", curvature"
+         if (self%do_normal) props = props//", normals"
+         if (self%do_atomarea) props = props//", atom areas"
+         if (len(props) == 0) then
+            call pp%kv("Optional properties", "none")
+         else
+            call pp%kv("Optional properties", props(3:))
+         end if
+      end if
+
+      if (lvl >= 4) then
          call pp%push("Switching:")
          call pp%kv("f_crit off", self%w_0ls_off)
          call pp%kv("f_crit on", self%w_0ls_on)
@@ -635,59 +670,15 @@ contains
          call pp%kv("f_foc on", self%w_0tra_on)
          call pp%kv("f_hor off", self%w_0hor_off)
          call pp%kv("f_hor on", self%w_0hor_on)
+         call pp%kv("iSwiG xi_born", self%iswig_xi_born)
          call pp%kv("Wleb switch level", self%wleb_prune_level)
          if (self%finalize%wleb_prune) then
             call pp%kv("Wleb switch off", self%finalize%wleb_prune_off)
             call pp%kv("Wleb switch on", self%finalize%wleb_prune_on)
          end if
          call pp%pop()
-
-         call pp%push("Gaussians:")
-         call pp%kv("xi_born", self%iswig_xi_born)
-         call pp%pop()
-
-         call pp%push("Objective function:")
-         call pp%kv("Alpha", self%phi_alpha)
-         call pp%pop()
-      end if
-
-      call pp%push("Projection settings:")
-      call pp%kv("Projection level", self%proj_level, self%proj_level_label())
-      if (detailed) then
-         call pp%kv("Maximum iterations", self%solve%max_iter)
-         call pp%kv("Seed spacing", self%seed%seed_size, "Bohr")
-         call pp%push("Seed filters:")
-         if (self%seed%filter_cone) then
-            call pp%kv("Tangent cone", self%seed%cone_scale)
-         else
-            call pp%kv("Tangent cone", "off")
-         end if
-         call pp%kv("Grazing", self%seed%filter_grazing)
-         call pp%kv("Back-facing", self%seed%filter_back_facing)
-         call pp%kv("Focal", self%seed%filter_focal)
-         call pp%pop()
-         call pp%kv("Batch size", self%batch_size)
       end if
       call pp%pop()
-
-      if (detailed) then
-         call pp%push("Branching:")
-         call pp%kv("Max. distance excess", self%branch%dpdist_max, "Bohr")
-         call pp%kv("Reach on", self%branch%reach_on, "Bohr")
-         call pp%kv("Reach off", self%branch%reach_off, "Bohr")
-         call pp%pop()
-
-         call pp%push("Screening:")
-         call pp%kv("Cell grid full-scan below", self%cell_grid_full_scan_below, "atoms")
-         call pp%pop()
-
-         call pp%push("Optional properties:")
-         call pp%kv("Grid point density", self%do_grid_density)
-         call pp%kv("Curvature", self%do_curvature)
-         call pp%kv("Surface normals", self%do_normal)
-         call pp%kv("Atom areas", self%do_atomarea)
-         call pp%pop()
-      end if
 
    end subroutine print_parameters
 

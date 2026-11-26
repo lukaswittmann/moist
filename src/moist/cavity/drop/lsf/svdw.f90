@@ -380,6 +380,8 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: vjp_f1_rad => lsf_vjp_f1_rad
       !> Atom reach: the fade band end, or the threshold offset with the fade off
       procedure, public :: screening_offset => lsf_screening_offset
+      !> Print the SvdW settings
+      procedure, public :: print_parameters => lsf_print_parameters
       !> Surface-free radius from the value: `|S|`, or `|tau(S)|` with the fade on
       procedure, public :: exclusion_radius => lsf_svdw_exclusion_radius
       !> Surface-free radius around every unreached point (fade on)
@@ -4457,5 +4459,18 @@ contains
       if (allocated(self%mol%sdf)) deallocate (self%mol%sdf)
       if (allocated(self%mol%pdb)) deallocate (self%mol%pdb)
    end subroutine finalize_lsf_svdw
+
+   !> Print the SvdW settings
+   !>
+   !> @param[in] self  LSF instance
+   !> @param[in] unit  Output unit (default `output_unit`)
+   !> @param[in] level Verbosity level of the printout (default: all)
+   subroutine lsf_print_parameters(self, unit, level)
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      integer, intent(in), optional :: unit
+      integer, intent(in), optional :: level
+
+      call self%param%print(unit=unit, level=level)
+   end subroutine lsf_print_parameters
 
 end module moist_cavity_drop_lsf_svdw

@@ -146,28 +146,37 @@ contains
 
    !> Print the SvdW shape parameters in the verbose cavity diagnostics
    !>
+   !> - level 2: smoothing `k`; level 3: the 1b/2b/3b smoothing; level 4: the fade
+   !>
    !> @param[in] self  SvdW parameter instance
    !> @param[in] unit  Output unit (default `output_unit`); callers holding a run
    !>                  context pass `ctx%unit` so this honours a log file
-   subroutine print_lsf_svdw_param(self, unit)
+   !> @param[in] level Verbosity level of the printout (default: all)
+   subroutine print_lsf_svdw_param(self, unit, level)
       class(moist_cavity_drop_lsf_svdw_param_type), intent(in) :: self
       !> Output unit override
       integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
       type(prettyprinter) :: pp
-      !> Effective output unit
-      integer :: iu
+      !> Effective output unit and level
+      integer :: iu, lvl
 
       iu = output_unit
       if (present(unit)) iu = unit
+      lvl = huge(1)
+      if (present(level)) lvl = level
 
       pp = new_prettyprinter(unit=iu)
       call pp%push("Implicit surface (SvdW):")
       call pp%kv("Smoothing (k)", self%blend_k)
-      call pp%kv("Smoothing (1b)", self%blend_1b)
-      call pp%kv("Smoothing (2b)", self%blend_2b)
-      call pp%kv("Smoothing (3b)", self%blend_3b)
-      call pp%kv("Fade", self%fade_enabled)
-      if (self%fade_enabled) then
+      if (lvl >= 3) then
+         call pp%kv("Smoothing (1b)", self%blend_1b)
+         call pp%kv("Smoothing (2b)", self%blend_2b)
+         call pp%kv("Smoothing (3b)", self%blend_3b)
+      end if
+      if (lvl >= 4) call pp%kv("Fade", self%fade_enabled)
+      if (lvl >= 4 .and. self%fade_enabled) then
          call pp%kv2("Fade start", self%fade_start, "e-folds", 3.0_wp*self%fade_start/self%blend_k, "Bohr")
          call pp%kv2("Fade width", self%fade_width, "e-folds", 3.0_wp*(self%fade_start + self%fade_width)/ &
                        self%blend_k, "Bohr")

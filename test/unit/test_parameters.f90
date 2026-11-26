@@ -286,10 +286,10 @@ contains
       call drop%print_parameters(unit)
       call read_printout(unit, lines, nline)
       close (unit)
-      call check(error, printed_entry(lines, "Number of Leb. points", "194"), &
+      call check(error, printed_entry(lines, "Lebedev points", "194"), &
          & "verbosity 1 omits the normal DROP settings")
       if (allocated(error)) return
-      call check(error, .not. printed_entry(lines, "Projection tol.", ""), "verbosity 1 lists the detailed DROP settings")
+      call check(error, .not. printed_entry(lines, "Tolerance", ""), "verbosity 1 lists the detailed DROP settings")
       call ctx%delete()
    end subroutine test_print_levels
 
@@ -329,16 +329,23 @@ contains
       call new_cavity_drop(drop, default_cpcm_radii(), svdw, err, param, ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call require_cavity(drop, [character(len=32) :: "Projection tol.", "Wleb switch off", "xi_born", &
-         "Seed spacing", "Max. distance excess", "Cell grid full-scan below", "Surface normals"], error)
+      call require_cavity(drop, [character(len=32) :: "Tolerance", "Spacing", "Max. distance excess", &
+         "Full cell scan below", "Optional properties", "Smoothing (1b)", "Smoothing (3b)"], error, &
+         normal=[character(len=32) :: "Smoothing (k)"])
+      if (allocated(error)) return
+      ! The switching windows and the level-set fade print only from level 4
+      call require_level4(drop, [character(len=32) :: "f_crit off", "iSwiG xi_born", "Wleb switch off", &
+         "Fade", "Fade start"], error)
       if (allocated(error)) return
 
       call cfc%new()
       call new_cavity_drop(drop, default_cpcm_radii(), cfc, err, ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call require_cavity(drop, [character(len=32) :: "Projection tol."], error, &
+      call require_cavity(drop, [character(len=32) :: "Tolerance"], error, &
          normal=[character(len=32) :: "Atomic exponent (a1)"])
+      if (allocated(error)) return
+      call require_level4(drop, [character(len=32) :: "Fade"], error)
       if (allocated(error)) return
 
       call rho%new(c_null_funptr, c_null_ptr, moist_cavity_drop_lsf_isodensity_param_type(log_grad_out=6.0_wp))
@@ -425,6 +432,38 @@ contains
          close (unit)
          call compare_levels(lines2, lines3, detailed, error, normal)
       end subroutine require_cavity
+
+      !> Print a cavity at levels 3 and 4 and require entries only at level 4
+      !>
+      !> @param[in] cavity Constructed cavity
+      !> @param[in] entries Entries printed only from level 4
+      !> @param[out] error Test failure
+      subroutine require_level4(cavity, entries, error)
+         !> Constructed cavity
+         class(cavity_type), intent(in) :: cavity
+         !> Entries printed only from level 4
+         character(len=*), intent(in) :: entries(:)
+         !> Test failure
+         type(error_type), allocatable, intent(out) :: error
+         !> Printed lines per level
+         character(len=128) :: lines3(128), lines4(128)
+         !> Line count, scratch unit and entry index
+         integer :: nline, unit, i
+
+         open (newunit=unit, status="scratch", action="readwrite")
+         call cavity%print_parameters(unit, level=3)
+         call read_printout(unit, lines3, nline)
+         close (unit)
+         open (newunit=unit, status="scratch", action="readwrite")
+         call cavity%print_parameters(unit, level=4)
+         call read_printout(unit, lines4, nline)
+         close (unit)
+         do i = 1, size(entries)
+            call check(error, .not. printed_entry(lines3, trim(entries(i)), "") .and. &
+               printed_entry(lines4, trim(entries(i)), ""), more="level 4 only: "//trim(entries(i)))
+            if (allocated(error)) return
+         end do
+      end subroutine require_level4
 
       !> Print a component at levels 2 and 3 and compare the detailed entries
       !>

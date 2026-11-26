@@ -1,7 +1,6 @@
 module moist_utils_prettyprint
-   use, intrinsic :: iso_fortran_env, only: output_unit, int8, int16, int32, int64, &
-     & real32, real64
-   use moist_utils_format, only: value_to_string, fixed_fmt, exp_fmt, int_fmt, magnitude_real_fmt
+   use, intrinsic :: iso_fortran_env, only: output_unit, real64
+   use moist_utils_format, only: value_to_string, fixed_fmt, exp_fmt, int_fmt, logical_fmt, value_fmt
    implicit none(type, external)
    private
    public :: prettyprinter, new_prettyprinter
@@ -91,12 +90,13 @@ contains
       if (.not. allocated(self%fmt_int)) call int_fmt(self%fmt_len, self%fmt_int)
       if (.not. allocated(self%fmt_real)) call fixed_fmt(self%fmt_len, 6, self%fmt_real)
       if (.not. allocated(self%fmt_exp)) call exp_fmt(self%fmt_len, 2, self%fmt_exp)
-      if (.not. allocated(self%fmt_logical)) self%fmt_logical = "L1"
+      if (.not. allocated(self%fmt_logical)) call logical_fmt(self%fmt_len, self%fmt_logical)
 
       if (present(fmt_len)) then
          if (.not. present(fmt_int)) call int_fmt(self%fmt_len, self%fmt_int)
          if (.not. present(fmt_real)) call fixed_fmt(self%fmt_len, 6, self%fmt_real)
          if (.not. present(fmt_exp)) call exp_fmt(self%fmt_len, 2, self%fmt_exp)
+         if (.not. present(fmt_logical)) call logical_fmt(self%fmt_len, self%fmt_logical)
       end if
 
       if (present(fmt_int)) self%fmt_int = trim(fmt_int)
@@ -225,10 +225,10 @@ contains
          if (use_exp) then
             eff_fmt = self%fmt_exp
          else
-            call default_fmt(self, val, eff_fmt)
+            call value_fmt(val, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt)
          end if
       else
-         call default_fmt(self, val, eff_fmt)
+         call value_fmt(val, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt)
       end if
       call value_to_string(val, eff_fmt, vstr)
 
@@ -306,10 +306,10 @@ contains
          if (use_exp1) then
             eff_fmt1 = self%fmt_exp
          else
-            call default_fmt(self, val1, eff_fmt1)
+            call value_fmt(val1, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt1)
          end if
       else
-         call default_fmt(self, val1, eff_fmt1)
+         call value_fmt(val1, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt1)
       end if
 
       if (present(fmt2)) then
@@ -318,10 +318,10 @@ contains
          if (use_exp2) then
             eff_fmt2 = self%fmt_exp
          else
-            call default_fmt(self, val2, eff_fmt2)
+            call value_fmt(val2, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt2)
          end if
       else
-         call default_fmt(self, val2, eff_fmt2)
+         call value_fmt(val2, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt2)
       end if
 
       call value_to_string(val1, eff_fmt1, vstr1)
@@ -411,10 +411,10 @@ contains
          if (use_exp1) then
             eff_fmt1 = self%fmt_exp
          else
-            call default_fmt(self, val1, eff_fmt1)
+            call value_fmt(val1, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt1)
          end if
       else
-         call default_fmt(self, val1, eff_fmt1)
+         call value_fmt(val1, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt1)
       end if
 
       if (present(fmt2)) then
@@ -423,10 +423,10 @@ contains
          if (use_exp2) then
             eff_fmt2 = self%fmt_exp
          else
-            call default_fmt(self, val2, eff_fmt2)
+            call value_fmt(val2, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt2)
          end if
       else
-         call default_fmt(self, val2, eff_fmt2)
+         call value_fmt(val2, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt2)
       end if
 
       if (present(fmt3)) then
@@ -435,10 +435,10 @@ contains
          if (use_exp3) then
             eff_fmt3 = self%fmt_exp
          else
-            call default_fmt(self, val3, eff_fmt3)
+            call value_fmt(val3, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt3)
          end if
       else
-         call default_fmt(self, val3, eff_fmt3)
+         call value_fmt(val3, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt3)
       end if
 
       call value_to_string(val1, eff_fmt1, vstr1)
@@ -473,7 +473,7 @@ contains
       write (self%iu, "(A)") line
    end subroutine kvvv
 
-   !> Print a finished work step with its wall time: `label ...  done     12.34 s`
+   !> Print a finished work step with its wall time: `label ... done (12.34s)`
    !>
    !> @param[inout] self    Pretty printer instance
    !> @param[in]    desc    Step name
@@ -483,38 +483,12 @@ contains
       character(*), intent(in) :: desc
       real(real64), intent(in) :: seconds
 
-      character(len=32) :: state
+      character(len=32) :: time
 
       if (.not. self%active) return
-      write (state, "(' done',f12.2,' s')") seconds
-      call self%kv(desc, trim(state))
+      ! Fixed width keeps the leading zero, which F0.d may drop
+      write (time, "(f20.2)") seconds
+      call self%kv(desc, "done ("//trim(adjustl(time))//"s)")
    end subroutine step
-
-   subroutine default_fmt(self, val, fmt)
-      class(prettyprinter), intent(in) :: self
-      class(*), intent(in) :: val
-      character(:), allocatable, intent(out) :: fmt
-
-      select type (val)
-      type is (integer(int8))
-         fmt = self%fmt_int
-      type is (integer(int16))
-         fmt = self%fmt_int
-      type is (integer(int32))
-         fmt = self%fmt_int
-      type is (integer(int64))
-         fmt = self%fmt_int
-      type is (real(real32))
-         call magnitude_real_fmt(real(val, kind=real64), self%fmt_real, self%fmt_exp, fmt)
-      type is (real(real64))
-         call magnitude_real_fmt(val, self%fmt_real, self%fmt_exp, fmt)
-      type is (logical)
-         fmt = self%fmt_logical
-      type is (character(*))
-         fmt = "A"
-      class default
-         fmt = "A"
-      end select
-   end subroutine default_fmt
 
 end module moist_utils_prettyprint

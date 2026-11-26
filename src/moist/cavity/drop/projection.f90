@@ -266,7 +266,7 @@ contains
             " anchors had seeds but no converged surface point and were dropped"
          call self%ctx%warning("DROP projection: "//trim(report))
       end if
-      if (n_lost + n_unseeded > 0 .and. self%ctx%verbosity(5)) then
+      if (n_lost + n_unseeded > 0 .and. self%ctx%verbosity(6)) then
          do ia = 1, nmax_anchor
             if (.not. lost(ia)) cycle
             if (unseeded(ia)) then
