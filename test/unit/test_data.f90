@@ -2,6 +2,7 @@
 module test_data
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type, fatal_error
+   use mctc_io_codata2018, only: standard_atmosphere
    use mctc_io_symbols, only: to_symbol
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
 
@@ -743,7 +744,7 @@ contains
       if (allocated(error)) return
       call check(error, system%temperature, 298.15_wp, thr=thr, more="default temperature")
       if (allocated(error)) return
-      call check(error, system%pressure_si, 101325.0_wp, thr=thr, more="default pressure")
+      call check(error, system%pressure_si, standard_atmosphere, thr=thr, more="default pressure")
       if (allocated(error)) return
       call check(error, system%solvent%molar_mass_si > 0.0_wp, "solvent molar mass must be positive")
       if (allocated(error)) return

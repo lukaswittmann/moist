@@ -60,7 +60,11 @@ MOIST aims at reusable solvation models and infrastructure; contributions should
   - ASCII-only in source and comments.
 - Report failures through `error_type`/`fatal_error` from `mctc_env` rather than silently returning defaults.
 - Keep code thread-safe under OpenMP (`-Dopenmp=true`); avoid `save`d state.
-- Python code (`python/moist/`) supports Python 3.10 and newer.
+
+### Strings
+
+- No function should return a deferred-length character (`character(len=:), allocatable` or `pointer`); threads can race and can corrupt or overrun the result ([GCC PR 113797](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=113797)).
+- Convert numbers with `to_string` from `moist_utils_format` (`(i0)` / `(g0)` without a format, e.g. `to_string(x, "(es9.2)")`).
 
 ### APIs
 

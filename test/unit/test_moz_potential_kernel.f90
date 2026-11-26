@@ -7,6 +7,7 @@
 module test_moz_potential_kernel
    use mctc_env, only: wp, moist_error => error_type
    use mctc_io, only: structure_type, new
+   use mctc_io_constants, only: pi
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type, coupling_view_type
    use moist_channels_response, only: response_type
@@ -35,8 +36,6 @@ module test_moz_potential_kernel
    public :: weights_1d, functional_1d, tables_1d, tables_3d, adjoint_3d
    public :: lb
 
-   !> Pi
-   real(wp), parameter :: pi = acos(-1.0_wp)
    !> Solute coordinates on integer offsets from their centroid, away from the half-integer grid nodes, bohr
    real(wp), parameter :: solute_xyz(3, 3) = reshape([-1.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 1.0_wp, 0.0_wp, &
       & 0.0_wp, -1.0_wp, 0.0_wp], [3, 3])

@@ -5,6 +5,7 @@ module moist_cavity
    use moist_cavity_mt, only: cavity_type_mt, new_cavity_mt
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_cavity_drop_lsf_sses, only: moist_cavity_drop_lsf_sses_type
    implicit none(type, external)
    private
 
@@ -14,4 +15,5 @@ module moist_cavity
    public :: cavity_type_mt, new_cavity_mt
    public :: moist_cavity_drop_lsf_svdw_type
    public :: moist_cavity_drop_lsf_cfc_type
+   public :: moist_cavity_drop_lsf_sses_type
 end module moist_cavity

@@ -1,9 +1,11 @@
+subdir('grid')
 subdir('drop')
 subdir('mt')
 
 srcs += files(
   'type.f90',
-  'surface_adjoint.f90',
+  'grid.f90',
+  'adjoint.f90',
   'diagnostic.f90',
   'numsa.f90',
   'bornzeta.f90',

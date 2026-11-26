@@ -12,7 +12,7 @@ module test_moz_potential_ec
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type
    use moist_model_moz_potential, only: moz_potential_type, ec_charges_type, custom_lj_type, new_custom_lj
-   use test_helpers, only: check_moist_error, fd4_scalar, fd4_offsets
+   use test_helpers, only: expect_error, check_moist_error, fd4_scalar, fd4_offsets
    use test_moz_potential_kernel, only: make_solute, make_solvent, make_grid, make_potential, &
       & sigma_u, eps_u, sigma_v, eps_v, q_v, weights_3d, check_close
    implicit none(type, external)
@@ -514,28 +514,6 @@ contains
       call check(error, sum(q), mol%charge, more="total charge broken at a penalty kink", thr=1.0e-12_wp)
       if (allocated(error)) return
    end subroutine check_bounds_fit
-
-   !> Fail an expected-failure test only on the targeted library error
-   !>
-   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
-   !>   verdict: a raised test failure passes, a clean return fails
-   !> - Fails the test only when `err` names `expected`; no error or a
-   !>   different one returns cleanly, so the test is reported as failed
-   !>
-   !> @param[out] error     test failure, set only on the expected error
-   !> @param[in]  err       library error, possibly unallocated
-   !> @param[in]  expected  substring the expected error message must contain
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(moist_error), allocatable, intent(in) :: err
-      !> Substring the expected error message must contain
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (index(err%message, expected) > 0) call test_failed(error, err%message)
-   end subroutine expect_error
 
    !> Upper bounds that sum below the total charge are refused when the term is updated
    subroutine check_bad_upper_bounds(error)

@@ -88,8 +88,7 @@ if(MOIST_OPENMP)
 endif()
 find_package(Threads REQUIRED)
 
-# C++ FFT backend (ducc0 subset + shim) and FINUFFT on top of it, as OBJECT
-# libraries so their objects land in libmoist itself (static and shared)
+# C++ FFT backend (ducc0 subset + wrapper) and FINUFFT on top of it (as OBJECT libraries)
 set(_fft_dir "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/math/fft")
 set(_finufft_dir "${_fft_dir}/finufft")
 add_library(moist_fft OBJECT
@@ -134,6 +133,19 @@ foreach(tgt moist_fft finufft_common finufft_f32 finufft)
     target_link_libraries(${tgt} PUBLIC OpenMP::OpenMP_CXX)
   endif()
 endforeach()
+
+# C point-group backend (vendored libmsym + wrapper) (as OBJECT libraries)
+set(_sym_dir "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/math/symmetry")
+file(GLOB _libmsym_srcs CONFIGURE_DEPENDS "${_sym_dir}/libmsym/*.c")
+add_library(moist_libmsym OBJECT ${_libmsym_srcs})
+add_library(moist_msym OBJECT "${_sym_dir}/msym_shim.c")
+foreach(tgt moist_libmsym moist_msym)
+  target_include_directories(${tgt} SYSTEM PRIVATE "${_sym_dir}/libmsym")
+  target_compile_definitions(${tgt} PRIVATE MSYM_EXPORTS_BUILT_AS_STATIC)
+  set_target_properties(${tgt} PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON
+    C_VISIBILITY_PRESET hidden)
+endforeach()
+target_compile_options(moist_libmsym PRIVATE $<IF:$<C_COMPILER_ID:MSVC>,/w,-w>)
 
 # Vendored Fortran subprojects, in dependency order; the `<name>::<name>` aliases
 # satisfy their own `if(NOT TARGET ...)` lookups, so nothing is fetched
@@ -251,6 +263,10 @@ target_link_libraries(moist PUBLIC
 )
 # PRIVATE keeps the C++ include directories off moist's consumers
 target_link_libraries(moist PRIVATE moist_fft finufft finufft_f32 finufft_common)
+target_link_libraries(moist PRIVATE moist_msym moist_libmsym)
+if(UNIX)
+  target_link_libraries(moist PRIVATE m)
+endif()
 if(MOIST_OPENMP)
   target_link_libraries(moist PUBLIC OpenMP::OpenMP_Fortran)
 endif()
@@ -293,6 +309,8 @@ foreach(vendor ducc0 finufft xsimd)
     DESTINATION "${_licenses}" RENAME "LICENSE-${vendor}")
 endforeach()
 install(FILES "${_finufft_dir}/NOTICE" DESTINATION "${_licenses}" RENAME NOTICE-finufft)
+install(FILES "${_sym_dir}/libmsym/LICENSE"
+  DESTINATION "${_licenses}" RENAME LICENSE-libmsym)
 
 # Unit tests: one tester binary, run once per suite (mirrors test/unit/meson.build)
 if(MOIST_TESTS)
@@ -313,9 +331,10 @@ if(MOIST_TESTS)
   # Kept in sync with the `tests` list in test/unit/meson.build
   set(moist_test_suites
     api parameters utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded
+    utils_format utils_format_threaded
     data radii
-    math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
-    math_solvers math_sorters math_trig math_packed_sym
+    math_linalg math_smoothing math_adjacency
+    math_solvers math_sorters math_trig math_packed math_smoothstep math_symmetry
     math_fft_dst4 math_fft_3d math_fft_threads finufft math_grid_3d_fft math_grid_3d_nufft
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
@@ -325,11 +344,15 @@ if(MOIST_TESTS)
     math_grid_3d_guards math_grid_3d_derivatives
     math_grid_3d_integration
     math_grid_3d_invariance
-    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference
-    cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
-    cavity_drop_integration cavity_drop_filter cavity_drop_projector cavity_drop_projection
-    cavity_drop_cpcm cavity_drop_properties
-    cavity_iswig cavity_numsa cavity_mc cavity_reference cavity_surface_adjoint
+    cavity_drop_phi cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference cavity_drop_lsf_screening
+    cavity_drop_lsf_scale
+    cavity_drop_isodensity cavity_drop_gradient cavity_drop_branching cavity_drop_nuclear_adjoint
+    cavity_drop_potential
+    cavity_drop_integration cavity_drop_anchor cavity_drop_projector
+    cavity_drop_projection
+    cavity_drop_properties
+    cavity_drop_threads
+    cavity_iswig cavity_numsa cavity_symmetry cavity_grid cavity_mc cavity_reference cavity_adjoint
     cavity_mt_mesh cavity_mt_patches cavity_mt
     model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint
@@ -342,6 +365,7 @@ if(MOIST_TESTS)
   )
   # Each run as a selected test, outside test-drive's OpenMP team
   set(moist_test_selected_utils_prettylistprint_threaded independent_rows)
+  set(moist_test_selected_utils_format_threaded concurrent_rendering)
   set(moist_test_selected_math_grid_3d_derivatives
     single_atom dimer amino20x4_gly_xab mb16_43_01 but14diol_1 il16_008
     partition_schemes gaussian_tiny_weights volume_hessian_columns
@@ -363,15 +387,34 @@ if(MOIST_TESTS)
     single_atom asymmetric_trimer partition_integrals multicenter_integrals
     rotational_convergence integrate_constant_is_box_volume gaussian_width_law)
   set(moist_test_selected_math_grid_3d_invariance single_atom asymmetric_trimer)
-  # Split: the octree_cluster_* tests dominate the suite
   set(moist_test_selected_cavity_drop_projection
-    octree_connected_minima octree_shallow_minimum octree_search_window
-    octree_rigid_motion octree_zero_window_on_surface search_window_validation
-    octree_cluster_dimer octree_cluster_cross octree_cluster_octahedron
-    octree_cluster_cube octree_cluster_pentagon octree_cluster_tetrahedron
-    brute_force_broad_window stationary_box_bounds)
+    h2_connected_minima h2_shallow_minimum h2_search_window h2_rigid_motion
+    h2_zero_window_on_surface cluster_dimer cluster_cross cluster_octahedron cluster_cube
+    cluster_pentagon cluster_tetrahedron brute_force_broad_window stationary_box_bounds
+    batch_flush_accumulator newton_sphere_point newton_start_multiplier
+    newton_far_seed_unreached newton_far_point newton_singular_system
+    newton_non_finite_value_fails_alone polish_escapes_far_pole
+    polish_fails_non_finite_jet polish_one_sided_saddle_repeats_captured
+    multistart_capture_stops_duplicates multistart_capture_keeps_twin_points
+    multistart_capture_only_predictions finalize_canonical_order
+    finalize_canonical_order_chain finalize_sphere_anchor finalize_branch_weight_fold
+    lattice_build_thread_independent lattice_axes_covariant lattice_level3_filter_and_level4_unfiltered
+    lattice_shell_query_partitions_ball lattice_sses_build_thread_independent
+    sses_projection_thread_independent level2_selective_lattice_branches level2_seed_filters
+    bad_lattice_sample_size bad_lattice_refine_levels bad_lattice_build_before_init
+    bad_lattice_seed_before_build bad_lattice_radii bad_lattice_reach bad_lattice_axes bad_lattice_key_range
+    bad_lattice_sample_size_infinite bad_lattice_cone_scale bad_lattice_cone_scale_infinite
+    bad_lattice_anchors_without_atoms
+    bad_lattice_centers_nonfinite bad_lattice_reach_infinite bad_lattice_anchors_nonfinite
+    bad_lattice_radius_max_size bad_lattice_radius_max_nonfinite bad_lattice_depth
+    bad_lattice_request_radius bad_lattice_request_radius_infinite bad_lattice_slice_order
+    bad_lattice_slice_gradient bad_lattice_slice_hessian lattice_failed_build_clears
+    lattice_flat_gradient_finite_samples lattice_follows_grid_model_axes
+    lattice_back_facing_needs_owner bad_batch_target_size
+    bad_newton_unreached_anchor worker_skipped_anchor_empty_outputs)
 
   # Start priority (ctest COST, higher first), ranked by CI runtime
+  set(moist_test_cost_cavity_drop_branching 10)
   set(moist_test_cost_cavity_drop_projection 9)
   set(moist_test_cost_model_component_pcm_derivatives 8)
   set(moist_test_cost_math_grid_3d_invariance 7)
@@ -379,20 +422,28 @@ if(MOIST_TESTS)
   set(moist_test_cost_cavity_drop_gradient 5)
   set(moist_test_cost_cavity_drop_lsf 4)
   set(moist_test_cost_cavity_drop_isodensity 3)
-  set(moist_test_cost_cavity_drop_cpcm 2)
   set(moist_test_cost_model_component_pcm_references 1)
+  set(moist_test_chunks_cavity_drop_branching 4)
+  set(moist_test_chunks_model_component_pcm_derivatives 4)
   set(moist_test_selected_math_grid_3d_threaded
     batched_ifft_uses_threaded_backend
     molecular_nufft_type12_threaded molecular_nufft_type3_threaded
     radial_trafo_one_per_thread partition_grid_threaded)
+  set(moist_test_selected_cavity_drop_nuclear_adjoint
+    all_channels single_channels branching_channels branching_xi_fd
+    branching_f_fd reach_gate_channels forward_pair_channels
+    sibling_gate_channels forward_screened_neighbour forward_screened_owner
+    forward_isodensity_owner forward_frozen_field
+    model_forward_reverse cosmo_model_forward_reverse shape_guard
+    thread_count_invariance isodensity_thread_count_invariance)
 
   set(moist_test_srcs
     "${_unit}/main.F90"
     "${_unit}/test_helpers.f90"
+    "${_unit}/test_cavity_drop_fd.f90"
     "${_unit}/test_pcm_conductor_probe.f90"
-    "${_unit}/test_moz_fixtures.f90"
+    "${_unit}/test_fixtures.f90"
     "${_unit}/test_model_component_helper.f90"
-    "${_unit}/test_model_component_pcm_fixtures.f90"
   )
   foreach(suite IN LISTS moist_test_suites)
     list(APPEND moist_test_srcs "${_unit}/test_${suite}.f90")
@@ -420,10 +471,18 @@ if(MOIST_TESTS)
     set_property(TARGET moist-api-cpp-tester PROPERTY CXX_STANDARD 11)
     target_link_libraries(moist-api-cpp-tester PRIVATE moist)
     add_test(NAME api-cpp COMMAND moist-api-cpp-tester)
+    set_tests_properties(api-c api-cpp PROPERTIES TIMEOUT 900)
   endif()
 
   foreach(suite IN LISTS moist_test_suites)
-    if(DEFINED moist_test_selected_${suite})
+    if(DEFINED moist_test_chunks_${suite})
+      set(runs "")
+      foreach(k RANGE 1 ${moist_test_chunks_${suite}})
+        set(name ${suite}_${k}of${moist_test_chunks_${suite}})
+        add_test(NAME ${name} COMMAND moist-tester ${suite} ${k}/${moist_test_chunks_${suite}})
+        list(APPEND runs ${name})
+      endforeach()
+    elseif(DEFINED moist_test_selected_${suite})
       set(runs "")
       foreach(sel IN LISTS moist_test_selected_${suite})
         add_test(NAME ${suite}_${sel} COMMAND moist-tester ${suite} ${sel})
@@ -438,7 +497,7 @@ if(MOIST_TESTS)
     # conda, ilp64 and MSYS2 legs) oversubscribes
     set_tests_properties(${runs} PROPERTIES
       ENVIRONMENT "MOIST_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR};MKL_NUM_THREADS=1;OPENBLAS_NUM_THREADS=1"
-      TIMEOUT 420
+      TIMEOUT 900
     )
     if(DEFINED moist_test_cost_${suite})
       set_tests_properties(${runs} PROPERTIES COST ${moist_test_cost_${suite}})

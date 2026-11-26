@@ -30,6 +30,7 @@ module test_cavity_drop_born_fit
    use moist_utils_prettylistprint, only : prettylistprinter, new_prettylistprinter
    use testdrive, only : new_unittest, unittest_type, error_type, test_failed
    use moist_context, only: moist_context_type, new_context
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -139,8 +140,8 @@ contains
 
       if (.not. ieee_is_finite(zeta_fit) .or. zeta_fit < zeta_lower &
          .or. zeta_fit > zeta_upper) then
-         call test_failed(error, "Invalid fitted zeta for nleb=" // int_string(nleb) &
-            // ": " // real_string(zeta_fit))
+         call test_failed(error, "Invalid fitted zeta for nleb=" // to_string(nleb) &
+            // ": " // to_string(zeta_fit, "(es22.14)"))
          return
       end if
 
@@ -151,16 +152,16 @@ contains
       end if
 
       if (max_error > max_rel_energy_error) then
-         call test_failed(error, "DROP Born fit too inaccurate for nleb=" // int_string(nleb) &
-            // ", zeta=" // real_string(zeta_fit) &
-            // ", max relative error=" // real_string(max_error))
+         call test_failed(error, "DROP Born fit too inaccurate for nleb=" // to_string(nleb) &
+            // ", zeta=" // to_string(zeta_fit, "(es22.14)") &
+            // ", max relative error=" // to_string(max_error, "(es22.14)"))
          return
       end if
 
       if (abs(zeta_fit - cavities(1)%param%iswig_xi_born) > max_zeta_param_error) then
-         call test_failed(error, "Constructor Born zeta mismatch for nleb=" // int_string(nleb) &
-            // ", fitted=" // real_string(zeta_fit) &
-            // ", constructor=" // real_string(cavities(1)%param%iswig_xi_born))
+         call test_failed(error, "Constructor Born zeta mismatch for nleb=" // to_string(nleb) &
+            // ", fitted=" // to_string(zeta_fit, "(es22.14)") &
+            // ", constructor=" // to_string(cavities(1)%param%iswig_xi_born, "(es22.14)"))
          return
       end if
 
@@ -203,7 +204,7 @@ contains
          call new_radii_custom_atoms(radii, radius_model, cavity_error)
          if (allocated(cavity_error)) then
             call test_failed(error, "new_radii_custom_atoms failed for nleb=" &
-               // int_string(nleb) // ": " // trim(cavity_error%message))
+               // to_string(nleb) // ": " // trim(cavity_error%message))
             return
          end if
 
@@ -213,18 +214,18 @@ contains
                blend_1b=1.0_wp, blend_2b=1.0_wp, blend_3b=1.0_wp))
             call new_cavity_drop(cavities(ir), radius_model=radius_model, lsf_model=svdw_template, &
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb, &
-               tolerance=1.0e-10_wp, proj_maxiter=150, proj_level=2), ctx=ctx)
+               tolerance=1.0e-10_wp, proj_level=1), ctx=ctx)
          end block
          if (allocated(cavity_error)) then
             call test_failed(error, "new_cavity_drop failed for nleb=" &
-               // int_string(nleb) // ": " // trim(cavity_error%message))
+               // to_string(nleb) // ": " // trim(cavity_error%message))
             return
          end if
 
          call cavities(ir)%update(mol, error=cavity_error)
          if (allocated(cavity_error)) then
             call test_failed(error, "DROP cavity update failed for nleb=" &
-               // int_string(nleb) // ", radius=" // real_string(radii(1)) &
+               // to_string(nleb) // ", radius=" // to_string(radii(1), "(es22.14)") &
                // ": " // trim(cavity_error%message))
             return
          end if
@@ -287,8 +288,8 @@ contains
 
       do while (sign(1.0_wp, fa) == sign(1.0_wp, fb))
          if (a <= zeta_lower .and. b >= zeta_upper) then
-            message = "Born error does not change sign for zeta in [" // real_string(zeta_lower) &
-               // ", " // real_string(zeta_upper) // "]"
+            message = "Born error does not change sign for zeta in [" // to_string(zeta_lower, "(es22.14)") &
+               // ", " // to_string(zeta_upper, "(es22.14)") // "]"
             return
          end if
          width = 4.0_wp * width
@@ -321,8 +322,8 @@ contains
          if (b - a < fit_bracket_tol) exit
       end do
       if (iter > fit_maxiter) then
-         message = "Born zeta root not bracketed to " // real_string(fit_bracket_tol) &
-            // " after " // int_string(fit_maxiter) // " steps; bracket " // real_string(b - a)
+         message = "Born zeta root not bracketed to " // to_string(fit_bracket_tol, "(es22.14)") &
+            // " after " // to_string(fit_maxiter) // " steps; bracket " // to_string(b - a, "(es22.14)")
          return
       end if
 
@@ -430,29 +431,5 @@ contains
 
       energy = -0.5_wp * feps * source_charge**2 / radius
    end function analytical_born_energy
-
-   !> Convert integer to allocatable string
-   function int_string(value) result(string)
-      !> Integer value
-      integer, intent(in) :: value
-      !> Formatted string
-      character(len=:), allocatable :: string
-      character(len=32) :: buffer
-
-      write(buffer, "(i0)") value
-      string = trim(buffer)
-   end function int_string
-
-   !> Convert real to allocatable string
-   function real_string(value) result(string)
-      !> Real value
-      real(wp), intent(in) :: value
-      !> Formatted string
-      character(len=:), allocatable :: string
-      character(len=48) :: buffer
-
-      write(buffer, "(es22.14)") value
-      string = trim(adjustl(buffer))
-   end function real_string
 
 end module test_cavity_drop_born_fit

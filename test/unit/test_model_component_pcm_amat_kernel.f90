@@ -1,6 +1,7 @@
 !> Kernel-level unit tests for the auto-generated Gaussian PCM pair kernel
 module test_model_component_pcm_amat_kernel
    use mctc_env_accuracy, only: wp
+   use mctc_io_constants, only: pi
    use moist_math_boys, only: boys_x_far, boys_x_taylor, boys012
    use mctc_env_error, only: moist_error => error_type
    use test_pcm_conductor_probe, only: probe_conductor_matrix, probe_conductor_bilinear_weights, &
@@ -180,7 +181,7 @@ contains
       do i = 1, size(stable_x)
          x = stable_x(i)
          call boys012(x, f0, f1, f2, ex)
-         f0_ref = 0.88622692545275801_wp*erf(sqrt(x))/sqrt(x)
+         f0_ref = 0.5_wp*sqrt(pi)*erf(sqrt(x))/sqrt(x)
          f1_ref = 0.5_wp*(f0_ref - exp(-x))/x
          f2_ref = 0.5_wp*(3.0_wp*f1_ref - exp(-x))/x
          call check(error, f0, f0_ref, thr=exact_thr*max(1.0_wp, abs(f0_ref)), &
@@ -489,7 +490,7 @@ contains
          call probe_diag_hess(xi, f, a, a_xi, a_f, a_xi_xi, a_xi_f, a_f_f, error)
          if (allocated(error)) return
 
-         call check(error, a, sqrt(2.0_wp/(4.0_wp*atan(1.0_wp)))*xi/f, &
+         call check(error, a, sqrt(2.0_wp/pi)*xi/f, &
                     thr=exact_thr*max(1.0_wp, abs(a)), &
                     more="diagonal value deviates from sqrt(2/pi)*xi/f")
          if (allocated(error)) return

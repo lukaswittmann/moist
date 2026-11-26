@@ -32,7 +32,7 @@ module test_api
       & get_anchor_gradient_api, get_cavity_gradient_api, &
       & contract_surface_lsf_weights_extended_api, contract_pcm_nuclear_gradient_api, &
       & get_model_field_count_api, get_model_field_info_api, get_model_field_about_api, &
-      & get_model_field_real_api, get_model_field_int_api, get_model_field_bool_api, &
+      & get_model_field_real_api, get_model_field_int_api, get_model_field_bool_api, create_mt_cavity_api, &
       & vp_coupling, coupling_answer_api, next_coupling_request_api, &
       & get_response_field_count_api, get_response_field_info_api, get_response_field_about_api, &
       & get_coupling_request_field_count_api, get_coupling_request_field_info_api, &
@@ -75,7 +75,7 @@ module test_api
       real(c_double) :: core_radius_fraction = 0.5_c_double
    end type iso_options
 
-   !> Frozen DROP options layout exercised through the C interface
+   !> DROP options layout exercised through the C interface, as `moist_drop_options`
    type, bind(C) :: drop_options
       !> Caller layout size
       integer(c_size_t) :: struct_size
@@ -90,11 +90,15 @@ module test_api
       !> Projection refinement level
       integer(c_int) :: proj_level
       !> Branch-selection smoothing weight
-      real(c_double) :: branch_weight_s
+      real(c_double) :: branch_dpdist_max
       !> Grid density kernel length
       real(c_double) :: rho_grid_h
       !> Lebedev pruning level
       integer(c_int) :: wleb_prune_level
+      !> Reach gate band (Bohr)
+      real(c_double) :: branch_reach_on, branch_reach_off
+      !> Horizon switch band
+      real(c_double) :: w_0hor_off, w_0hor_on
    end type drop_options
 
    !> Test double: a cavity whose arrays the test fills by hand
@@ -264,9 +268,9 @@ module test_api
       end subroutine moist_delete_cavity
 
       subroutine moist_get_cavity_results(verror, vcav, ngrid_cap, nsph_cap, &
-            & area, volume, ngrid, nsph, xyz, a, owner, converged, radii, asph) &
+            & area, volume, ngrid, nsph, xyz, a, owner, radii, asph) &
             & bind(C, name="moist_get_cavity_results")
-         import :: c_ptr, c_int, c_double, c_bool
+         import :: c_ptr, c_int, c_double
          implicit none(type, external)
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
@@ -279,7 +283,6 @@ module test_api
          real(c_double), intent(inout), optional :: xyz(3, ngrid_cap)
          real(c_double), intent(inout), optional :: a(ngrid_cap)
          integer(c_int), intent(inout), optional :: owner(ngrid_cap)
-         logical(c_bool), intent(inout), optional :: converged(ngrid_cap)
          real(c_double), intent(inout), optional :: radii(nsph_cap)
          real(c_double), intent(inout), optional :: asph(nsph_cap)
       end subroutine moist_get_cavity_results
@@ -607,8 +610,7 @@ contains
                   new_unittest("response_fields_describe_the_current_item", test_response_fields), &
                   new_unittest("pcm_spatial_weights_are_optional_fields", test_pcm_spatial_fields), &
                   new_unittest("coupling_request_fields_describe_the_inputs", test_coupling_request_fields), &
-                  new_unittest("gradient_capacity_too_small", test_gradient_capacity_too_small), &
-                  new_unittest("gradient_optional_outputs", test_gradient_optional_outputs) &
+                  new_unittest("gradient_capacity_too_small", test_gradient_capacity_too_small) &
                   ]
 
    end subroutine collect_api
@@ -731,12 +733,11 @@ contains
       real(c_double) :: xyz(3, 1)
       real(c_double) :: a(1)
       integer(c_int) :: owner(1)
-      logical(c_bool) :: converged(1)
       !> Per-sphere result buffers
       real(c_double) :: radii(1), asph(1)
 
       call moist_get_cavity_results(verror, vcav, 1_c_int, 1_c_int, &
-                                    area, volume, ngrid, nsph, xyz, a, owner, converged, radii, asph)
+                                    area, volume, ngrid, nsph, xyz, a, owner, radii, asph)
 
    end subroutine call_get_drop_results
 
@@ -759,12 +760,9 @@ contains
                                    [0.0_c_double, 0.0_c_double, 0.1173_c_double, &
                                     0.0_c_double, 1.4309_c_double, -0.9370_c_double, &
                                     0.0_c_double, -1.4309_c_double, -0.9370_c_double], [3, 3])
-      !> Lebedev order, kept small so the build stays cheap
-      integer(c_int), target :: nleb
 
       ngrid = 0
       nsph = 0
-      nleb = 26_c_int
 
       allocate (err)
       verror = c_loc(err)
@@ -1208,55 +1206,77 @@ contains
 
    !> The logical accessor honours the same contract as the other two
    !>
-   !> `converged` is the only boolean a cavity declares, so the bool accessor is
-   !> the one branch of `check_field_payload` a C host reaches without a Python
-   !> layer in between.  Its payload is cross-checked against the independent
-   !> `get_cavity_results` path, since every value it can return is also a legal
-   !> seed and a buffer left untouched would otherwise pass unnoticed
+   !> `area_exception` (one per unswitched patch) is the boolean an MT cavity
+   !> declares, so the bool accessor is the one branch of `check_field_payload`
+   !> a C host reaches without a Python layer in between.  Every value it can
+   !> return is also a legal seed, so it is read into two oppositely seeded
+   !> buffers that must agree
    subroutine test_cavity_field_bool(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
-      type(c_ptr) :: verror, vmol, vcav, vmodel
-      integer(c_int) :: ngrid, nsph, out_ngrid, out_nsph
-      real(c_double) :: area, volume
-      real(c_double), allocatable :: xyz(:, :), a(:), radii(:), asph(:)
-      integer(c_int), allocatable :: owner(:)
+      type(c_ptr) :: verror, vmol, vcav, vmt, vmodel, lsf, context
+      integer(c_int) :: ngrid, nsph, nfield, ifield, dtype, rank, dims(3), count, npatch
       logical(c_bool), allocatable :: reference(:), values(:)
-      character(kind=c_char), allocatable, target :: name_conv(:), name_wleb(:)
+      character(kind=c_char), allocatable, target :: name_flag(:), name_area(:)
+      character(kind=c_char) :: name(65)
 
       call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
       if (allocated(error)) return
 
-      name_conv = c_string("converged")
-      name_wleb = c_string("wleb")
-      allocate (xyz(3, ngrid), a(ngrid), owner(ngrid), reference(ngrid))
-      allocate (radii(nsph), asph(nsph), values(ngrid))
+      name_flag = c_string("area_exception")
+      name_area = c_string("patch_area")
 
-      call moist_get_cavity_results(verror, vcav, ngrid, nsph, area, volume, &
-                                    out_ngrid, out_nsph, xyz, a, owner, reference, &
-                                    radii, asph)
-      if (allocated(err%ptr)) then
-         call test_failed(error, "get_cavity_results failed: "//err%ptr%message)
+      lsf = moist_new_svdw_lsf(verror, c_null_ptr)
+      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool, .false._c_bool)
+      vmt = create_mt_cavity_api(verror, context, lsf, c_null_ptr, c_null_ptr)
+      call delete_context_api(context)
+      call moist_delete_lsf(lsf)
+      call update_cavity_through_api(verror, vmt, vmol)
+      if (allocated(err%ptr)) call test_failed(error, "MT cavity setup failed: "//err%ptr%message)
+
+      !> Length of the declared field from its descriptor
+      npatch = -1_c_int
+      if (.not. allocated(error)) then
+         call moist_get_cavity_field_count(verror, vmt, nfield)
+         do ifield = 0, nfield - 1
+            name = c_null_char
+            call moist_get_cavity_field_info(verror, vmt, ifield, name, dtype, rank, dims, count)
+            if (allocated(err%ptr)) exit
+            if (all(name(:size(name_flag)) == name_flag)) then
+               call check(error, dtype == 3_c_int .and. rank == 1_c_int, &
+                          "area_exception is not a rank-1 bool field")
+               npatch = count
+               exit
+            end if
+         end do
+         if (allocated(err%ptr)) then
+            call test_failed(error, "MT field info failed: "//err%ptr%message)
+         else if (.not. allocated(error) .and. npatch <= 0_c_int) then
+            call test_failed(error, "MT cavity declares no area_exception field")
+         end if
       end if
 
-      !> The declared field has to agree with the fixed getter, point for point
+      !> Oppositely seeded buffers must come back identical
       if (.not. allocated(error)) then
-         values = .not. reference
-         call moist_get_cavity_field_bool(verror, vcav, c_loc(name_conv), values)
+         allocate (reference(npatch), values(npatch))
+         reference = .true._c_bool
+         values = .false._c_bool
+         call moist_get_cavity_field_bool(verror, vmt, c_loc(name_flag), reference)
+         if (.not. allocated(err%ptr)) call moist_get_cavity_field_bool(verror, vmt, c_loc(name_flag), values)
          if (allocated(err%ptr)) then
             call test_failed(error, "get_cavity_field_bool failed: "//err%ptr%message)
          else if (.not. all(values .eqv. reference)) then
-            call test_failed(error, "get_cavity_field_bool disagrees with get_cavity_results")
+            call test_failed(error, "get_cavity_field_bool depends on the seed of the buffer")
          end if
       end if
 
       if (.not. allocated(error)) then
-         vmodel = model_on_context(verror, vcav)
+         vmodel = model_on_context(verror, vmt)
          if (allocated(err%ptr)) then
-            call test_failed(error, "DROP model construction failed: "//err%ptr%message)
+            call test_failed(error, "MT model construction failed: "//err%ptr%message)
          else
             values = .not. reference
-            call get_model_field_bool_api(verror, vmodel, c_loc(name_conv), values)
+            call get_model_field_bool_api(verror, vmodel, c_loc(name_flag), values)
             call check(error,.not. allocated(err%ptr), "Model bool field read failed")
             if (.not. allocated(error)) call check(error, logical(all(values .eqv. reference)), &
                                                    "Model bool field differs from the cavity")
@@ -1267,7 +1287,7 @@ contains
       !> Reading a real field through the logical accessor is refused too
       if (.not. allocated(error)) then
          values = .false._c_bool
-         call moist_get_cavity_field_bool(verror, vcav, c_loc(name_wleb), values)
+         call moist_get_cavity_field_bool(verror, vmt, c_loc(name_area), values)
          call check_api_error(error, err, "has a different element type")
       end if
       if (.not. allocated(error)) then
@@ -1276,6 +1296,7 @@ contains
          end if
       end if
 
+      call moist_delete_cavity(vmt)
       call drop_water_cavity(err, vmol, vcav)
 
    end subroutine test_cavity_field_bool
@@ -1302,8 +1323,7 @@ contains
    !> A capacity below the cavity's own ngrid/nsph is refused before a single
    !> element is written.  Without the check these calls write ngrid values into
    !> buffers holding ngrid-1, which is silent heap corruption; the sentinels
-   !> below detect any write that changes a value (`converged` is seeded
-   !> `.true.`, so only a written `.false.` shows)
+   !> below detect any write that changes a value
    subroutine test_capacity_too_small(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
@@ -1313,29 +1333,27 @@ contains
       real(c_double) :: area, volume
       real(c_double), allocatable :: xyz(:, :), a(:), radii(:), asph(:)
       integer(c_int), allocatable :: owner(:)
-      logical(c_bool), allocatable :: converged(:)
       real(c_double), parameter :: sentinel = -12345.0_c_double
 
       call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
       if (allocated(error)) return
 
       cap = ngrid - 1_c_int
-      allocate (xyz(3, cap), a(cap), owner(cap), converged(cap))
+      allocate (xyz(3, cap), a(cap), owner(cap))
       allocate (radii(nsph), asph(nsph))
       xyz = sentinel
       a = sentinel
       owner = -1_c_int
-      converged = .true._c_bool
       radii = sentinel
       asph = sentinel
 
       call moist_get_cavity_results(verror, vcav, cap, nsph, area, volume, &
-                                    out_ngrid, out_nsph, xyz, a, owner, converged, &
+                                    out_ngrid, out_nsph, xyz, a, owner, &
                                     radii, asph)
       call expect_capacity_error(error, err, "get_cavity_results")
       if (.not. allocated(error)) then
          if (any(a /= sentinel) .or. any(xyz /= sentinel) .or. any(owner /= -1_c_int) &
-             .or. any(radii /= sentinel) .or. any(asph /= sentinel) .or. .not. all(converged)) then
+             .or. any(radii /= sentinel) .or. any(asph /= sentinel)) then
             call test_failed(error, "get_cavity_results wrote into a rejected buffer")
          end if
       end if
@@ -1344,23 +1362,21 @@ contains
       ! holds the full ngrid/nsph extent, so a missing nsph guard shows up as a
       ! write instead of a heap overflow
       if (.not. allocated(error)) then
-         deallocate (xyz, a, owner, converged)
-         allocate (xyz(3, ngrid), a(ngrid), owner(ngrid), converged(ngrid))
+         deallocate (xyz, a, owner)
+         allocate (xyz(3, ngrid), a(ngrid), owner(ngrid))
          xyz = sentinel
          a = sentinel
          owner = -1_c_int
-         converged = .true._c_bool
          radii = sentinel
          asph = sentinel
          call moist_get_cavity_results(verror, vcav, ngrid, nsph - 1_c_int, area, &
                                        volume, out_ngrid, out_nsph, xyz, a, owner, &
-                                       converged, radii, asph)
+                                       radii, asph)
          call expect_capacity_error(error, err, "get_cavity_results (nsph)")
          if (.not. allocated(error)) then
             call check_untouched(error, &
                & any(radii /= sentinel) .or. any(asph /= sentinel) .or. any(xyz /= sentinel) &
-               & .or. any(a /= sentinel) .or. any(owner /= -1_c_int) &
-               & .or. .not. logical(all(converged)), "short sphere capacity")
+               & .or. any(a /= sentinel) .or. any(owner /= -1_c_int), "short sphere capacity")
          end if
       end if
 
@@ -1380,7 +1396,6 @@ contains
       real(c_double) :: area, volume
       real(c_double), allocatable :: xyz(:, :), a(:), radii(:), asph(:)
       integer(c_int), allocatable :: owner(:)
-      logical(c_bool), allocatable :: converged(:)
       real(c_double), parameter :: sentinel = -12345.0_c_double
 
       call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
@@ -1388,17 +1403,16 @@ contains
 
       ngrid_cap = ngrid + 17_c_int
       nsph_cap = nsph + 5_c_int
-      allocate (xyz(3, ngrid_cap), a(ngrid_cap), owner(ngrid_cap), converged(ngrid_cap))
+      allocate (xyz(3, ngrid_cap), a(ngrid_cap), owner(ngrid_cap))
       allocate (radii(nsph_cap), asph(nsph_cap))
       xyz = sentinel
       a = sentinel
       radii = sentinel
       asph = sentinel
       owner = -12345_c_int
-      converged = .false._c_bool
 
       call moist_get_cavity_results(verror, vcav, ngrid_cap, nsph_cap, area, volume, &
-                                    out_ngrid, out_nsph, xyz, a, owner, converged, &
+                                    out_ngrid, out_nsph, xyz, a, owner, &
                                     radii, asph)
 
       call check(error,.not. allocated(err%ptr), "Oversized capacity must be accepted")
@@ -1422,8 +1436,7 @@ contains
       end if
       if (.not. allocated(error)) then
          call check(error, all(asph(nsph + 1:) == sentinel) &
-            & .and. all(owner(ngrid + 1:) == -12345_c_int) &
-            & .and. .not. logical(any(converged(ngrid + 1:))), "Cavity result padding was overwritten")
+            & .and. all(owner(ngrid + 1:) == -12345_c_int), "Cavity result padding was overwritten")
       end if
 
       call drop_water_cavity(err, vmol, vcav)
@@ -1554,25 +1567,22 @@ contains
       type(iso_cb_ctx), intent(inout), target :: ctx
 
       integer(c_int), parameter :: numbers(3) = [8, 1, 1]
-      !> Lebedev order, kept small so the build stays cheap
-      integer(c_int), target :: nleb
+      !> Callback level set handle
+      type(c_ptr) :: lsf
+      !> Isodensity options (like this bc ifx does not like a target dummy inside a BLOCK)
+      type(iso_options), target :: options
 
-      nleb = 26_c_int
       ctx%calls = 0
 
       allocate (err)
       verror = c_loc(err)
 
       vmol = moist_new_structure(verror, 3_c_int, numbers, cb_centers)
-      block
-         type(c_ptr) :: lsf
-         type(iso_options), target :: options
-         options = iso_options(c_sizeof(options), cb_rho_iso, 1000.0_c_double, 1_c_int)
-         lsf = moist_new_isodensity_callback_lsf(verror, c_funloc(iso_switchable_callback), &
-                                                 c_loc(ctx), c_loc(options))
-         vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
-         call moist_delete_lsf(lsf)
-      end block
+      options = iso_options(c_sizeof(options), cb_rho_iso, 1000.0_c_double, 1_c_int)
+      lsf = moist_new_isodensity_callback_lsf(verror, c_funloc(iso_switchable_callback), &
+                                              c_loc(ctx), c_loc(options))
+      vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
+      call moist_delete_lsf(lsf)
       call update_cavity_through_api(verror, vcav, vmol)
 
    end subroutine run_iso_callback_update
@@ -1814,6 +1824,8 @@ contains
       type(density_response_type) :: density
       !> Pass index
       integer :: pass
+      !> Result of `current_item_name`
+      character(len=:), allocatable :: current_name
 
       ! A missing response handle ends the loop with an error
       call check(error,.not. logical(next_response_item_api(c_loc(err), c_null_ptr)))
@@ -1825,7 +1837,8 @@ contains
       if (allocated(error)) return
       call check(error,.not. allocated(err%ptr))
       if (allocated(error)) return
-      call check(error, current_item_name(err, response), "")
+      call current_item_name(err, response, current_name)
+      call check(error, current_name, "")
       if (allocated(error)) return
       call check_api_error(error, err, &
          & "[moist_get_response_item_name] No current response item - call next() first")
@@ -1844,11 +1857,13 @@ contains
       do pass = 1, 2
          call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
          if (allocated(error)) return
-         call check(error, current_item_name(err, response), "potential_adjoint")
+         call current_item_name(err, response, current_name)
+         call check(error, current_name, "potential_adjoint")
          if (allocated(error)) return
          call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
          if (allocated(error)) return
-         call check(error, current_item_name(err, response), "density")
+         call current_item_name(err, response, current_name)
+         call check(error, current_name, "density")
          if (allocated(error)) return
          call check(error,.not. logical(next_response_item_api(c_loc(err), c_loc(response))), &
             & more="the pass did not end after the last item")
@@ -1865,13 +1880,17 @@ contains
    end subroutine test_response_walk
 
    !> Name of the current response item through the C entry point, empty on error
-   function current_item_name(err, response) result(name)
+   !>
+   !> @param[in,out] err      Error wrapper receiving a failure
+   !> @param[in,out] response Response wrapper under test
+   !> @param[out]    name     Decoded name
+   subroutine current_item_name(err, response, name)
       !> Error wrapper receiving a failure
       type(vp_error), target, intent(inout) :: err
       !> Response wrapper under test
       type(vp_response), target, intent(inout) :: response
       !> Decoded name
-      character(len=:), allocatable :: name
+      character(len=:), allocatable, intent(out) :: name
       !> MOIST_NAME_MAX + 1 fits every name
       character(kind=c_char) :: buffer(33)
       integer :: ichar
@@ -1882,7 +1901,7 @@ contains
       do ichar = 1, c_string_len(buffer)
          name = name//buffer(ichar)
       end do
-   end function current_item_name
+   end subroutine current_item_name
 
    !* ================================================================================= *!
    !*                        Validation branches of the C entry points                  *!
@@ -2367,8 +2386,10 @@ contains
 
    end subroutine test_lsf_constructor_guards
 
-   !> Cavity constructors refuse each invalid DROP control and a radii handle
-   !> whose model was never set, and return no handle
+   !> Cavity constructors refuse invalid input and return no handle
+   !>
+   !> - each invalid DROP control, and a radii handle whose model was never set
+   !> - each refusal carries the native diagnostic
    subroutine test_cavity_constructor_guards(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
@@ -2378,10 +2399,19 @@ contains
       type(vp_radii), target :: radii
       !> Opaque handles
       type(c_ptr) :: verror, lsf, cavity
-      !> Expected diagnostics: six option cases, then the two radii cases
-      character(len=48), parameter :: needles(8) = [character(len=48) :: &
-         & "Invalid DROP options", "Invalid DROP options", "Invalid DROP options", &
-         & "Invalid DROP options", "Invalid DROP options", "Invalid DROP options", &
+      !> Native parameter diagnostic, behind the entry point prefix
+      character(len=*), parameter :: invalid = &
+         & "[moist_new_drop_cavity] Invalid DROP numerical parameters: "
+      !> Expected diagnostics: eight option cases, then the two radii cases
+      character(len=112), parameter :: needles(10) = [character(len=112) :: &
+         & invalid//"tolerance must be finite and positive", &
+         & invalid//"rho_grid_h must be finite and positive", &
+         & "[moist_new_drop_cavity] Branch distance window must not be negative", &
+         & invalid//"projection maxiter must be positive", &
+         & invalid//"projection level must be 1, 2, 3 or 4", &
+         & invalid//"projection level must be 1, 2, 3 or 4", &
+         & invalid//"projection level must be 1, 2, 3 or 4", &
+         & invalid//"tolerance must be finite and positive", &
          & "[moist_new_drop_cavity] Radii are not initialized", &
          & "[moist_new_iswig_cavity] Radii are not initialized"]
       integer :: icase
@@ -2403,23 +2433,27 @@ contains
          case (2)
             options%rho_grid_h = 0.0_c_double
          case (3)
-            options%branch_weight_s = -1.0_c_double
+            options%branch_dpdist_max = -1.0_c_double
          case (4)
             options%proj_maxiter = 0_c_int
          case (5)
             options%proj_level = 0_c_int
          case (6)
-            options%proj_level = 10_c_int
+            options%proj_level = 5_c_int
+         case (7)
+            options%proj_level = -1_c_int
+         case (8)
+            options%tolerance = ieee_value(1.0_c_double, ieee_quiet_nan)
          case default
-            ! Cases 7 and 8 keep the default options
+            ! Cases 9 and 10 keep the default options
             continue
          end select
          select case (icase)
-         case (1:6)
+         case (1:8)
             cavity = drop_on_context(verror, lsf, c_null_ptr, c_loc(options))
-         case (7)
+         case (9)
             cavity = drop_on_context(verror, lsf, c_loc(radii), c_null_ptr)
-         case (8)
+         case (10)
             cavity = iswig_on_context(verror, c_loc(radii), c_null_ptr)
          case default
             error stop "test_api: unhandled case in test_cavity_constructor_guards"
@@ -2655,16 +2689,15 @@ contains
       !> Grid and sphere outputs
       real(c_double), allocatable :: xyz(:, :), a(:), radii(:), asph(:)
       integer(c_int), allocatable :: owner(:), dims(:)
-      logical(c_bool), allocatable :: converged(:)
       character(kind=c_char), allocatable :: name(:)
       !> Gradient outputs
-      real(c_double), allocatable :: A_tot1_rA(:, :), V_tot1_rA(:, :), vec1_rA(:, :, :), &
+      real(c_double), allocatable :: A_tot1_rA(:, :), V_tot1_rA(:, :), &
          & xi1_rA(:, :, :), a_i1_rA(:, :, :), v_i1_rA(:, :, :), asph1_rA(:, :, :), &
-         & vsph1_rA(:, :, :), r_iI1_rA(:, :, :), xyz1_rA(:, :, :, :)
+         & vsph1_rA(:, :, :), xyz1_rA(:, :, :, :)
 
       select case (family)
       case ("get_cavity_results")
-         allocate (area, volume, ngrid, nsph, xyz(3, 1), a(1), owner(1), converged(1), &
+         allocate (area, volume, ngrid, nsph, xyz(3, 1), a(1), owner(1), &
                    radii(1), asph(1))
          if (omit == 1) deallocate (area)
          if (omit == 2) deallocate (volume)
@@ -2673,11 +2706,10 @@ contains
          if (omit == 5) deallocate (xyz)
          if (omit == 6) deallocate (a)
          if (omit == 7) deallocate (owner)
-         if (omit == 8) deallocate (converged)
-         if (omit == 9) deallocate (radii)
-         if (omit == 10) deallocate (asph)
+         if (omit == 8) deallocate (radii)
+         if (omit == 9) deallocate (asph)
          call moist_get_cavity_results(verror, c_null_ptr, 1_c_int, 1_c_int, area, volume, &
-                                       ngrid, nsph, xyz, a, owner, converged, radii, asph)
+                                       ngrid, nsph, xyz, a, owner, radii, asph)
       case ("get_cavity_sizes")
          allocate (ngrid, nsph)
          if (omit == 1) deallocate (ngrid)
@@ -2712,14 +2744,14 @@ contains
                                       a_i1_rA, v_i1_rA, A_tot1_rA, V_tot1_rA)
       case ("get_cavity_gradient")
          allocate (A_tot1_rA(3, 1), V_tot1_rA(3, 1), asph1_rA(3, 1, 1), vsph1_rA(3, 1, 1), &
-                   xyz1_rA(3, 3, 1, 1), r_iI1_rA(3, 1, 1), vec1_rA(3, 1, 1))
+                   xyz1_rA(3, 3, 1, 1))
          if (omit == 1) deallocate (A_tot1_rA)
          if (omit == 2) deallocate (V_tot1_rA)
          if (omit == 3) deallocate (asph1_rA)
          if (omit == 4) deallocate (vsph1_rA)
          if (omit == 5) deallocate (xyz1_rA)
          call get_cavity_gradient_api(verror, c_null_ptr, 1_c_int, 1_c_int, A_tot1_rA, V_tot1_rA, &
-                                      asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA, vec1_rA)
+                                      asph1_rA, vsph1_rA, xyz1_rA)
       case default
          error stop "test_api: unhandled family"
       end select
@@ -2731,8 +2763,8 @@ contains
    subroutine test_missing_pointers_results(error)
       type(error_type), allocatable, intent(out) :: error
       !> Required outputs of each reader, in argument order
-      character(len=9), parameter :: results(10) = [character(len=9) :: "area", "volume", &
-         & "ngrid", "nsph", "xyz", "a", "owner", "converged", "radii", "asph"]
+      character(len=9), parameter :: results(9) = [character(len=9) :: "area", "volume", &
+         & "ngrid", "nsph", "xyz", "a", "owner", "radii", "asph"]
       character(len=5), parameter :: sizes(2) = [character(len=5) :: "ngrid", "nsph"]
       character(len=6), parameter :: nfield(1) = ["nfield"]
       character(len=5), parameter :: info(5) = [character(len=5) :: "name", "dtype", "rank", &
@@ -2827,7 +2859,6 @@ contains
       !> Caller buffers, seeded so any write is visible
       real(c_double) :: area, volume, xyz(3, 1), a(1), radii(1), asph(1)
       integer(c_int) :: ngrid, nsph, owner(1)
-      logical(c_bool) :: converged(1)
       logical :: wrote
       real(c_double), parameter :: sentinel = -12345.0_c_double
       !> Expected diagnostics, one per case
@@ -2857,7 +2888,7 @@ contains
             call moist_get_cavity_sizes(verror, vdrop, ngrid, nsph)
          case (2)
             call moist_get_cavity_results(verror, vdrop, 1_c_int, 1_c_int, area, volume, ngrid, &
-                                          nsph, xyz, a, owner, converged, radii, asph)
+                                          nsph, xyz, a, owner, radii, asph)
          case (3)
             call moist_update_cavity(verror, vdrop, c_null_ptr)
          case (4)
@@ -2957,7 +2988,7 @@ contains
    end subroutine test_drop_only_entry_points
 
    !> The three surface contractions name a missing or empty handle, NULL
-   !> buffers, and a cavity without the surface data they contract
+   !> buffers, and an unbuilt cavity
    !>
    !> An unbuilt DROP cavity has zero grid points, so the one-element buffers
    !> below are never indexed; they only have to be non-NULL
@@ -2974,7 +3005,7 @@ contains
          & "[moist_contract_surface_lsf_weights_extended] Cavity is not initialized", &
          & "[moist_contract_surface_lsf_weights_extended] Null array pointer provided", &
          & "[moist_contract_surface_lsf_weights_extended] contract_surface_lsf_weights: "// &
-         & "cavity surface data are incomplete", &
+         & "Cavity must be built first", &
          & "[moist_contract_pcm_nuclear_gradient] Cavity handle is missing", &
          & "[moist_contract_pcm_nuclear_gradient] Cavity is not initialized", &
          & "[moist_contract_pcm_nuclear_gradient] Cavity position derivatives are unavailable"]
@@ -4056,9 +4087,8 @@ contains
       !> Buffer written by a C entry point
       character(kind=c_char), intent(in) :: buffer(:)
       !> Text before the terminator
-      character(len=:), allocatable :: text
+      character(len=c_string_len(buffer)) :: text
       integer :: ichar
-      allocate (character(len=c_string_len(buffer)) :: text)
       do ichar = 1, len(text)
          text(ichar:ichar) = buffer(ichar)
       end do
@@ -4509,7 +4539,7 @@ contains
       !> Undersized caller buffers
       real(c_double), allocatable :: xyz1_rA(:, :, :, :), xi1_rA(:, :, :), a_i1_rA(:, :, :), &
          & v_i1_rA(:, :, :), A_tot1_rA(:, :), V_tot1_rA(:, :), asph1_rA(:, :, :), &
-         & vsph1_rA(:, :, :), r_iI1_rA(:, :, :), rho1_rA(:, :, :)
+         & vsph1_rA(:, :, :)
       !> Zero surface weights, unit charges and the contracted gradient
       real(c_double), allocatable, target :: w_phi(:), w_xyz(:, :), za(:), grad(:, :)
       real(c_double), parameter :: sentinel = -12345.0_c_double
@@ -4544,15 +4574,13 @@ contains
             exit checks
          end if
          allocate (A_tot1_rA(3, nsph), V_tot1_rA(3, nsph), asph1_rA(3, nsph, nsph), &
-                   vsph1_rA(3, nsph, nsph), xyz1_rA(3, 3, nsph, ngrid - 1), &
-                   r_iI1_rA(3, nsph, ngrid - 1), rho1_rA(3, nsph, ngrid - 1), source=sentinel)
+                   vsph1_rA(3, nsph, nsph), xyz1_rA(3, 3, nsph, ngrid - 1), source=sentinel)
          call get_cavity_gradient_api(verror, vcav, nsph, ngrid - 1_c_int, A_tot1_rA, V_tot1_rA, &
-                                      asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA, rho1_rA)
+                                      asph1_rA, vsph1_rA, xyz1_rA)
          call expect_error(error, err, "[moist_get_cavity_gradient] Array capacity is too small")
          call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(V_tot1_rA /= sentinel) &
             & .or. any(asph1_rA /= sentinel) .or. any(vsph1_rA /= sentinel) &
-            & .or. any(xyz1_rA /= sentinel) .or. any(r_iI1_rA /= sentinel) &
-            & .or. any(rho1_rA /= sentinel), "cavity gradient buffers")
+            & .or. any(xyz1_rA /= sentinel), "cavity gradient buffers")
          if (allocated(error)) exit checks
 
          ! The PCM contraction runs to completion on the same cavity: zero
@@ -4572,71 +4600,6 @@ contains
       call drop_water_cavity(err, vmol, vcav)
 
    end subroutine test_gradient_capacity_too_small
-
-   !> The cavity-gradient reader hands out r_iI1_rA and rho1_rA only when the
-   !> cavity computed them
-   !>
-   !> - computing the gradient switches no property flag on
-   !> - without `do_fine` both outputs may be omitted (NULL from C)
-   !> - a buffer for an uncomputed one is refused by name, nothing is written
-   subroutine test_gradient_optional_outputs(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(vp_error), pointer :: err
-      type(c_ptr) :: verror, vmol, vcav
-      integer(c_int) :: ngrid, nsph
-      !> Caller buffers
-      real(c_double), allocatable :: A_tot1_rA(:, :), V_tot1_rA(:, :), asph1_rA(:, :, :), &
-         & vsph1_rA(:, :, :), xyz1_rA(:, :, :, :), r_iI1_rA(:, :, :), rho1_rA(:, :, :)
-      real(c_double), parameter :: sentinel = -12345.0_c_double
-
-      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
-      if (allocated(error)) then
-         call drop_water_cavity(err, vmol, vcav)
-         return
-      end if
-
-      checks: block
-         call compute_cavity_gradient_api(verror, vcav)
-         if (allocated(err%ptr)) then
-            call test_failed(error, "compute_cavity_gradient failed: "//err%ptr%message)
-            exit checks
-         end if
-         allocate (A_tot1_rA(3, nsph), V_tot1_rA(3, nsph), asph1_rA(3, nsph, nsph), &
-                   vsph1_rA(3, nsph, nsph), xyz1_rA(3, 3, nsph, ngrid), &
-                   r_iI1_rA(3, nsph, ngrid), rho1_rA(3, nsph, ngrid), source=sentinel)
-
-         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
-                                      asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA=r_iI1_rA)
-         call expect_error(error, err, "[moist_get_cavity_gradient] r_iI1_rA was not computed")
-         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(xyz1_rA /= sentinel) &
-            & .or. any(r_iI1_rA /= sentinel), "gradient buffers with an uncomputed r_iI1_rA")
-         if (allocated(error)) exit checks
-
-         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
-                                      asph1_rA, vsph1_rA, xyz1_rA, rho1_rA=rho1_rA)
-         call expect_error(error, err, "[moist_get_cavity_gradient] rho1_rA was not computed")
-         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(rho1_rA /= sentinel), &
-            & "gradient buffers with an uncomputed rho1_rA")
-         if (allocated(error)) exit checks
-
-         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
-                                      asph1_rA, vsph1_rA, xyz1_rA)
-         if (allocated(err%ptr)) then
-            call test_failed(error, "get_cavity_gradient without the optional outputs failed: "// &
-               & err%ptr%message)
-            exit checks
-         end if
-         call check(error, all(ieee_is_finite(A_tot1_rA)) .and. all(ieee_is_finite(xyz1_rA)) .and. &
-            & any(A_tot1_rA /= sentinel) .and. all(xyz1_rA /= sentinel), &
-            & more="required gradient outputs were not filled")
-         if (allocated(error)) exit checks
-         call check(error, all(r_iI1_rA == sentinel) .and. all(rho1_rA == sentinel), &
-            & more="omitted optional outputs were written")
-      end block checks
-
-      call drop_water_cavity(err, vmol, vcav)
-
-   end subroutine test_gradient_optional_outputs
 
    !* ================================================================================= *!
    !*                              Test double procedures                               *!

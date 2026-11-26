@@ -33,7 +33,8 @@ contains
          new_unittest("reset_open_and_poisoned", test_reset_open_and_poisoned), &
          new_unittest("handle_and_mismatch_contracts", test_handle_and_mismatch_contracts), &
          new_unittest("simple_report", test_simple_report), &
-         new_unittest("report_leaves_open_timers", test_report_leaves_open_timers) &
+         new_unittest("report_leaves_open_timers", test_report_leaves_open_timers), &
+         new_unittest("last_elapsed", test_last_elapsed) &
          ]
 
    end subroutine collect_utils_timer
@@ -652,6 +653,79 @@ contains
       call check(error, .not. ieee_is_nan(t%get("open/inner")), "a report leaves a nested open timer measuring")
       call t%delete()
    end subroutine test_report_leaves_open_timers
+
+   !> last() reports the single span of the most recently stopped timer
+   subroutine test_last_elapsed(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      real(wp) :: t1, t2, t_total, t_inner, t_outer
+      integer :: h
+
+      call t%new()
+      call check(error, t%last() == 0.0_wp, "fresh timer reports zero last elapsed")
+      if (allocated(error)) return
+
+      call t%start("repeat")
+      call busy()
+      call t%stop("repeat")
+      t1 = t%last()
+      call check(error, t1 > 0.0_wp, "first stop records positive last elapsed")
+      if (allocated(error)) return
+      call check(error, abs(t1 - t%get("repeat")) <= 1.0e-12_wp*max(1.0_wp, t1), &
+                 "first stop last elapsed equals node total")
+      if (allocated(error)) return
+
+      call t%start("repeat")
+      call busy()
+      call t%stop("repeat")
+      t2 = t%last()
+      t_total = t%get("repeat")
+      call check(error, t2 > 0.0_wp .and. t2 < t_total, &
+                 "re-entered stop reports single span rather than cumulative total")
+      if (allocated(error)) return
+      call check(error, abs((t1 + t2) - t_total) <= 1.0e-12_wp*max(1.0_wp, t_total), &
+                 "individual spans sum to accumulated total")
+      if (allocated(error)) return
+
+      call t%start("outer")
+      call t%start("inner")
+      call busy()
+      call t%stop("inner")
+      t_inner = t%last()
+      call busy()
+      call t%stop("outer")
+      t_outer = t%last()
+      call check(error, abs(t_inner - t%get("outer/inner")) <= 1.0e-12_wp*max(1.0_wp, t_inner), &
+                 "nested inner stop updates last elapsed")
+      if (allocated(error)) return
+      call check(error, abs(t_outer - t%get("outer")) <= 1.0e-12_wp*max(1.0_wp, t_outer), &
+                 "enclosing outer stop updates last elapsed")
+      if (allocated(error)) return
+
+      h = t%resolve("handle", 0)
+      call t%start(h)
+      call busy()
+      call t%stop(h)
+      call check(error, t%last() > 0.0_wp, "handle stop updates last elapsed")
+      if (allocated(error)) return
+
+      call t%stop(h)
+      call check(error, ieee_is_nan(t%last()), "poisoned stop without start yields NaN")
+      if (allocated(error)) return
+
+      call t%reset()
+      call check(error, t%last() == 0.0_wp, "reset zeroes last elapsed")
+      if (allocated(error)) return
+
+      call t%start(h)
+      call t%start(h)
+      call t%stop(h)
+      call check(error, ieee_is_nan(t%last()), "double-started stop yields NaN")
+      if (allocated(error)) return
+
+      call t%delete()
+      call check(error, t%last() == 0.0_wp, "deleted timer reports zero last elapsed")
+   end subroutine test_last_elapsed
 
    !> Write a report of `t` to a scratch unit and report which markers appear
    !>

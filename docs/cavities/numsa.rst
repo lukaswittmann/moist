@@ -34,7 +34,10 @@ Command Line
 
 .. code-block:: none
 
-   moist cavity numsa <coord> [--nleb N] [--radii RADIUSMODEL]
+   moist cavity numsa <coord> [--nleb N] [--radii RADIUSMODEL] [--sym GROUP] [--orientation ORIENT]
+                              [--sym-tolerance BOHR]
+
+The symmetry flags are described in :ref:`cavity-symmetry`.
 
 Construction
 ------------
@@ -55,3 +58,17 @@ NUMSA is exposed by the Fortran API only.
    call cavity%update(mol, error)
    if (allocated(error)) error stop error%message
    write (*, *) "Area:", cavity%total_area
+
+Grid Orientation
+----------------
+
+``new_cavity_numsa`` takes an optional ``grid_model`` argument, which orients the grids by the molecule or by its point group; see :ref:`cavity-symmetry`.
+
+In the molecular orientation, node :math:`p` of sphere :math:`i` sits at :math:`\mathbf x_p = \mathbf c_i + r_i \mathbf R_i \mathbf u_p`, with :math:`r_i` the radius including the probe.
+Only the nodes of sphere :math:`i` enter its area :math:`A_i`, so a rotation of its grid changes :math:`A_i` through the torque
+
+.. math::
+
+   \boldsymbol\tau_i = \sum_{p \in i} (\mathbf x_p - \mathbf c_i) \times \frac{\partial A_i}{\partial \mathbf x_p} .
+
+The rotation follows every atom, so :math:`\partial A_i/\partial \mathbf R_j` gains :math:`\boldsymbol\tau_i \cdot \partial\boldsymbol\omega_i/\partial \mathbf R_j` for every atom :math:`j`, and ``area_grad`` carries the sum.

@@ -4,7 +4,8 @@ module moist_solvent_system
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
    use mctc_io, only: structure_type
-   use mctc_io_codata2018, only: Bohr_radius, atomic_unit_of_mass
+   use mctc_io_constants, only: codata
+   use mctc_io_codata2018, only: Bohr_radius, atomic_unit_of_time, standard_atmosphere
    use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_data_solvents, only: solvent_multipole_data_type, get_solvent_charges, &
       & get_solvent_multipoles
@@ -82,7 +83,7 @@ contains
       end if
 
       if (.not. present(pressure_si)) then
-         self%pressure_si = 101325.0_wp ! Default pressure: 1 atm in Pa
+         self%pressure_si = standard_atmosphere ! Default pressure: 1 atm in Pa
       else
          if (pressure_si < 0.0_wp) then
             call fatal_error(error, "Pressure must be non-negative.")
@@ -101,7 +102,7 @@ contains
       end if
 
       ! Pressure: Pa (kg/m/s**2) -> Eh/bohr^3
-      self%pressure_au = self%pressure_si/atomic_unit_of_mass*Bohr_radius*2.4188843E-17_wp**2
+      self%pressure_au = self%pressure_si/codata%me*Bohr_radius*atomic_unit_of_time**2
 
    end subroutine new_solvent_system
 

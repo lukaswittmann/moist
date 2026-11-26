@@ -18,7 +18,7 @@ module test_math_grid_3d_derivatives
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use test_helpers, only: get_qc_handymod_recipe, check_moist_error
+   use test_helpers, only: expect_error, get_qc_handymod_recipe, check_moist_error
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid, &
@@ -820,28 +820,6 @@ contains
       if (ok) call acc%init(grid%ngrid)
    end subroutine get_refusal_grid
 
-   !> Fail an expected-failure test only on the targeted library error
-   !>
-   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
-   !>   verdict: a raised test failure passes, a clean return fails
-   !> - Fails the test only when `err` names `expected`; no error or a
-   !>   different one returns cleanly, so the test is reported as failed
-   !>
-   !> @param[out] error     test failure, set only on the expected error
-   !> @param[in]  err       library error, possibly unallocated
-   !> @param[in]  expected  substring the expected error message must contain
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(mctc_error), allocatable, intent(in) :: err
-      !> Substring the expected error message must contain
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (index(err%message, expected) > 0) call test_failed(error, err%message)
-   end subroutine expect_error
-
    !> Gradient and Hessian finite differences of `mol` on every 3D grid
    !>
    !> @param[in] mol  reference geometry
@@ -1182,7 +1160,7 @@ contains
       integer :: i
 
       if (moved%ngrid /= grid%ngrid) then
-         call test_failed(error, grid%kind_name()//": finite-difference step changed point membership")
+         call test_failed(error, trim(grid%kind_name())//": finite-difference step changed point membership")
          return
       end if
       do i = 1, grid%ngrid
@@ -1196,7 +1174,7 @@ contains
          ! Per-element checks ~30x slower on millions of points
          ! `.not. all(... < thr)` also rejects NaN
          if (.not. all(abs(moved%xyz(:, i) - grid%xyz(:, i) - motion) < 1.0e-12_wp)) then
-            call test_failed(error, grid%kind_name()//": retained point identities must stay fixed")
+            call test_failed(error, trim(grid%kind_name())//": retained point identities must stay fixed")
             return
          end if
       end do

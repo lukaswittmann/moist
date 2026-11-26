@@ -3,21 +3,28 @@
 !> - grid point density of isolated spheres against `num_leb/(4 pi R^2)`
 !> - `rho_scal0` of isolated and overlapping atoms
 !> - curvatures, normals, point-to-center distances, area and volume of isolated spheres
+!> - zero curvatures, reported flat, at a point where the level set gradient vanishes
 !> - `analyze_cavity` report against the cavity's own areas and curvatures
+!> - watershed of `analyze_cavity` taking exactly tied k2 in point order
+!> - atom-partitioned areas of separated spheres and of a molecule
+!> - curvature refusal on a level-set failure of the surface tile
+!> - warning on an SvdW `blend_k` below the advised minimum
 module test_cavity_drop_properties
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env_accuracy, only: wp
-   use mctc_env_error, only: mctc_error => error_type
+   use mctc_env_error, only: mctc_error => error_type, fatal_error
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use mstore, only: get_structure
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_cavity_drop, only: cavity_type_drop
-   use test_helpers, only: build_test_cavity_drop
+   use test_helpers, only: build_test_cavity_drop, read_printout
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: new_radii_custom_atoms, default_cpcm_radii, radius_type
    use moist_context, only: moist_context_type, new_context
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -25,10 +32,8 @@ module test_cavity_drop_properties
 
    !> Projection tolerance
    real(wp), parameter :: PROJ_TOL = 1.0e-12_wp
-   !> Projection iteration cap
-   integer, parameter :: PROJ_MAXITER = 1000
-   !> Projection level, 1 = SLSQP only
-   integer, parameter :: PROJ_LEVEL = 2
+   !> Projection level, 1 = local Newton with coarse lattice retry
+   integer, parameter :: PROJ_LEVEL = 1
    !> Sphere radii of the isolated-atom fixtures, bohr
    real(wp), parameter :: SPHERE_RADII(3) = [2.0_wp, 3.5_wp, 5.0_wp]
    !> Density kernel lengths paired with `SPHERE_RADII`, bohr
@@ -83,6 +88,12 @@ module test_cavity_drop_properties
    !>
    !> Observed worst case 4.2e-15
    real(wp), parameter :: IDENT_VOLUME_THR = 1.0e-10_wp
+   !> Relative tolerance of the sum of the partitioned areas, which is the total area by construction
+   real(wp), parameter :: PARTITION_SUM_THR = 1.0e-12_wp
+   !> Lower bound of the largest shift between partitioned and owner-summed areas of MB16-43 `16`, Bohr^2
+   !>
+   !> Observed 22.7 (Al), at 194 points and `blend_k = 1`
+   real(wp), parameter :: PARTITION_SHIFT_MIN = 1.0_wp
 
 contains
 
@@ -97,9 +108,12 @@ contains
                   new_unittest("density_single_sphere", test_density_single_sphere), &
                   new_unittest("rho_scal0_molecule", test_rho_scal0_molecule), &
                   new_unittest("curvature_single_sphere", test_curvature_single_sphere), &
+                  new_unittest("curvature_zero_gradient", test_curvature_zero_gradient), &
                   new_unittest("sphere_geometry", test_sphere_geometry), &
                   new_unittest("analyze_cavity_output", test_analyze_cavity_output), &
-                  new_unittest("integral_identities", test_integral_identities) &
+                  new_unittest("watershed_tie_order", test_watershed_tie_order), &
+                  new_unittest("integral_identities", test_integral_identities), &
+                  new_unittest("atom_area_partition", test_atom_area_partition) &
                   ]
    end subroutine collect_cavity_drop_properties
 
@@ -118,8 +132,9 @@ contains
       logical, intent(in) :: do_density, do_curv
       type(moist_cavity_drop_parameters_type) :: param
 
-      param = moist_cavity_drop_parameters_type(num_leb=num_leb, tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-         proj_level=PROJ_LEVEL, rho_grid_h=h, do_grid_density=do_density, do_curvature=do_curv)
+      param = moist_cavity_drop_parameters_type(num_leb=num_leb, tolerance=PROJ_TOL, &
+         proj_level=PROJ_LEVEL, rho_grid_h=h, &
+         do_grid_density=do_density, do_curvature=do_curv)
    end function fixture_param
 
    !> Turn a cavity build error into a test failure
@@ -311,10 +326,132 @@ contains
       end do
    end subroutine test_curvature_single_sphere
 
-   !> Normals, center distances, displacements, area and volume of isolated spheres
+   !> Curvatures at a grid point where the level set gradient vanishes
    !>
-   !> - the outward normal is the unit radial vector, `r_iI0 = R`, and the
-   !>   anchor-to-surface displacement `rho` vanishes
+   !> - at the midpoint of two equal overlapping spheres the gradient is zero by
+   !>   symmetry and the point has no normal; a single-point jet gives exactly
+   !>   zero, the batched jet of the curvature tile leaves rounding (~1e-17)
+   !> - with the first grid point moved there, its shape operator is zero: `k1`,
+   !>   `k2`, `K_M` and `K_G` are zero, not noise over noise, and `analyze_cavity`
+   !>   reports its area, alone, as flat; the other points keep their curvatures
+   subroutine test_curvature_zero_gradient(error)
+      !> Test failure state
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Sphere radius and half the atom distance, bohr
+      real(wp), parameter :: radius = 2.0_wp, half = 1.5_wp
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      class(radius_type), allocatable :: radius_model
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf, probe
+      type(mctc_error), allocatable :: radius_error, cavity_error, lsf_error
+      real(wp) :: mid(3, 1), s(1), g(3, 1), v(2)
+      real(wp), allocatable :: k1_ref(:), k2_ref(:)
+      logical :: found, got_flat
+      integer :: iu, stat, n
+      character(len=256) :: line
+
+      call new(mol, [18, 18], reshape([0.0_wp, 0.0_wp, -half, 0.0_wp, 0.0_wp, half], [3, 2]))
+      call new_radii_custom_atoms([radius, radius], radius_model, radius_error)
+      if (allocated(radius_error)) then
+         call test_failed(error, "new_radii_custom_atoms failed: "//trim(radius_error%message))
+         return
+      end if
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat, 0, more="could not open the context scratch unit")
+      if (allocated(error)) return
+      call new_context(ctx, nthreads=0, verbosity=3, unit=iu)
+      call new_svdw_lsf(lsf, 1.0_wp)
+      allocate (cavity)
+      call build_test_cavity_drop(mol, 194, ctx, radius_model, lsf, cavity, cavity_error, &
+         param=fixture_param(194, 1.0_wp, .false., .true.))
+      call fail_on_build(error, cavity_error)
+      if (allocated(error)) then
+         close (iu)
+         return
+      end if
+      n = cavity%ngrid
+
+      ! Non-vacuity: the midpoint is reached and its gradient is exactly zero
+      mid = 0.0_wp
+      call new_svdw_lsf(probe, 1.0_wp)
+      call probe%update(mol, cavity%radii)
+      call probe%evaluate_batch(mid, 1, s, lsf1_r=g, error=lsf_error)
+      if (allocated(lsf_error)) then
+         call test_failed(error, "level set at the midpoint failed: "//trim(lsf_error%message))
+         close (iu)
+         return
+      end if
+      call check(error, .not. probe%unreached(1) .and. ieee_is_finite(s(1)) .and. all(g(:, 1) == 0.0_wp), &
+         "the midpoint is no reached zero-gradient point, |grad S| = "//to_string(norm2(g(:, 1))))
+      if (allocated(error)) then
+         close (iu)
+         return
+      end if
+      ! Control: the built cavity has no flat point
+      call check(error, n > 1 .and. .not. any(cavity%k1 == 0.0_wp .or. cavity%k2 == 0.0_wp), &
+         "the built cavity already has a flat point")
+      if (allocated(error)) then
+         close (iu)
+         return
+      end if
+      k1_ref = cavity%k1
+      k2_ref = cavity%k2
+
+      cavity%xyz(:, 1) = mid(:, 1)
+      call cavity%compute_curvature(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "compute_curvature failed: "//trim(cavity_error%message))
+         close (iu)
+         return
+      end if
+      call check(error, cavity%k1(1) == 0.0_wp .and. cavity%k2(1) == 0.0_wp .and. cavity%KM(1) == 0.0_wp &
+         .and. cavity%KG(1) == 0.0_wp, "zero-gradient point has curvatures k1 = "//to_string(cavity%k1(1))// &
+         ", k2 = "//to_string(cavity%k2(1))//", K_M = "//to_string(cavity%KM(1))//", K_G = "//to_string(cavity%KG(1)))
+      if (allocated(error)) then
+         close (iu)
+         return
+      end if
+      call check(error, maxval(abs(cavity%k1(2:n) - k1_ref(2:n))) < CURVATURE_ABS_THR .and. &
+         maxval(abs(cavity%k2(2:n) - k2_ref(2:n))) < CURVATURE_ABS_THR .and. &
+         .not. any(cavity%k1(2:n) == 0.0_wp .or. cavity%k2(2:n) == 0.0_wp), &
+         "curvatures of the other points changed")
+      if (allocated(error)) then
+         close (iu)
+         return
+      end if
+
+      ! The report of this call alone: a write after the rewind ends the file
+      rewind (iu)
+      call cavity%analyze_cavity(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "analyze_cavity failed: "//trim(cavity_error%message))
+         close (iu)
+         return
+      end if
+      got_flat = .false.
+      v = 0.0_wp
+      rewind (iu)
+      do
+         read (iu, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         if (index(line, "Flat    (k1 or k2 = 0)") > 0) then
+            call report_numbers(line, 2, v, found)
+            got_flat = found
+         end if
+      end do
+      close (iu)
+      call check(error, got_flat, "analyze_cavity report lacks the flat line")
+      if (allocated(error)) return
+      call check(error, cavity%a(1) > 0.0_wp .and. abs(v(1) - cavity%a(1)) < REPORT_ABS_THR, &
+         "Flat area is "//to_string(v(1))//" instead of the moved point's "//to_string(cavity%a(1)))
+   end subroutine test_curvature_zero_gradient
+
+   !> Normals, displacements, area and volume of isolated spheres
+   !>
+   !> - the outward normal is the unit radial vector and the anchor-to-surface
+   !>   displacement `pdist` vanishes
    !> - area `4 pi R^2` and volume `4 pi R^3/3` follow from the weights alone, and
    !>   the volume does not depend on the atom position
    subroutine test_sphere_geometry(error)
@@ -340,11 +477,8 @@ contains
          call check(error, dev < SPHERE_ABS_THR, "Normal is not the outward radial unit vector for R = "// &
                     to_string(SPHERE_RADII(ir)))
          if (allocated(error)) return
-         call check(error, maxval(abs(cavity%r_iI0 - SPHERE_RADII(ir))) < SPHERE_ABS_THR, &
-            "r_iI0 differs from R for R = "//to_string(SPHERE_RADII(ir)))
-         if (allocated(error)) return
-         call check(error, maxval(abs(cavity%rho)) < SPHERE_ABS_THR, &
-            "Anchor displacement rho of an isolated sphere is not zero for R = "//to_string(SPHERE_RADII(ir)))
+         call check(error, maxval(abs(cavity%pdist)) < SPHERE_ABS_THR, &
+            "Anchor displacement pdist of an isolated sphere is not zero for R = "//to_string(SPHERE_RADII(ir)))
          if (allocated(error)) return
          call check(error, cavity%total_area, 4.0_wp*pi*SPHERE_RADII(ir)**2, thr=SPHERE_ABS_THR, &
                     message="Sphere area differs from 4 pi R^2 for R = "//to_string(SPHERE_RADII(ir)))
@@ -533,6 +667,105 @@ contains
       if (allocated(error)) return
    end subroutine test_analyze_cavity_output
 
+   !> Watershed of `analyze_cavity` takes exactly tied k2 in point order
+   !>
+   !> - grid points 1-4 of an isolated sphere are moved far from it and made the
+   !>   concave chain B1 - P - Q - B2 of grid neighbours: basins at B1 (k2 -0.6)
+   !>   and B2 (-0.5), P and Q tied at -0.3
+   !> - in point order P comes first and joins the basin of B1, then Q meets both
+   !>   basins and is the ridge; Q first would join B2 and leave P as the ridge
+   !> - the per-patch table at verbosity 3 tells the two apart by the patch areas
+   subroutine test_watershed_tie_order(error)
+      !> Test failure state
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Areas of B1, P, Q and B2, bohr^2; every basin sum is distinct
+      real(wp), parameter :: chain_a(4) = [0.5_wp, 0.25_wp, 0.125_wp, 2.0_wp]
+      !> k2 of B1, P, Q and B2, bohr^-1
+      real(wp), parameter :: chain_k2(4) = [-0.6_wp, -0.3_wp, -0.3_wp, -0.5_wp]
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      type(mctc_error), allocatable :: cavity_error
+      real(wp) :: step, v(1), row(5), patch_area(2)
+      logical :: found, got_ridge, got_count, in_table
+      integer :: iu, stat, i, n_ridge, n_patch, n_row
+      character(len=256) :: line
+
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat, 0, more="could not open the context scratch unit")
+      if (allocated(error)) return
+      call new_context(ctx, nthreads=0, verbosity=3, unit=iu)
+      call build_sphere(error, cavity, ctx, SPHERE_RADII(2), [0.0_wp, 0.0_wp, 0.0_wp], 194, 1.0_wp, .false., .true.)
+      if (allocated(error)) then
+         close (iu)
+         return
+      end if
+      ! Control: the sphere has no concave point, so the chain is the whole watershed
+      call check(error, cavity%ngrid > 4 .and. all(cavity%k2(1:cavity%ngrid) > 0.0_wp), &
+         "the isolated sphere already has a concave point")
+      if (allocated(error)) then
+         close (iu)
+         return
+      end if
+
+      ! Neighbours along the chain only: spacing inside the cutoff, next but one outside
+      step = 0.75_wp*cavity%param%adj_list_grid_cutoff
+      do i = 1, 4
+         cavity%xyz(:, i) = [100.0_wp + real(i, wp)*step, 0.0_wp, 0.0_wp]
+      end do
+      cavity%k1(1:4) = 0.2_wp
+      cavity%k2(1:4) = chain_k2
+      cavity%a(1:4) = chain_a
+
+      ! The report of this call alone: a write after the rewind ends the file
+      rewind (iu)
+      call cavity%analyze_cavity(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "analyze_cavity failed: "//trim(cavity_error%message))
+         close (iu)
+         return
+      end if
+      got_ridge = .false.; got_count = .false.; in_table = .false.
+      n_ridge = -1; n_patch = -1; n_row = 0
+      patch_area = -1.0_wp
+      rewind (iu)
+      do
+         read (iu, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         if (index(line, "Ridge points (excluded)") > 0) then
+            call report_numbers(line, 1, v, found)
+            got_ridge = found
+            n_ridge = nint(v(1))
+         else if (index(line, "Patch count") > 0) then
+            call report_numbers(line, 1, v, found)
+            got_count = found
+            n_patch = nint(v(1))
+         else if (index(line, "Per-patch curvatures") > 0) then
+            in_table = .true.
+         else if (in_table) then
+            ! Header and separator do not read as five numbers
+            read (line, *, iostat=stat) row
+            if (stat == 0) then
+               n_row = n_row + 1
+               if (nint(row(1)) >= 1 .and. nint(row(1)) <= 2) patch_area(nint(row(1))) = row(2)
+            end if
+         end if
+      end do
+      close (iu)
+      call check(error, got_ridge .and. got_count .and. n_row == n_patch, &
+         "watershed report lacks the ridge or patch count, or the table has "//to_string(n_row)//" rows for "// &
+         to_string(n_patch)//" patches")
+      if (allocated(error)) return
+      call check(error, n_patch == 2 .and. n_ridge == 1, &
+         "chain has "//to_string(n_patch)//" patches and "//to_string(n_ridge)//" ridge points instead of 2 and 1")
+      if (allocated(error)) return
+      call check(error, abs(patch_area(1) - (chain_a(1) + chain_a(2))) < REPORT_ABS_THR .and. &
+         abs(patch_area(2) - chain_a(4)) < REPORT_ABS_THR, &
+         "tied k2 not taken in point order: patch areas "//to_string(patch_area(1))//" and "// &
+         to_string(patch_area(2))//" instead of "//to_string(chain_a(1) + chain_a(2))//" (B1 + P) and "// &
+         to_string(chain_a(4))//" (B2)")
+   end subroutine test_watershed_tie_order
+
    !> Fixture of the integral identities
    !>
    !> 1 two overlapping spheres, 2 three overlapping spheres, 3 MB16-43 `16`, 4 two separated spheres
@@ -683,5 +916,64 @@ contains
          end do
       end do
    end subroutine test_integral_identities
+
+   !> Atom-partitioned areas of separated spheres and of a molecule
+   !>
+   !> - two atoms 60 bohr apart keep every point on its own sphere, so each atom
+   !>   carries `4 pi R^2`, as does the owner sum
+   !> - on MB16-43 `16` at `blend_k = 1` the partitioned areas sum to the total
+   !>   area, and the projection carries points onto surface shaped by other atoms,
+   !>   so they differ from the owner sums
+   subroutine test_atom_area_partition(error)
+      !> Test failure state
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), parameter :: radii(2) = [2.0_wp, 2.5_wp]
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      class(radius_type), allocatable :: radius_model
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(moist_cavity_drop_parameters_type) :: param
+      type(mctc_error), allocatable :: radius_error, cavity_error
+      real(wp) :: shift
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_svdw_lsf(lsf, 1.0_wp)
+      param = fixture_param(194, 1.0_wp, .false., .false.)
+      param%do_atomarea = .true.
+
+      call new(mol, [18, 18], reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 60.0_wp], [3, 2]))
+      call new_radii_custom_atoms(radii, radius_model, radius_error)
+      if (allocated(radius_error)) then
+         call test_failed(error, "new_radii_custom_atoms failed: "//trim(radius_error%message))
+         return
+      end if
+      allocate (cavity)
+      call build_test_cavity_drop(mol, 194, ctx, radius_model, lsf, cavity, cavity_error, param=param)
+      call fail_on_build(error, cavity_error)
+      if (allocated(error)) return
+      call check(error, maxval(abs(cavity%asph_partition - 4.0_wp*pi*radii**2)) < SPHERE_ABS_THR, &
+         "Partitioned area of separated spheres differs from 4 pi R^2")
+      if (allocated(error)) return
+      call check(error, maxval(abs(cavity%asph - 4.0_wp*pi*radii**2)) < SPHERE_ABS_THR, &
+         "Owner-summed area of separated spheres differs from 4 pi R^2, the fixture is not isolated")
+      if (allocated(error)) return
+      deallocate (cavity)
+
+      call get_structure(mol, "MB16-43", "16")
+      radius_model = default_cpcm_radii()
+      allocate (cavity)
+      call build_test_cavity_drop(mol, 194, ctx, radius_model, lsf, cavity, cavity_error, param=param)
+      call fail_on_build(error, cavity_error)
+      if (allocated(error)) return
+      call check(error, sum(cavity%asph_partition), cavity%total_area, thr=PARTITION_SUM_THR*cavity%total_area, &
+                 message="Partitioned areas do not sum to the total area")
+      if (allocated(error)) return
+      shift = maxval(abs(cavity%asph_partition - cavity%asph))
+      call check(error, shift > PARTITION_SHIFT_MIN, &
+         "Partitioned areas follow the owner sums, largest shift "//to_string(shift)//" Bohr^2")
+      if (allocated(error)) return
+   end subroutine test_atom_area_partition
 
 end module test_cavity_drop_properties

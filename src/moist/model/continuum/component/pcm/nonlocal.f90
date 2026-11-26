@@ -7,7 +7,7 @@ module moist_model_continuum_component_pcm_nonlocal
    use moist_output_citations, only: citation
    use moist_utils_prettyprint, only: prettyprinter
    use moist_cavity_type, only: cavity_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
@@ -86,15 +86,20 @@ contains
       !> Relative permittivity inside the cavity
       real(wp), intent(in), optional :: epsilon_solute
       type(moist_pcm_parameters_type) :: settings
+      !> Values under test are finite and within their bounds
+      logical :: valid
 
-      if (.not. ieee_is_finite(epsilon) .or. epsilon < 1.0_wp .or. &
-          & .not. ieee_is_finite(epsilon_inf) .or. epsilon_inf < 1.0_wp .or. &
-          & .not. ieee_is_finite(lambda) .or. lambda <= 0.0_wp) then
+      ! Finiteness test first: an ordered comparison on a NaN raises invalid
+      valid = ieee_is_finite(epsilon) .and. ieee_is_finite(epsilon_inf) .and. ieee_is_finite(lambda)
+      if (valid) valid = epsilon >= 1.0_wp .and. epsilon_inf >= 1.0_wp .and. lambda > 0.0_wp
+      if (.not. valid) then
          call fatal_error(error, "Nonlocal PCM requires permittivities >= 1 and positive lambda")
          return
       end if
       if (present(epsilon_solute)) then
-         if (.not. ieee_is_finite(epsilon_solute) .or. epsilon_solute < 1.0_wp) then
+         valid = ieee_is_finite(epsilon_solute)
+         if (valid) valid = epsilon_solute >= 1.0_wp
+         if (.not. valid) then
             call fatal_error(error, "Nonlocal PCM solute permittivity must be >= 1")
             return
          end if
@@ -182,7 +187,7 @@ contains
    subroutine nonlocal_layer_weights(self, cavity, acc, error)
       class(model_continuum_component_nonlocal), intent(inout) :: self
       class(cavity_type), intent(in) :: cavity
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:), w_xi(:), w_f(:), w_a(:)
       integer :: ngrid

@@ -2,11 +2,12 @@
 module test_moz_solvent
    use mctc_env, only: wp, moist_error => error_type
    use mctc_io, only: structure_type, new
+   use mctc_io_constants, only: pi
    use mctc_io_convert, only: aatoau
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
    use moist_solvent_system, only: solvent_system_type, new_solvent_system
-   use moist_math_packed_sym, only: packed_index, npair_from_ns
+   use moist_math_packed, only: packed_index, npair_from_ns
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_potential, only: moz_potential_type
@@ -290,7 +291,6 @@ contains
       real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), uk_lr(:, :)
       real(wp), allocatable :: sr6(:), expected(:), k2(:)
       real(wp) :: sigma, epsilon, qq
-      real(wp), parameter :: pi = acos(-1.0_wp)
       integer :: i, j, ip
 
       call new_context(ctx, nthreads=0, verbosity=0)

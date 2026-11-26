@@ -3,8 +3,8 @@
 !> Wrapper to symmetric divide-and-conquer solver for general eigenvalue problems
 module moist_math_lapack_sygvd
    use mctc_env, only: sp, dp, error_type, fatal_error
-   use moist_output_format, only: format_string
    use moist_math_lapack_type, only: eigen_solver_type, context_solver
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -135,7 +135,7 @@ contains
 
       if (info /= 0) then
          call fatal_error(error, "(sygvd) failed to solve eigenvalue problem.&
-            & info="//format_string(info, "(i0)"))
+            & info="//to_string(info))
       end if
    end subroutine handle_info
 

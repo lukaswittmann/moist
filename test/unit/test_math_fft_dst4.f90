@@ -16,7 +16,9 @@ module test_math_fft_dst4
       & ieee_positive_inf
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
+   use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use test_helpers, only: expect_error
    use moist_math_fft_dst4, only: dst4_plan_type, dst4_work_type
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
    use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, new_radial_trafo
@@ -91,10 +93,9 @@ contains
       real(wp), intent(out) :: y(:)
 
       integer :: n, j, k, m
-      real(wp) :: pi, acc
+      real(wp) :: acc
 
       n = size(x)
-      pi = acos(-1.0_wp)
       do k = 1, n
          acc = 0.0_wp
          do j = 1, n
@@ -337,28 +338,6 @@ contains
    end subroutine test_dst4_involution
 
    !* - * Uniform radial pair constructor: invalid parameters                        *  *!
-
-   !> Fail an expected-failure test only on the targeted library error
-   !>
-   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
-   !>   verdict: a raised test failure passes, a clean return fails
-   !> - Fails the test only when `err` names `expected`; no error or a
-   !>   different one returns cleanly, so the test is reported as failed
-   !>
-   !> @param[out] error     test failure, set only on the expected error
-   !> @param[in]  err       library error, possibly unallocated
-   !> @param[in]  expected  substring the expected error message must contain
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(mctc_error), allocatable, intent(in) :: err
-      !> Substring the expected error message must contain
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (index(err%message, expected) > 0) call test_failed(error, err%message)
-   end subroutine expect_error
 
    !> A grid without nodes is refused
    subroutine test_bad_uniform_npts_zero(error)
@@ -624,7 +603,6 @@ contains
       real(wp), parameter :: expo(2) = [0.7_wp, 0.91_wp]
       !> Acceptance bound, relative to the reference maximum
       real(wp), parameter :: thr = 3.0e-15_wp
-      real(wp), parameter :: pi = acos(-1.0_wp)
       type(moist_math_grid_radial_type) :: rgrid, kgrid
       class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       type(mctc_error), allocatable :: merr

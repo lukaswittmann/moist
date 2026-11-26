@@ -12,6 +12,7 @@ module moist_math_solver_newton
       & NLESOLVER_LINESEARCH_SIMPLE, NLESOLVER_LINESEARCH_BACKTRACKING, NLESOLVER_LINESEARCH_EXACT, &
       & NLESOLVER_LINESEARCH_FIXEDPOINT, NLESOLVER_IGNORE_BOUNDS, NLESOLVER_SCALAR_BOUNDS, &
       & NLESOLVER_VECTOR_BOUNDS, NLESOLVER_WALL_BOUNDS
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -428,6 +429,8 @@ contains
       !> Local variables
       integer :: istat
       character(len=:), allocatable :: message
+      !> Decoded failure description
+      character(len=:), allocatable :: decoded
 
       if (.not. allocated(self%solver)) then
          call fatal_error(error, "Newton solver is not initialized")
@@ -459,10 +462,11 @@ contains
       case default
          if (istat < 0) then
             ! Error condition - decode the error code
-            call fatal_error(error, decode_error_message(istat, message))
+            call decode_error_message(istat, message, decoded)
+            call fatal_error(error, decoded)
          else
             ! Unknown status
-            call fatal_error(error, "Newton solver [code "//trim(int_to_str(istat))//"]: Unknown status")
+            call fatal_error(error, "Newton solver [code "//to_string(istat)//"]: Unknown status")
          end if
       end select
 
@@ -617,11 +621,14 @@ contains
    !>
    !> @param[in]  istat    Error status code
    !> @param[in]  message  Original message from nlesolver
-   !> @return     Detailed error message with code and description
-   function decode_error_message(istat, message) result(msg)
+   !> @param[out] msg      Detailed error message with code and description
+   pure subroutine decode_error_message(istat, message, msg)
+      !> Error status code
       integer, intent(in) :: istat
+      !> Original message from nlesolver
       character(len=*), intent(in) :: message
-      character(len=:), allocatable :: msg
+      !> Detailed error message
+      character(len=:), allocatable, intent(out) :: msg
       character(len=:), allocatable :: code_desc
 
       select case (istat)
@@ -675,20 +682,10 @@ contains
          code_desc = "Unknown error"
       end select
 
-      msg = "Newton solver [code "//trim(int_to_str(istat))//"]: "// &
+      msg = "Newton solver [code "//to_string(istat)//"]: "// &
             trim(code_desc) ! // " | Details: " // trim(message)
 
-   end function decode_error_message
-
-   !> Convert integer to string (helper function)
-   !>
-   !> @param[in]  i  Integer to convert
-   !> @return     String representation
-   function int_to_str(i) result(s)
-      integer, intent(in) :: i
-      character(len=20) :: s
-      write (s, "(I0)") i
-   end function int_to_str
+   end subroutine decode_error_message
 
    !> Internal wrapper for user Jacobian callback (sparse)
    !>

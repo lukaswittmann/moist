@@ -4,6 +4,7 @@ module test_cavity_mc
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_mc, only: moist_cavity_mc_parameters_type, integrate_surface_mc
    use mctc_env, only: wp
+   use moist_math_linalg_geometry, only: cross_product
    use mctc_env_error, only: mctc_error => error_type, fatal_error
    use mctc_io_constants, only: pi
    use mctc_io_convert, only: autoaa
@@ -17,7 +18,7 @@ module test_cavity_mc
    use moist_channels_coupling, only: coupling_type
    use moist_radii, only: new_radii_custom_atoms, radius_type, default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
-   use test_helpers, only: check_moist_error, read_printout
+   use test_helpers, only: check_moist_error, expect_error, read_printout
 
    implicit none(type, external)
    private
@@ -94,6 +95,21 @@ module test_cavity_mc
       procedure :: prepare => failing_prepare
    end type failing_lsf_type
 
+   !> SvdW level set that leaves points beyond a reach unreached
+   type, extends(moist_cavity_drop_lsf_svdw_type) :: reach_lsf_type
+      !> Distance past the nearest sphere surface beyond which a point is far, bohr
+      real(wp) :: reach = huge(1.0_wp)
+      !> Report a far point as reached with `far_value` instead of unreached
+      logical :: fake_far = .false.
+      !> Value of a far point when `fake_far`
+      real(wp) :: far_value = 0.0_wp
+      !> Whether the last prepared point is far
+      logical :: far = .false.
+   contains
+      procedure :: prepare => reach_prepare
+      procedure :: f0 => reach_f0
+   end type reach_lsf_type
+
 contains
 
    !> Collect all exported unit tests
@@ -120,6 +136,7 @@ contains
          & new_unittest("build_keeps_totals", test_build_keeps_totals), &
          & new_unittest("bare_kernel_defaults", test_bare_kernel), &
          & new_unittest("bad_lsf_evaluation", test_bad_lsf_evaluation, should_fail=.true.), &
+         & new_unittest("unreached_vertices_exterior", test_unreached_vertices), &
          & new_unittest(case_to_string(cases(1)), test_case_001), &
          & new_unittest(case_to_string(cases(2)), test_case_002), &
          & new_unittest(case_to_string(cases(3)), test_case_003), &
@@ -648,7 +665,7 @@ contains
          case ("v ")
             nv = nv + 1
             read (line(2:), *) vertex(:, mod(nv - 1, 3) + 1)
-            if (mod(nv, 3) == 0) obj_area = obj_area + 0.5_wp*norm2(cross(vertex(:, 2) - vertex(:, 1), &
+            if (mod(nv, 3) == 0) obj_area = obj_area + 0.5_wp*norm2(cross_product(vertex(:, 2) - vertex(:, 1), &
                & vertex(:, 3) - vertex(:, 1)))
          case ("f ")
             nf = nf + 1
@@ -936,10 +953,12 @@ contains
       call new_context(ctx, nthreads=0, verbosity=0)
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       call new_radii_custom_atoms([SPHERE_RADIUS], radius_model, cavity_error)
+      if (allocated(cavity_error)) return
       call lsf%new()
-      if (.not. allocated(cavity_error)) call new_cavity_mc(cav, radius_model, lsf, cavity_error, ctx=ctx)
-      if (.not. allocated(cavity_error)) call cav%update(mol, cavity_error)
-      call check_moist_error(error, cavity_error)
+      call new_cavity_mc(cav, radius_model, lsf, cavity_error, ctx=ctx)
+      if (allocated(cavity_error)) return
+      call cav%update(mol, cavity_error)
+      call expect_error(error, cavity_error, "Injected level-set failure")
    end subroutine test_bad_lsf_evaluation
 
    !> Reject every evaluation point
@@ -958,20 +977,97 @@ contains
       call fatal_error(error, "Injected level-set failure")
    end subroutine failing_prepare
 
-   !> Three-dimensional vector product
+   !> Vertices beyond the level set's reach count as exterior
    !>
-   !> @param[in] a First vector
-   !> @param[in] b Second vector
-   pure function cross(a, b) result(c)
-      !> First vector
-      real(wp), intent(in) :: a(3)
-      !> Second vector
-      real(wp), intent(in) :: b(3)
-      !> Vector product
-      real(wp) :: c(3)
+   !> - a reach of 2.5 bohr past the R = 2 sphere exceeds the coarse cell
+   !>   diagonal (1.33 sqrt(3) bohr), so every unreached vertex only shares cubes
+   !>   with exterior vertices, while the grid corners (6.9 bohr out) are unreached
+   !> - area and volume then equal those of the plain level set bit for bit
+   !> - negative control: the same far vertices reported as interior (-1) change
+   !>   the area, so the far region is sampled and its value matters; a far value
+   !>   of 0 is indistinguishable here (a zero vertex without a negative
+   !>   neighbour spawns no triangle), it only defeats the all-positive cube skip
+   subroutine test_unreached_vertices(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: cavity_error
+      type(moist_cavity_drop_lsf_svdw_type) :: plain
+      type(reach_lsf_type) :: lsf
+      real(wp) :: xyz(3, 1), area_ref, volume_ref, area, volume
 
-      c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
-   end function cross
+      xyz = 0.0_wp
+      call new(mol, [1], xyz)
+      call plain%new()
+      call plain%update(mol, [2.0_wp])
+      call integrate_surface_mc(plain, xyz, area_ref, volume_ref, cavity_error, nthreads=1)
+      call check_moist_error(error, cavity_error, "plain level set")
+      if (allocated(error)) return
+
+      call lsf%new()
+      call lsf%update(mol, [2.0_wp])
+      lsf%reach = 2.5_wp
+      call integrate_surface_mc(lsf, xyz, area, volume, cavity_error, nthreads=1)
+      call check_moist_error(error, cavity_error, "unreached far vertices")
+      if (allocated(error)) return
+      call check(error, area, area_ref, thr=0.0_wp)
+      if (allocated(error)) return
+      call check(error, volume, volume_ref, thr=0.0_wp)
+      if (allocated(error)) return
+
+      lsf%fake_far = .true.
+      lsf%far_value = -1.0_wp
+      call integrate_surface_mc(lsf, xyz, area, volume, cavity_error, nthreads=1)
+      call check_moist_error(error, cavity_error, "interior far vertices")
+      if (allocated(error)) return
+      call check(error, abs(area - area_ref) > REL_THR*area_ref, &
+                 "interior far vertices leave the area unchanged, the far region is not sampled")
+   end subroutine test_unreached_vertices
+
+   !> Leave a point beyond the reach unreached, or report it as `far_value`
+   !>
+   !> @param[in,out] self   Level set
+   !> @param[in]     point  Evaluation point (3), bohr
+   !> @param[out]    error  Failure of the wrapped level set
+   subroutine reach_prepare(self, point, error)
+      !> Level set
+      class(reach_lsf_type), intent(inout) :: self
+      !> Evaluation point
+      real(wp), intent(in) :: point(3)
+      !> Failure of the wrapped level set
+      type(mctc_error), allocatable, intent(out) :: error
+      integer :: i
+      real(wp) :: gap
+
+      gap = huge(1.0_wp)
+      do i = 1, self%ncenters
+         gap = min(gap, norm2(point - self%mol%xyz(:, i)) - self%radii(i))
+      end do
+      self%far = gap > self%reach
+      if (self%far) then
+         ! Unreached unless reported as `far_value`
+         self%prepared_unreached = .not. self%fake_far
+         return
+      end if
+      call self%moist_cavity_drop_lsf_svdw_type%prepare(point, error)
+   end subroutine reach_prepare
+
+   !> Value of the last prepared point, `far_value` when it is far
+   !>
+   !> @param[in]  self Level set
+   !> @param[out] val  Level-set value
+   subroutine reach_f0(self, val)
+      !> Level set
+      class(reach_lsf_type), intent(in) :: self
+      !> Level-set value
+      real(wp), intent(out) :: val
+
+      if (self%far) then
+         val = self%far_value
+      else
+         call self%moist_cavity_drop_lsf_svdw_type%f0(val)
+      end if
+   end subroutine reach_f0
 
    !> Integrate one molecular case and compare against its fine-grid reference
    !>
@@ -1034,7 +1130,7 @@ contains
       type(integration_case_type), intent(in) :: c
 
       !> Printable case label without trailing blanks
-      character(len=:), allocatable :: str
+      character(len=len_trim(c%dataset) + len_trim(c%structure) + 22) :: str
 
       character(len=8) :: k_str, b_str, g_str
 

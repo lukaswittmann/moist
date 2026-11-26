@@ -821,7 +821,6 @@ def get_cavity_results(cavity: CavityHandle) -> dict:
     xyz = np.zeros((ngrid, 3), dtype=np.float64, order="C")
     weights = np.zeros(ngrid, dtype=np.float64)
     owner = np.zeros(ngrid, dtype=np.int32)
-    converged = np.zeros(ngrid, dtype=np.bool_)
     radii = np.zeros(nsph, dtype=np.float64)
     asph = np.zeros(nsph, dtype=np.float64)
 
@@ -836,7 +835,6 @@ def get_cavity_results(cavity: CavityHandle) -> dict:
         _cast("double*", xyz),
         _cast("double*", weights),
         _cast("int*", owner),
-        _cast("bool*", converged),
         _cast("double*", radii),
         _cast("double*", asph),
     )
@@ -849,7 +847,6 @@ def get_cavity_results(cavity: CavityHandle) -> dict:
         "xyz": xyz,
         "a": weights,
         "owner": owner,
-        "converged": converged,
         "radii": radii,
         "asph": asph,
     }
@@ -1250,10 +1247,12 @@ def get_cavity_gaussian(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:
 def compute_anchor_gradient(cavity: CavityHandle) -> None:
     """Compute the anchor-only nuclear derivatives of a DROP cavity.
 
-    Restricts every grid point's nuclear coupling to its owner atom's rigid
-    anchor motion. For a callback level set the field's own nuclear partials
-    are zero, so this is the entire nuclear route moist can see; the host adds
-    the field route by contracting the LSF adjoints with its own ``dS/dR``.
+    Holds the level set field fixed in space: every grid point moves with its
+    owner atom's anchor, and the switching still follows the neighbouring
+    atoms. For a callback level set the field's own nuclear partials are zero,
+    so this equals the full gradient and is the entire nuclear route moist can
+    see; the host adds the field route by contracting the LSF adjoints with its
+    own ``dS/dR``.
     """
 
     error_check(lib.moist_compute_anchor_gradient)(cavity.handle)

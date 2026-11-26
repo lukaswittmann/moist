@@ -10,6 +10,7 @@ module moist
    use moist_model_continuum_component_gostshyp, only: moist_gostshyp_parameters_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_lsf_cfc_param, only: moist_cavity_drop_lsf_cfc_param_type
+   use moist_cavity_drop_lsf_sses_param, only: moist_cavity_drop_lsf_sses_param_type
    use moist_cavity_drop_lsf_isodensity_param, only: moist_cavity_drop_lsf_isodensity_param_type
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_basis
    use mctc_io, only: structure_type, new
@@ -17,6 +18,9 @@ module moist
    use moist_version, only: get_moist_version
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_radii, only: radius_type, new_radii
+   use moist_cavity_grid_model_symmetry, only: grid_model_symmetry_type, new_grid_model_symmetry, &
+      & moist_cavity_grid_model_symmetry_parameters_type
+   use moist_cavity_grid, only: grid_model_type, new_grid_model
    use moist_solvent, only: solvent_descriptors_type, get_solvent_descriptors, &
       & get_solvent_descriptors_by_id
    use moist_build_info, only: git_commit, build_host
@@ -51,12 +55,15 @@ module moist
    public :: moist_pcm_parameters_type, moist_gostshyp_parameters_type
    public :: moist_cavity_drop_lsf_svdw_param_type
    public :: moist_cavity_drop_lsf_cfc_param_type
+   public :: moist_cavity_drop_lsf_sses_param_type
    public :: moist_cavity_drop_lsf_isodensity_param_type, moist_iso_basis
    public :: structure_type, new
    public :: error_type, fatal_error, wp
    public :: get_moist_version
    public :: cavity_type_drop, new_cavity_drop
    public :: radius_type, new_radii
+   public :: grid_model_symmetry_type, new_grid_model_symmetry, moist_cavity_grid_model_symmetry_parameters_type
+   public :: grid_model_type, new_grid_model
    public :: solvent_descriptors_type, get_solvent_descriptors, get_solvent_descriptors_by_id
    public :: git_commit, build_host
    public :: solvation_model_type, model_continuum_type, new_continuum_model, &

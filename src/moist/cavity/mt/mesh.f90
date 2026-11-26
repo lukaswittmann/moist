@@ -5,6 +5,7 @@ module moist_cavity_mt_mesh
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
+   use moist_math_linalg, only: cross_product
 !$ use omp_lib, only: omp_get_thread_num, omp_get_max_threads
    implicit none(type, external)
    private
@@ -59,6 +60,17 @@ module moist_cavity_mt_mesh
       !> Intersected lattice edge index
       type(pair_table_type) :: edges
    end type surface_buffer_type
+
+   !> Lattice value of a node beyond the LSF's reach (`unreached()` after `prepare`): exterior
+   !>
+   !> - the true value is exterior (SvdW `Z = 0`, `S = +inf`; CFC `PD`
+   !>   underflowed), and `triangulate_tetra` classes `f >= 0` as exterior; zero
+   !>   would be the surface, not a far point
+   !> - its magnitude never enters an edge interpolation: an unreached node lies
+   !>   past the SvdW fade band end or hundreds of e-folds of CFC `PD` below the
+   !>   isovalue, so its lattice neighbours one cell away are exterior too
+   !> - one bohr, the LSF's natural scale, finite unlike the true value
+   real(wp), parameter :: mesh_exterior_value = 1.0_wp
 
    !> Cube vertices and six tetrahedra around the common body diagonal 1-8
    integer, parameter :: corner(3, 8) = reshape([ &
@@ -166,8 +178,7 @@ contains
             call fatal_error(error, "MT mesh: could not clone LSF")
             return
          end if
-         ! Screened SvdW/CFC return zero for an empty active list, which is
-         ! an exterior sentinel rather than a zero-set crossing
+         ! Full scan; a node no atom reaches is `mesh_exterior_value`, never zero
          call slots(i)%lsf%set_screening_threshold(0.0_wp)
          call slots(i)%lsf%set_max_deriv(0)
       end do
@@ -251,8 +262,8 @@ contains
       top = 2
       call sample_plane(slots, nt, lower, nc, h, origin, 0, planes(:, :, bottom), error)
       if (allocated(error)) return
-      ! Underflowed production pseudo-densities may report exterior zero.
-      ! Genuine zero contacts remain valid only if final adjacency is closed.
+      ! Unreached nodes are `mesh_exterior_value`; genuine zero contacts remain
+      ! valid only if final adjacency is closed
       boundary_hit = any(planes(:, :, bottom) < 0.0_wp)
       if (boundary_hit) return
       do iz = 0, nc(3) - 1
@@ -324,6 +335,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(error_type), allocatable :: local_error
       real(wp) :: point(3), val
+      !> Lattice indices and thread slot
       integer :: ix, iy, slot
 
       !$omp parallel do collapse(2) schedule(static) num_threads(nt) default(shared) &
@@ -334,10 +346,12 @@ contains
 !$          slot = omp_get_thread_num() + 1
             point = origin + lower + h*real([ix, iy, iz], wp)
             call slots(slot)%lsf%prepare(point, local_error)
-            val = 0.0_wp
+            val = mesh_exterior_value
             if (.not. allocated(local_error)) then
-               call slots(slot)%lsf%f0(val)
-               if (.not. ieee_is_finite(val)) call fatal_error(local_error, "MT mesh: nonfinite LSF value")
+               if (.not. slots(slot)%lsf%unreached()) then
+                  call slots(slot)%lsf%f0(val)
+                  if (.not. ieee_is_finite(val)) call fatal_error(local_error, "MT mesh: nonfinite LSF value")
+               end if
             end if
             if (allocated(local_error)) then
                !$omp critical(mt_mesh_sample_error)
@@ -504,8 +518,8 @@ contains
       integer :: capacity, stat
       integer, allocatable :: grown(:, :)
       if (v(1) == v(2) .or. v(1) == v(3) .or. v(2) == v(3)) return
-      normal = cross(buffer%vertices(:, v(2)) - buffer%vertices(:, v(1)), &
-                     buffer%vertices(:, v(3)) - buffer%vertices(:, v(1)))
+      normal = cross_product(buffer%vertices(:, v(2)) - buffer%vertices(:, v(1)), &
+                             buffer%vertices(:, v(3)) - buffer%vertices(:, v(1)))
       if (norm2(normal) <= 0.0_wp) return
       capacity = size(buffer%triangles, 2)
       if (buffer%nt == capacity) then
@@ -576,12 +590,12 @@ contains
       do it = 1, buffer%nt
          v = mesh%triangles(:, it)
          p = buffer%vertices(:, v)
-         n = cross(p(:, 2) - p(:, 1), p(:, 3) - p(:, 1))
+         n = cross_product(p(:, 2) - p(:, 1), p(:, 3) - p(:, 1))
          length = norm2(n)
          mesh%area(it) = 0.5_wp*length
          mesh%normal(:, it) = n/length
          mesh%centroid(:, it) = origin + sum(p, dim=2)/3.0_wp
-         volume = dot_product(p(:, 1), cross(p(:, 2), p(:, 3)))/6.0_wp
+         volume = dot_product(p(:, 1), cross_product(p(:, 2), p(:, 3)))/6.0_wp
          y = volume - correction
          summed = mesh%total_volume + y
          correction = (summed - mesh%total_volume) - y
@@ -696,19 +710,5 @@ contains
       call move_alloc(grown%second, table%second)
       call move_alloc(grown%value, table%value)
    end subroutine resize_table
-
-   !> Three-dimensional vector product
-   !>
-   !> @param[in] a First vector
-   !> @param[in] b Second vector
-   pure function cross(a, b) result(c)
-      !> First vector
-      real(wp), intent(in) :: a(3)
-      !> Second vector
-      real(wp), intent(in) :: b(3)
-      !> Vector product
-      real(wp) :: c(3)
-      c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
-   end function cross
 
 end module moist_cavity_mt_mesh

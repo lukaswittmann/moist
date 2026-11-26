@@ -169,8 +169,9 @@ typedef struct moist_response_s* moist_response;
 ///   parallel evaluation loops, and fails the enclosing moist_update_cavity(),
 ///   moist_build_cavity(), moist_update_model() or moist_build_model()
 ///   with a moist_error naming the returned status
-/// - Only abort path from inside a callback; without it moist builds a
-///   cavity from whatever is in the buffers
+/// - Abort paths from inside a callback: nonzero status, or a non-finite
+///   value in a requested buffer; otherwise moist builds a cavity from
+///   whatever is in the buffers
 /// - Status value opaque to moist, echoed verbatim in the error message; may
 ///   carry host-defined error codes
 ///
@@ -281,9 +282,13 @@ typedef struct {
     double tolerance;
     int proj_maxiter;
     int proj_level;
-    double branch_weight_s;
+    double branch_dpdist_max;
     double rho_grid_h;
     int wleb_prune_level;
+    double branch_reach_on; /* Reach gate open up to this distance (bohr); default 3.78 */
+    double branch_reach_off; /* Reach gate closed from this distance (bohr); default 5.67, bounds the search */
+    double w_0hor_off; /* Horizon switch off-edge in n_surf . n_sph */
+    double w_0hor_on; /* Horizon switch on-edge; 0 switches the horizon factor off */
     /* --- end of 1.0 layout --- */
 } moist_drop_options;
 
@@ -309,6 +314,7 @@ typedef struct {
     double blend_1b;
     double blend_2b;
     double blend_3b;
+    double scale;  /* Constant level-set multiplier, positive */
     /* --- end of 1.0 layout --- */
 } moist_svdw_options;
 
@@ -322,6 +328,7 @@ typedef struct {
     double a2;
     double c;
     int m;
+    double scale;  /* Constant level-set multiplier, positive */
     /* --- end of 1.0 layout --- */
 } moist_cfc_options;
 
@@ -1030,8 +1037,8 @@ moist_get_response_item_name(moist_error error, moist_response response,
 ///   "density": "w_rho" [ngrid], "w_grad_rho" [ngrid][3], "w_hess_rho"
 ///     [ngrid][3][3], the weights conjugate to the density value, gradient and
 ///     Hessian. Hessian weights use C indices [point][b][a] for native
-///     weights(a,b,point); need not be symmetric, preserve this axis order
-///     when contracting
+///     weights(a,b,point); symmetric, off-diagonals not doubled, so the
+///     full 3x3 contraction sum_ab w[i][b][a] H_ab applies as is
 ///   "gaussian_amplitude": "w_overlap" [ngrid], "w_normal_deriv" [ngrid],
 ///     contracted as `F_uv += sum_i [w_overlap[i] g_uv,i + w_normal_deriv[i] f_uv,i]`
 ///     with g_uv,i = <u|G_i|v> and f_uv,i = n_i . grad_r g_uv,i
@@ -1198,9 +1205,7 @@ moist_get_cavity_sizes(moist_error error,
                        int* nsph) moist_API_SUFFIX__V_1_0;
 
 /// Get generic cavity results - works for all cavity types
-/// Returns fields shared by all cavity types. `converged` contains DROP's
-/// per-point projection status; cavity types without a projection solve return
-/// true for every retained point
+/// Returns fields shared by all cavity types
 /// Call moist_get_cavity_sizes first to get ngrid, nsph, then allocate arrays
 /// and pass the capacities you allocated them with (see the capacity
 /// convention at the top of this header). Nothing is written when either
@@ -1221,7 +1226,6 @@ moist_get_cavity_results(moist_error error,
                          double* xyz /* : row-major (ngrid_cap, 3) */,
                          double* a /* [ngrid_cap] */,
                          int* owner /* [ngrid_cap] - 0-based atom indices (0 to nsph-1) */,
-                         bool* converged /* [ngrid_cap] */,
                          double* radii /* [nsph_cap] */,
                          double* asph /* [nsph_cap] */) moist_API_SUFFIX__V_1_0;
 
@@ -1298,7 +1302,9 @@ moist_get_cavity_field_real(moist_error error,
 /// Read a MOIST_FIELD_INT field by name
 /// Sphere indices handed out 0-based, matching moist_get_cavity_results;
 /// the DROP point ids `numbering` and `anchor_id` and the 1-based `branch` are
-/// passed through as the cavity stores them
+/// passed through as the cavity stores them; DROP `offset` [nmax + 1] holds the
+/// 0-based first row of each anchor (rows of anchor i are offset[i] to
+/// offset[i + 1] - 1) and `anchor_of_row` [ngrid] the 0-based anchor of each row
 moist_API_ENTRY void moist_API_CALL
 moist_get_cavity_field_int(moist_error error,
                            moist_cavity cavity,
@@ -1489,10 +1495,12 @@ moist_API_ENTRY void moist_API_CALL
 moist_compute_cavity_gradient(moist_error error,
                               moist_cavity cavity) moist_API_SUFFIX__V_1_0;
 
-/// Compute anchor-only nuclear derivatives (callback/isodensity LSF, DROP-specific)
+/// Compute anchor-only nuclear derivatives (frozen field, DROP-specific)
 /// Must be called after moist_update_cavity and before the *_rA contractions
-/// Restricts each grid point's nuclear coupling to its owner atom's rigid anchor
-/// motion (the level set field's nuclear derivatives are zero for callback LSFs)
+/// Holds the level set field fixed in space: each grid point moves with its
+/// owner atom's anchor, the switching still follows the neighbouring atoms;
+/// equal to moist_compute_cavity_gradient for callback LSFs, whose field has
+/// no nuclear derivatives (the host adds the density response itself)
 moist_API_ENTRY void moist_API_CALL
 moist_compute_anchor_gradient(moist_error error,
                               moist_cavity cavity) moist_API_SUFFIX__V_1_0;
@@ -1541,11 +1549,6 @@ moist_get_anchor_gradient(moist_error error,
 ///   asph1_rA  row-major (nsph_cap, nsph_cap, 3) - gradient of per-sphere areas (perturbed atom, owner, xyz)
 ///   vsph1_rA  row-major (nsph_cap, nsph_cap, 3) - gradient of per-sphere volumes (perturbed atom, owner, xyz)
 ///   xyz1_rA   row-major (ngrid_cap, nsph_cap, 3, 3) - grid point position derivatives (grid, atom, perturbed_xyz, xyz)
-///   r_iI1_rA  row-major (ngrid_cap, nsph_cap, 3) - gradient of grid-owner distances (optional)
-///   rho1_rA   row-major (ngrid_cap, nsph_cap, 3) - gradient of rho (anchor-to-surface distance) (optional)
-/// The two optional outputs accept NULL. They are computed only for a cavity
-/// built with do_fine; a buffer for one that was not computed is an error and
-/// nothing is written
 moist_API_ENTRY void moist_API_CALL
 moist_get_cavity_gradient(moist_error error,
                           moist_cavity cavity,
@@ -1559,15 +1562,14 @@ moist_get_cavity_gradient(moist_error error,
                           double* V_tot1_rA /* : row-major (nsph_cap, 3) */,
                           double* asph1_rA /* : row-major (nsph_cap, nsph_cap, 3) */,
                           double* vsph1_rA /* : row-major (nsph_cap, nsph_cap, 3) */,
-                          double* xyz1_rA /* : row-major (ngrid_cap, nsph_cap, 3, 3) */,
-                          double* r_iI1_rA /* : row-major (ngrid_cap, nsph_cap, 3), or NULL */,
-                          double* rho1_rA /* : row-major (ngrid_cap, nsph_cap, 3), or NULL */) moist_API_SUFFIX__V_1_0;
+                          double* xyz1_rA /* : row-major (ngrid_cap, nsph_cap, 3, 3) */) moist_API_SUFFIX__V_1_0;
 
 /// Contract DROP surface weights to per-grid LSF adjoint weights (DROP-specific)
 /// Includes the projected-coordinate response from w_xyz and the electronic
-/// xi path through wleb, cpjac, and the critical-gradient/focus switches
-/// Exported w_f is the anchor-only iSwiG overlap and has no electronic
-/// LSF response for fixed nuclei
+/// xi path through wleb and cpjac
+/// The anchor part of the switching value is an iSwiG overlap without an
+/// electronic LSF response for fixed nuclei; w_f and w_a still contribute
+/// through the branch weight, which carries the critical-gradient/focus gate
 /// Uses cavity-internal ngrid for array extents
 /// Arrays (row-major order; see the layout convention at the top of this header):
 ///   w_xi[ngrid]                        - xi derivative weights
@@ -1577,7 +1579,7 @@ moist_get_cavity_gradient(moist_error error,
 ///   w_lsf1    row-major (ngrid, 3)        - LSF gradient adjoint weights
 ///   w_lsf2    row-major (ngrid, 3, 3)      - LSF Hessian adjoint weights
 /// w_lsf2[i][b][a] is conjugate to the native Hessian(a,b,i)
-/// Note: w_lsf2 is NOT symmetric
+/// Note: w_lsf2 is symmetric in its two Cartesian axes, off-diagonals not doubled
 /// This entry point covers the xi/f/xyz channels only: a thin wrapper
 /// forwarding NULL for the extended channels below
 moist_API_ENTRY void moist_API_CALL
@@ -1613,6 +1615,9 @@ moist_contract_surface_lsf_weights_extended(
 /// Contract direct nuclear and electronic PCM terms
 /// Must call moist_compute_cavity_gradient first
 /// Uses cavity-internal ngrid and nsph for array extents
+/// The nuclear-charge term uses the point-charge potential of the surface
+/// points, as QM codes do for the electrostatic potential integrals of a
+/// Gaussian PCM
 /// Arrays (row-major order; see the layout convention at the top of this header):
 ///   w_phi[ngrid]                       - potential adjoint dE/dphi_i (surface charge q_i of a stationary PCM)
 ///   w_xyz     row-major (ngrid, 3)        - total dE_host/dr_i (nuclear + electronic)

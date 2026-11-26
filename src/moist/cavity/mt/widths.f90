@@ -18,15 +18,17 @@
 module moist_cavity_mt_widths
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
+   use mctc_io_constants, only: pi
    use moist_cavity_mt_mesh, only: mt_mesh_type
    use moist_cavity_mt_patches, only: mt_patch_type
-   use moist_math_adjacency_list, only: adjacency_list_type
+   use moist_math_adjacency, only: adjacency_list_type
+   use moist_math_linalg, only: cross_product
    implicit none(type, external)
    private
    public :: width_factors
 
    !> sqrt(pi/2), converting a self potential to a Gaussian width
-   real(wp), parameter :: width_per_self = 1.2533141373155003_wp
+   real(wp), parameter :: width_per_self = sqrt(0.5_wp*pi)
    !> Largest relative change of one width
    real(wp), parameter :: max_ratio = 1.25_wp
    !> Triangles farther than this many diameters use the centroid rule
@@ -100,7 +102,7 @@ contains
       xi = scale/sqrt(area)
       reach = 2.0_wp*radius + extent
       call neighbours%init(reach)
-      call neighbours%update(xyz)
+      call neighbours%update(xyz, nthreads)
 !$omp parallel do default(none) schedule(dynamic, 16) num_threads(nthreads) &
 !$omp shared(mesh, patches, patch_index, xyz, area, xi, radius, neighbours, factor, n) &
 !$omp private(i, j, k, layer, pairs, d, xij) reduction(+:limited)
@@ -209,7 +211,7 @@ contains
       !> Integral, bohr
       real(wp) :: potential
       real(wp) :: normal(3), centroid(3), ab(3), bc(3), ca(3), area, diameter, height
-      normal = cross(b - a, c - a)
+      normal = cross_product(b - a, c - a)
       area = 0.5_wp*norm2(normal)
       centroid = (a + b + c)/3.0_wp
       diameter = max(norm2(b - a), norm2(c - b), norm2(a - c))
@@ -263,21 +265,7 @@ contains
       ta = dot_product(a - x, tangent)
       d = norm2((a - x) - ta*tangent)
       if (d <= 1.0e-14_wp*length) return
-      value = sign(d*(asinh((ta + length)/d) - asinh(ta/d)), dot_product(cross(a - x, b - x), normal))
+      value = sign(d*(asinh((ta + length)/d) - asinh(ta/d)), dot_product(cross_product(a - x, b - x), normal))
    end function edge_fan
-
-   !> Cross product
-   !>
-   !> @param[in] u First vector
-   !> @param[in] v Second vector
-   pure function cross(u, v) result(w)
-      !> First vector
-      real(wp), intent(in) :: u(3)
-      !> Second vector
-      real(wp), intent(in) :: v(3)
-      !> Cross product
-      real(wp) :: w(3)
-      w = [u(2)*v(3) - u(3)*v(2), u(3)*v(1) - u(1)*v(3), u(1)*v(2) - u(2)*v(1)]
-   end function cross
 
 end module moist_cavity_mt_widths

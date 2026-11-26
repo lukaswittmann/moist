@@ -9,10 +9,14 @@ module moist_cavity_iswig
    use, intrinsic :: iso_fortran_env, only: output_unit
 
    use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
-   use moist_cavity_type, only: cavity_type, list_cavity_fields_base, add_volume_origin_gradient, &
-      & update_cavity_base
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_math_linalg_geometry, only: cross_product
+   use moist_cavity_type, only: cavity_type, list_cavity_fields_base, &
+      & add_volume_origin_gradient, update_cavity_base
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_cavity_bornzeta, only: born_zeta_nleb, get_born_zeta
+   use moist_cavity_grid_model_type, only: grid_model_type
+   use moist_cavity_grid_type, only: cavity_grid_type
+   use moist_cavity_grid_frame, only: grid_frame_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_channels_fields, only: field_query_type
@@ -22,6 +26,9 @@ module moist_cavity_iswig
    public :: cavity_type_iswig, new_cavity_iswig
 
    public :: moist_cavity_iswig_parameters_type
+
+   !> Smallest switching value kept: f**(-2), f**(-3) of the PCM kernels overflow below
+   real(wp), parameter :: f_floor = 1.0e-100_wp
 
    !> iSwiG construction parameters
    type, extends(moist_model_parameters_type) :: moist_cavity_iswig_parameters_type
@@ -54,10 +61,14 @@ module moist_cavity_iswig
       integer, allocatable :: numbering(:)
 
       ! Cached Lebedev data (reused across updates)
+      !> Lebedev size of the cache, 0 before the first update
       integer :: cached_num_leb = 0
+      !> Born-fitted Gaussian width scale of the cached size
       real(wp) :: cached_swx = 0.0_wp
-      real(wp), allocatable :: ang_grid(:, :) ! (3, num_leb)
-      real(wp), allocatable :: ang_weight(:)  ! (num_leb), solid-angle weights summing to 4*pi
+      !> Lebedev nodes in the lab frame (3, num_leb)
+      real(wp), allocatable :: ang_grid(:, :)
+      !> Solid-angle weights summing to 4*pi (num_leb)
+      real(wp), allocatable :: ang_weight(:)
       !> Whether the next update should expose principal curvatures
       logical :: need_curvature = .false.
 
@@ -143,12 +154,14 @@ contains
 
    !> Construct from parameter values; omission uses compiled defaults
    !>
-   !> @param[inout] self Object to initialize
+   !> @param[in,out] self Object to initialize
    !> @param[in] radius_model Atomic radius model to copy
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
    !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
-   subroutine new_cavity_iswig(self, radius_model, error, param, ctx)
+   !> @param[in] grid_model Grid model to copy, e.g. a symmetry model; omitted,
+   !>                       every sphere keeps its plain grid
+   subroutine new_cavity_iswig(self, radius_model, error, param, ctx, grid_model)
       !> Cavity to initialize
       type(cavity_type_iswig), intent(inout) :: self
       !> Radius model to copy
@@ -159,6 +172,8 @@ contains
       type(moist_cavity_iswig_parameters_type), intent(in), optional :: param
       !> Borrowed run context; omitted, a model supplies its own
       type(moist_context_type), intent(in), target, optional :: ctx
+      !> Grid model to copy; omitted means the plain grid
+      class(grid_model_type), intent(in), optional :: grid_model
       !> Resolved configuration
       type(moist_cavity_iswig_parameters_type) :: settings
 
@@ -169,6 +184,7 @@ contains
       self%param = settings
       if (allocated(self%radius_model)) deallocate (self%radius_model)
       allocate (self%radius_model, source=radius_model)
+      call self%set_grid_model(grid_model)
       ! A constructed cavity has no structure, no surface and no coupling yet
       if (allocated(self%mol)) deallocate (self%mol)
       self%updated = .false.
@@ -219,9 +235,19 @@ contains
    end subroutine write_cavity_csv_debug
 
    !> Update surface with the current new geometry (iSwiG implementation)
+   !>
+   !> - every sphere carries the nodes of its grid components (`grid`); the
+   !>   plain grid builds bitwise the points c + r u
+   !>
+   !> @param[in,out] self  iSwiG cavity
+   !> @param[in]     mol   Molecular structure
+   !> @param[out]    error Error handling
    subroutine update_cavity_iswig(self, mol, error)
+      !> iSwiG cavity
       class(cavity_type_iswig), intent(inout) :: self
+      !> Molecular structure
       type(structure_type), intent(in) :: mol
+      !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
       call update_cavity_base(self, mol, error)
@@ -249,6 +275,8 @@ contains
       if (allocated(error)) return
       if (allocated(self%radii)) deallocate (self%radii)
       self%radii = self%radius_model%f0
+      call self%update_grid_model(error)
+      if (allocated(error)) return
 
       !> Set centers of spheres
       if (allocated(self%sphxyz)) deallocate (self%sphxyz)
@@ -267,6 +295,11 @@ contains
       call ensure_lebedev_cache(self, error)
       if (allocated(error)) return
 
+      ! Grid components of every sphere: the plain nodes, or those of the
+      ! grid model (rotated once per distinct rotation)
+      call self%build_grid(self%ang_grid, self%ang_weight, self%cached_swx, error)
+      if (allocated(error)) return
+
       !> Construct full cavity surface
       call setup_iswig_surface( &
          nsph=self%nsph, &
@@ -275,11 +308,10 @@ contains
          radii=self%radii, &
          cut_a=self%param%cut_a, &
          cut_f=self%param%cut_f, &
-         zeta_born=self%cached_swx, &
-         ang_grid=self%ang_grid, &
-         ang_weight=self%ang_weight, &
+         grid=self%grid, &
          ngrid=self%ngrid, &
          owner=self%owner, &
+         comp=self%comp, &
          grid_xyz=self%xyz, &
          xi=self%xi0, &
          f=self%f, &
@@ -315,12 +347,29 @@ contains
    !>   volume: dV/ds  = sum_p  R * w * r_dot_p/3 * (df/ds)  + geom. term
    !> - r_dot_p is measured from the volume origin, whose own motion adds
    !>   dv_p/dc = -a_p n_p/3 through `add_volume_origin_gradient`
+   !> - molecular orientation: the sphere rotations follow every atom, so
+   !>   every forward array and total gains the frame term
+   !>   ([[grid_frame_type]]); a point's arrays take it at the end of its
+   !>   own iteration, while they are in cache, the totals once from the
+   !>   per-sphere sums. Per point, the derivatives with respect to the
+   !>   rotation omega of its sphere (d = p - c_a = r_a n):
+   !>   - position: delta p = omega x d
+   !>   - switching: delta f = omega . (d x g), g = df/dp, the owner column
+   !>     of `f1_rA` before the frame term
+   !>   - area: a = r^2 w f, so r^2 w times the switching one
+   !>   - volume: v = a n.(p - c)/3, so n.(p - c)/3 times the area one plus
+   !>     omega . (a/3) n x (p - c) (n . delta p = 0 since d is parallel to n)
+   !>   - widths do not move: xi depends on the radius and weight only
+   !>
+   !> @param[in,out] self  iSwiG cavity with a built surface
+   !> @param[out]    error Error handling
    subroutine compute_gradient_iswig(self, error)
+      !> iSwiG cavity
       class(cavity_type_iswig), intent(inout) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: nsph, ip, iat, jat, iaxis
+      integer :: nsph, ip, iat, jat, iaxis, icomp
       real(wp) :: weight, zeta, r_own
       real(wp) :: px, py, pz, rx, ry, rz, r_dot_p
       real(wp) :: dx, dy, dz, dvec(3)
@@ -328,6 +377,20 @@ contains
       real(wp) :: area_weight, vol_weight
       !> Volume origin and the per-point volume derivative wrt. it
       real(wp) :: origin(3), dv_dc(3)
+      !> Whether the spheres follow a molecular frame, and its Jacobian
+      logical :: frame
+      type(grid_frame_type) :: frame_jac
+      !> Point offset and normal, offset from the volume origin
+      real(wp) :: d(3), n(3), po(3)
+      !> Changes per rotation of the owner's grid: position (axis, component),
+      !> switching, area, volume
+      real(wp) :: t_xyz(3, 3), t_f(3), t_a(3), t_v(3)
+      !> Area and volume changes per rotation summed per sphere (3, nsph)
+      real(wp), allocatable :: s_a(:, :), s_v(:, :)
+      !> Area and volume per unit component weight, summed per component
+      real(wp), allocatable :: s_wa(:), s_wv(:)
+      !> Inverse component weight and the volume element per unit weight
+      real(wp) :: w_inv, v_w
 
       call self%require_built(error)
       if (allocated(error)) return
@@ -348,6 +411,13 @@ contains
       allocate (self%v1_rA(3, nsph, self%ngrid), source=0.0_wp)
 
       if (self%ngrid <= 0) return
+
+      frame = .not. self%plain_grid()
+      if (frame) then
+         call self%get_frame(frame_jac)
+         allocate (s_a(3, self%grid%ncomp), s_v(3, self%grid%ncomp), source=0.0_wp)
+         allocate (s_wa(self%grid%ncomp), s_wv(self%grid%ncomp), source=0.0_wp)
+      end if
 
       do ip = 1, self%ngrid
          iat = self%owner(ip)
@@ -428,7 +498,48 @@ contains
          dv_dc = -self%a(ip)*self%normal0(:, ip)/3.0_wp
          call add_volume_origin_gradient(dv_dc, self%volume_grad)
          call add_volume_origin_gradient(dv_dc, self%v1_rA(:, :, ip))
+
+         ! Frame term of the point, dense over the atoms
+         if (frame) then
+            d = [rx, ry, rz]
+            n = self%normal0(:, ip)
+            po = self%xyz(:, ip) - origin
+            ! delta p_c = omega . (d x e_c)
+            t_xyz(:, 1) = [0.0_wp, d(3), -d(2)]
+            t_xyz(:, 2) = [-d(3), 0.0_wp, d(1)]
+            t_xyz(:, 3) = [d(2), -d(1), 0.0_wp]
+            t_f = cross_product(d, self%f1_rA(:, iat, ip))
+            t_a = r_own*r_own*weight*t_f
+            t_v = dot_product(n, po)/3.0_wp*t_a + self%a(ip)/3.0_wp*cross_product(n, po)
+            icomp = self%comp(ip)
+            call frame_jac%add_vector(icomp, t_xyz, self%xyz1_rA(:, :, :, ip))
+            call frame_jac%add_scalar(icomp, t_f, self%f1_rA(:, :, ip))
+            call frame_jac%add_scalar(icomp, t_v, self%v1_rA(:, :, ip))
+            s_a(:, icomp) = s_a(:, icomp) + t_a
+            s_v(:, icomp) = s_v(:, icomp) + t_v
+            ! Weight term: f, a and v carry the component weight as a factor
+            ! (a point of a weightless component carries nothing to divide)
+            if (frame_jac%has_weight .and. self%grid%comp_weight(icomp) > 0.0_wp) then
+               w_inv = 1.0_wp/self%grid%comp_weight(icomp)
+               v_w = self%a(ip)*dot_product(n, po)/3.0_wp*w_inv
+               call frame_jac%add_weight(icomp, self%f(ip)*w_inv, self%f1_rA(:, :, ip))
+               call frame_jac%add_weight(icomp, v_w, self%v1_rA(:, :, ip))
+               s_wa(icomp) = s_wa(icomp) + self%a(ip)*w_inv
+               s_wv(icomp) = s_wv(icomp) + v_w
+            end if
+         end if
       end do
+
+      if (frame) then
+         call frame_jac%add_total(s_a, self%area_grad)
+         call frame_jac%add_total(s_v, self%volume_grad)
+         if (frame_jac%has_weight) then
+            do icomp = 1, self%grid%ncomp
+               call frame_jac%add_weight(icomp, s_wa(icomp), self%area_grad)
+               call frame_jac%add_weight(icomp, s_wv(icomp), self%volume_grad)
+            end do
+         end if
+      end if
 
    end subroutine compute_gradient_iswig
 
@@ -440,28 +551,44 @@ contains
    !> The result is *added* to `gradient`, so several passes can share one
    !> accumulator
    !>
+   !> Molecular orientation: the sphere rotations follow the atoms; the same
+   !> sweep sums the torque on every sphere, tau_a = sum_p d_p x pbar_p +
+   !> n_p x nbar_p (d_p = p - c_a, pbar the total position adjoint including
+   !> the switching channels, nbar = `w_n`) per grid component, together
+   !> with the weight adjoint wbar = sum_p fbar_p f_p/w (the switching value
+   !> is linear in the component weight w); `add_grid_gradient` maps both to
+   !> the atoms once; nothing else of a point depends on its component
+   !>
    !> @param[in]    self     iSwiG cavity instance (must hold an updated grid)
    !> @param[in]    acc      Accumulated surface-observable adjoints
-   !> @param[inout] gradient Nuclear-gradient accumulator (3, nsph)
+   !> @param[in,out] gradient Nuclear-gradient accumulator (3, nsph)
    !> @param[out]   error    Error object, allocated on failure
    subroutine get_surface_gradient_iswig(self, acc, gradient, error)
       !> iSwiG cavity instance
       class(cavity_type_iswig), intent(in) :: self
       !> Accumulated surface-observable adjoints
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Nuclear-gradient accumulator
       real(wp), intent(inout) :: gradient(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Grid, owner and neighbour sphere indices
-      integer :: igrid, iat, jat
+      !> Grid, owner and neighbour sphere indices, grid component
+      integer :: igrid, iat, jat, icomp
       !> Effective switching adjoint, area channel folded in
       real(wp) :: w_f_eff
       !> Point-to-center separation and the radial switching derivative
       real(wp) :: dvec(3), dfdr
       !> Gradient contribution of one (point, sphere) pair
       real(wp) :: contribution(3)
+      !> Whether the spheres follow a molecular frame
+      logical :: frame
+      !> Total position adjoint of a point
+      real(wp) :: pbar(3)
+      !> Torque per grid component (3, ncomp), not for the plain grid
+      real(wp), allocatable :: torque(:, :)
+      !> Weight adjoint per grid component (ncomp), not for the plain grid
+      real(wp), allocatable :: wbar(:)
 
       if (.not. acc%is_initialized()) then
          call fatal_error(error, "get_surface_gradient_iswig: accumulator is not initialized")
@@ -498,30 +625,55 @@ contains
 
       if (self%ngrid <= 0) return
 
+      frame = .not. self%plain_grid()
+      if (frame) then
+         if (.not. allocated(self%normal0)) then
+            call fatal_error(error, "get_surface_gradient_iswig: cavity surface data are incomplete")
+            return
+         end if
+         allocate (torque(3, self%grid%ncomp), wbar(self%grid%ncomp), source=0.0_wp)
+      end if
+
       do igrid = 1, self%ngrid
          iat = self%owner(igrid)
 
          !* --------------------------- Position channel --------------------------- *!
          gradient(:, iat) = gradient(:, iat) + acc%w_xyz(:, igrid)
+         if (frame) pbar = acc%w_xyz(:, igrid)
 
          !* -------------------------- Switching channel -------------------------- *!
          ! a_i = R_I^2 wleb_i f_i, and neither radius nor Lebedev weight moves,
          ! so the area adjoint enters purely through df_i/dR_A
          w_f_eff = acc%w_f(igrid) &
                    + acc%w_a(igrid)*self%radii(iat)**2*self%wleb(igrid)
-         if (w_f_eff == 0.0_wp) cycle
+         if (w_f_eff /= 0.0_wp) then
+            do jat = 1, self%nsph
+               if (jat == iat .or. self%radii(jat) == 0.0_wp) cycle
 
-         do jat = 1, self%nsph
-            if (jat == iat .or. self%radii(jat) == 0.0_wp) cycle
+               call swi_pair_dfdr(self%xyz(:, igrid), self%sphxyz(:, jat), self%xi0(igrid), &
+                                  self%radii(jat), self%f(igrid), dvec, dfdr)
 
-            call swi_pair_dfdr(self%xyz(:, igrid), self%sphxyz(:, jat), self%xi0(igrid), &
-                               self%radii(jat), self%f(igrid), dvec, dfdr)
+               contribution = w_f_eff*dfdr*dvec
+               gradient(:, iat) = gradient(:, iat) + contribution
+               gradient(:, jat) = gradient(:, jat) - contribution
+               ! The point itself moves the same way as its owner here
+               if (frame) pbar = pbar + contribution
+            end do
+         end if
 
-            contribution = w_f_eff*dfdr*dvec
-            gradient(:, iat) = gradient(:, iat) + contribution
-            gradient(:, jat) = gradient(:, jat) - contribution
-         end do
+         !* ---------------------------- Frame torque ----------------------------- *!
+         if (frame) then
+            icomp = self%comp(igrid)
+            torque(:, icomp) = torque(:, icomp) &
+               & + cross_product(self%xyz(:, igrid) - self%sphxyz(:, iat), pbar) &
+               & + cross_product(self%normal0(:, igrid), acc%w_n(:, igrid))
+            if (self%grid%comp_weight(icomp) > 0.0_wp) then
+               wbar(icomp) = wbar(icomp) + w_f_eff*self%f(igrid)/self%grid%comp_weight(icomp)
+            end if
+         end if
       end do
+
+      if (frame) call self%add_grid_gradient(torque, wbar, gradient)
 
    end subroutine get_surface_gradient_iswig
 
@@ -578,79 +730,124 @@ contains
    end subroutine ensure_lebedev_cache
 
    !> Compute the iswig surface using cached Lebedev data and precomputed factors
+   !>
+   !> - every sphere carries the nodes of its grid components
+   !>
+   !> @param[in]  nsph         Number of spheres
+   !> @param[in]  centers      Sphere centers (3, nsph), bohr
+   !> @param[in]  origin       Volume origin, bohr
+   !> @param[in]  radii        Sphere radii (nsph), bohr
+   !> @param[in]  cut_a        Area cutoff, used when positive
+   !> @param[in]  cut_f        Switching cutoff, used otherwise; at least `f_floor`
+   !> @param[in]  grid         Grid components of every sphere
+   !> @param[out] ngrid        Number of surviving points
+   !> @param[out] owner        Sphere of every point (ngrid)
+   !> @param[out] comp         Grid component of every point (ngrid)
+   !> @param[out] grid_xyz     Points (3, ngrid), bohr
+   !> @param[out] xi           Gaussian widths (ngrid)
+   !> @param[out] f            Switching factors (ngrid)
+   !> @param[out] wleb         Lebedev weights (ngrid)
+   !> @param[out] a            Areas (ngrid), bohr**2
+   !> @param[out] normal0      Outward unit normals (3, ngrid)
+   !> @param[out] v            Volume elements (ngrid), bohr**3
+   !> @param[out] numbering    Raw index of every point (ngrid)
+   !> @param[out] asph         Area per sphere (nsph), bohr**2
+   !> @param[out] total_area   Total area, bohr**2
+   !> @param[out] total_volume Total volume, bohr**3
+   !> @param[out] error        No point survives the cutoff
    subroutine setup_iswig_surface( &
       nsph, centers, origin, radii, &
       cut_a, cut_f, &
-      zeta_born, ang_grid, ang_weight, &
-      ngrid, owner, grid_xyz, xi, f, wleb, a, normal0, v, numbering, asph, &
+      grid, &
+      ngrid, owner, comp, grid_xyz, xi, f, wleb, a, normal0, v, numbering, asph, &
       total_area, total_volume, error)
 
+      !> Number of spheres
       integer, intent(in) :: nsph
+      !> Sphere centers, bohr
       real(wp), intent(in) :: centers(3, nsph)
       !> Volume origin, bohr
       real(wp), intent(in) :: origin(3)
+      !> Sphere radii, bohr
       real(wp), intent(in) :: radii(nsph)
-      real(wp), intent(in) :: cut_a, cut_f
-      real(wp), intent(in) :: zeta_born
-      real(wp), intent(in) :: ang_grid(:, :)
-      !> Solid-angle weights summing to 4*pi (num_leb)
-      real(wp), intent(in) :: ang_weight(:)
+      !> Area cutoff
+      real(wp), intent(in) :: cut_a
+      !> Switching cutoff
+      real(wp), intent(in) :: cut_f
+      !> Grid components of every sphere
+      type(cavity_grid_type), intent(in) :: grid
 
+      !> Number of surviving points
       integer, intent(out) :: ngrid
+      !> Sphere of every point (ngrid)
       integer, allocatable, intent(out) :: owner(:)
+      !> Grid component of every point (ngrid)
+      integer, allocatable, intent(out) :: comp(:)
+      !> Points (3, ngrid), bohr
       real(wp), allocatable, intent(out) :: grid_xyz(:, :)
+      !> Areas (ngrid), bohr**2
       real(wp), allocatable, intent(out) :: a(:)
+      !> Gaussian widths (ngrid)
       real(wp), allocatable, intent(out) :: xi(:)
+      !> Switching factors (ngrid)
       real(wp), allocatable, intent(out) :: f(:)
+      !> Lebedev weights (ngrid)
       real(wp), allocatable, intent(out) :: wleb(:)
       !> Outward unit normals (3, ngrid)
       real(wp), allocatable, intent(out) :: normal0(:, :)
       !> Point volume elements (ngrid)
       real(wp), allocatable, intent(out) :: v(:)
+      !> Raw index of every point (ngrid)
       integer, allocatable, intent(out) :: numbering(:)
+      !> Area per sphere (nsph), bohr**2
       real(wp), intent(out) :: asph(:)
+      !> Total area, bohr**2
       real(wp), intent(out) :: total_area
+      !> Total volume, bohr**3
       real(wp), intent(out) :: total_volume
+      !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: iraw, ipt, num_leb, nraw
+      integer :: iraw, ipt, nraw
       real(wp), allocatable :: xyz_raw(:, :), area_raw(:)
-      integer, allocatable  :: owner_raw(:)
+      integer, allocatable  :: owner_raw(:), comp_raw(:)
       real(wp), allocatable :: zeta_raw(:), weight_raw(:), switch_raw(:)
-      real(wp) :: rx, ry, rz
+      real(wp) :: rx, ry, rz, f_min
 
       ! Allocate raw (pre-filter) arrays of total size
-      num_leb = size(ang_weight)
-      nraw = nsph*num_leb
+      nraw = grid%nnode
       allocate (xyz_raw(3, nraw), source=0.0_wp)
       allocate (area_raw(nraw), source=0.0_wp)
       allocate (owner_raw(nraw), source=-1)
+      allocate (comp_raw(nraw), source=-1)
       allocate (zeta_raw(nraw), source=0.0_wp)
       allocate (weight_raw(nraw), source=0.0_wp)
       allocate (switch_raw(nraw), source=0.0_wp)
 
       ! Fill raw arrays
-      call fill_intermediate_arrays(nsph, centers, radii, num_leb, ang_grid, &
-                                    ang_weight, zeta_born, nraw, xyz_raw, area_raw, owner_raw, &
-                                    zeta_raw, weight_raw, switch_raw)
+      call fill_intermediate_arrays(nsph, centers, radii, grid, nraw, xyz_raw, area_raw, &
+                                    owner_raw, comp_raw, zeta_raw, weight_raw, switch_raw)
 
-      ! Compute switch_raw(iraw) = product_{j /= owner} 0.5*(erfc(arg_plus)+erfc(arg_minus))
+      ! Compute switch_raw(iraw) = w_comp product_{j /= owner} 0.5*(erfc(arg_plus)+erfc(arg_minus))
       call compute_switching_function(nraw, nsph, owner_raw, xyz_raw, centers, &
                                       zeta_raw, radii, switch_raw)
 
-      ! Filter out points according to cut_a or cut_f
+      ! Filter out points according to cut_a or cut_f, never below f_floor
+      f_min = f_floor
+      if (cut_a <= 0.0_wp) f_min = max(cut_f, f_floor)
       ngrid = 0
       do iraw = 1, nraw
+         if (switch_raw(iraw) <= f_min) cycle
          if (cut_a > 0.0_wp) then
-            if (switch_raw(iraw)*area_raw(iraw) > cut_a) ngrid = ngrid + 1
-         else
-            if (switch_raw(iraw) > cut_f) ngrid = ngrid + 1
+            if (switch_raw(iraw)*area_raw(iraw) <= cut_a) cycle
          end if
+         ngrid = ngrid + 1
       end do
 
       allocate (grid_xyz(3, ngrid), source=0.0_wp)
       allocate (a(ngrid), source=0.0_wp)
       allocate (owner(ngrid), source=-1)
+      allocate (comp(ngrid), source=-1)
       allocate (xi(ngrid), source=0.0_wp)
       allocate (f(ngrid), source=0.0_wp)
       allocate (wleb(ngrid), source=0.0_wp)
@@ -669,10 +866,9 @@ contains
 
       ipt = 0
       do iraw = 1, nraw
+         if (switch_raw(iraw) <= f_min) cycle
          if (cut_a > 0.0_wp) then
             if ((switch_raw(iraw)*area_raw(iraw)) <= cut_a) cycle
-         else
-            if (switch_raw(iraw) <= cut_f) cycle
          end if
 
          ipt = ipt + 1
@@ -686,6 +882,7 @@ contains
          total_area = total_area + a(ipt)
 
          owner(ipt) = owner_raw(iraw)
+         comp(ipt) = comp_raw(iraw)
          xi(ipt) = zeta_raw(iraw)
          f(ipt) = switch_raw(iraw)
          wleb(ipt) = weight_raw(iraw)
@@ -713,9 +910,27 @@ contains
    end subroutine setup_iswig_surface
 
    !> Fill raw (pre-filter) arrays with surface points and initial values
+   !>
+   !> - node j of component c of sphere a sits at c_a + r_a u_j, u_j the
+   !>   node of the component's node set
+   !> - the switching value starts at the component weight, so the weight
+   !>   scales the point like one more switching factor
+   !>
+   !> @param[in]  nsph       Number of spheres
+   !> @param[in]  centers    Sphere centers (3, nsph), bohr
+   !> @param[in]  radii      Sphere radii (nsph), bohr
+   !> @param[in]  grid       Grid components of every sphere
+   !> @param[in]  nraw       Number of nodes over all components
+   !> @param[out] xyz_raw    Points (3, nraw), bohr
+   !> @param[out] area_raw   Areas before switching (nraw), bohr**2
+   !> @param[out] owner_raw  Sphere of every point (nraw)
+   !> @param[out] comp_raw   Grid component of every point (nraw)
+   !> @param[out] zeta_raw   Gaussian widths (nraw)
+   !> @param[out] weight_raw Lebedev weights (nraw)
+   !> @param[out] switch_raw Switching factors, the component weights (nraw)
    subroutine fill_intermediate_arrays( &
-      nsph, centers, radii, num_leb, ang_grid, ang_weight, zeta_born, &
-      nraw, xyz_raw, area_raw, owner_raw, zeta_raw, weight_raw, switch_raw)
+      nsph, centers, radii, grid, nraw, xyz_raw, area_raw, owner_raw, comp_raw, &
+      zeta_raw, weight_raw, switch_raw)
       implicit none(type, external)
 
       !> Number of spheres
@@ -724,15 +939,9 @@ contains
       real(wp), intent(in) :: centers(3, nsph)
       !> Radii of spheres in bohr
       real(wp), intent(in) :: radii(nsph)
-      !> Number of Lebedev points per sphere
-      integer, intent(in) :: num_leb
-      !> Unit vectors for Lebedev grid (3, num_leb)
-      real(wp), intent(in) :: ang_grid(3, num_leb)
-      !> Angular weights (unitless, sum = 4*pi) (num_leb)
-      real(wp), intent(in) :: ang_weight(num_leb)
-      !> Gaussian-width scale factor for this Lebedev order
-      real(wp), intent(in) :: zeta_born
-      !> Total raw points = nsph * num_leb
+      !> Grid components of every sphere
+      type(cavity_grid_type), intent(in) :: grid
+      !> Total raw points
       integer, intent(in) :: nraw
 
       !> Raw coords (3, nraw)
@@ -741,6 +950,8 @@ contains
       real(wp), intent(out) :: area_raw(nraw)
       !> Raw owner indices (nraw)
       integer, intent(out) :: owner_raw(nraw)
+      !> Raw component indices (nraw)
+      integer, intent(out) :: comp_raw(nraw)
       !> Raw Gaussian widths (nraw)
       real(wp), intent(out) :: zeta_raw(nraw)
       !> Raw Lebedev weights (nraw)
@@ -749,32 +960,36 @@ contains
       real(wp), intent(out) :: switch_raw(nraw)
 
       !> Loop variables
-      integer :: iat, ileb, iraw
+      integer :: iat, icomp, inode, iraw, n0
 
-      iraw = 0
       do iat = 1, nsph
-         do ileb = 1, num_leb
-            iraw = iraw + 1
+         do icomp = grid%sph_first(iat), grid%sph_first(iat + 1) - 1
+            n0 = grid%set_first(grid%comp_set(icomp)) - grid%comp_first(icomp)
+            do iraw = grid%comp_first(icomp), grid%comp_first(icomp + 1) - 1
+               inode = n0 + iraw
 
-            ! Raw Lebedev weight, solid angle of the node
-            weight_raw(iraw) = ang_weight(ileb)
+               ! Raw Lebedev weight, solid angle of the node, rotated or not
+               weight_raw(iraw) = grid%wang(inode)
 
-            ! Cartesian location of point on sphere iat:
-            xyz_raw(1, iraw) = centers(1, iat) + radii(iat)*ang_grid(1, ileb)
-            xyz_raw(2, iraw) = centers(2, iat) + radii(iat)*ang_grid(2, ileb)
-            xyz_raw(3, iraw) = centers(3, iat) + radii(iat)*ang_grid(3, ileb)
+               ! Cartesian location of point on sphere iat:
+               xyz_raw(1, iraw) = centers(1, iat) + radii(iat)*grid%node(1, inode)
+               xyz_raw(2, iraw) = centers(2, iat) + radii(iat)*grid%node(2, inode)
+               xyz_raw(3, iraw) = centers(3, iat) + radii(iat)*grid%node(3, inode)
 
-            ! "area before switching" = r**2 * raw_weight
-            area_raw(iraw) = radii(iat)**2*weight_raw(iraw)
+               ! "area before switching" = r**2 * raw_weight
+               area_raw(iraw) = radii(iat)**2*weight_raw(iraw)
 
-            ! owner-atom index:
-            owner_raw(iraw) = iat
+               ! owner-atom and component index:
+               owner_raw(iraw) = iat
+               comp_raw(iraw) = icomp
 
-            ! zeta = zeta_born / (radii(iat) * sqrt(raw_weight))
-            zeta_raw(iraw) = zeta_born/(radii(iat)*sqrt(weight_raw(iraw)))
+               ! zeta = zeta_comp / (radii(iat) * sqrt(raw_weight))
+               zeta_raw(iraw) = grid%comp_zeta(icomp)/(radii(iat)*sqrt(weight_raw(iraw)))
 
-            ! initialize switching-value to 1.0:
-            switch_raw(iraw) = 1.0_wp
+               ! initialize the switching value to the component weight (1.0
+               ! for a single component):
+               switch_raw(iraw) = grid%comp_weight(icomp)
+            end do
          end do
       end do
 

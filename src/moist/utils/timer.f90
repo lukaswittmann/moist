@@ -145,6 +145,10 @@ module moist_utils_timer
       integer(int64), private :: t_root0 = 0
       !> Clock ticks per second
       integer(int64), private :: rate = 1
+      !> Elapsed ticks of the most recently stopped timer
+      integer(int64), private :: t_last = 0
+      !> Whether the most recently stopped timer was poisoned
+      logical, private :: last_poisoned = .false.
       !> CPU time at root start
       real(wp), private :: cpu_root0 = 0.0_wp
 
@@ -166,6 +170,8 @@ module moist_utils_timer
       procedure, private :: get_total
       procedure, private :: get_name
       generic :: get => get_total, get_name
+      !> Wall time in seconds of the most recently stopped timer
+      procedure :: last => last_elapsed
       procedure :: write => write_report
       !> Write the simple wall-time report (seconds per step, depth <= 2)
       procedure :: write_simple => write_simple_report
@@ -234,6 +240,8 @@ contains
 
       self%n = 0
       self%sp = 0
+      self%t_last = 0_int64
+      self%last_poisoned = .false.
       self%active = .true.
 
       call system_clock(self%t_root0, self%rate)
@@ -251,6 +259,8 @@ contains
       self%n = 0
       self%cap = 0
       self%sp = 0
+      self%t_last = 0_int64
+      self%last_poisoned = .false.
       self%active = .false.
       self%verbose = .false.
       self%unit = output_unit
@@ -289,6 +299,8 @@ contains
          self%poisoned(1:self%n) = .false.
       end if
       self%sp = 0
+      self%t_last = 0_int64
+      self%last_poisoned = .false.
 
       call system_clock(self%t_root0)
       call cpu_time(self%cpu_root0)
@@ -532,16 +544,21 @@ contains
       !> Node handle
       integer, intent(in) :: id
 
-      integer(int64) :: c
+      integer(int64) :: c, dt
 
       if (.not. self%active .or. id < 1 .or. id > self%n) return
 
       call system_clock(c)
       if (self%running(id)) then
-         self%t_acc(id) = self%t_acc(id) + (c - self%t0(id))
+         dt = c - self%t0(id)
+         self%t_acc(id) = self%t_acc(id) + dt
+         self%t_last = dt
+         self%last_poisoned = self%poisoned(id)
          self%running(id) = .false.
       else
          self%poisoned(id) = .true.
+         self%t_last = 0_int64
+         self%last_poisoned = .true.
       end if
 
    end subroutine stop_id
@@ -594,6 +611,30 @@ contains
       end if
 
    end function get_name
+
+   !> Wall time of the most recently stopped timer in seconds
+   !>
+   !> - single span of the last `stop`, not the cumulative node total
+   !> - 0 before any stop, after `reset`, or when inactive; NaN if that stop was poisoned
+   !>
+   !> @param[in] self  Timer instance
+   pure function last_elapsed(self) result(sec)
+      !> Timer instance
+      class(timer_type), intent(in) :: self
+      !> Elapsed seconds
+      real(wp) :: sec
+
+      if (.not. self%active) then
+         sec = 0.0_wp
+      else if (self%last_poisoned) then
+         sec = ieee_value(1.0_wp, ieee_quiet_nan)
+      else if (self%rate > 0_int64) then
+         sec = real(self%t_last, wp)/real(self%rate, wp)
+      else
+         sec = 0.0_wp
+      end if
+
+   end function last_elapsed
 
    !> Number of registered timer nodes
    !>
@@ -681,15 +722,27 @@ contains
       !> Node index
       integer, intent(in) :: id
       !> Node name
-      character(len=:), allocatable :: name
+      character(len=node_name_len(self, id)) :: name
 
-      if (id < 1 .or. id > self%n) then
-         name = ""
-      else
-         name = trim(self%names(id))
-      end if
+      if (len(name) > 0) name = self%names(id)
 
    end function node_name
+
+   !> Trimmed length of a node name, zero for an id out of range
+   !>
+   !> @param[in] self  Timer instance
+   !> @param[in] id    Node index
+   pure function node_name_len(self, id) result(n)
+      !> Timer instance
+      class(timer_type), intent(in) :: self
+      !> Node index
+      integer, intent(in) :: id
+      !> Number of characters
+      integer :: n
+
+      n = 0
+      if (id >= 1 .and. id <= self%n) n = len_trim(self%names(id))
+   end function node_name_len
 
    !> Nesting depth of a node (0 = top level), from its parent chain
    !>
@@ -1496,16 +1549,9 @@ contains
       !> Target width
       integer, intent(in) :: w
       !> Padded result
-      character(len=:), allocatable :: padded
+      character(len=len(s) + max(0, w - disp_len(s))) :: padded
 
-      integer :: dl
-
-      dl = disp_len(s)
-      if (dl < w) then
-         padded = s//repeat(" ", w - dl)
-      else
-         padded = s
-      end if
+      padded = s
 
    end function pad_disp
 
@@ -1513,7 +1559,7 @@ contains
    !> @return  Banner line
    pure function banner_line() result(s)
       !> Banner line
-      character(len=:), allocatable :: s
+      character(len=tbl_w) :: s
 
       character(len=*), parameter :: title = " MOIST Timings "
       integer :: left
@@ -1526,14 +1572,16 @@ contains
    !> The column-header row ("section  time [s]  %tot  calls"), aligned to the same
    !> fixed columns the data rows use
    !> @return  Header line
-   function header_line() result(s)
+   pure function header_line() result(s)
+      !> First column title
+      character(len=*), parameter :: section = "section"
       !> Header line
-      character(len=:), allocatable :: s
+      character(len=max(sect_w, len(section)) + 32) :: s
 
       character(len=32) :: tail
 
       write (tail, "(a13,a9,a10)") "time [s]", "%tot", "calls"
-      s = pad_disp("section", sect_w)//tail
+      s = pad_disp(section, sect_w)//tail
 
    end function header_line
 

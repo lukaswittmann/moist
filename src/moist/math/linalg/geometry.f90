@@ -1,15 +1,22 @@
 !> Geometric helpers and numerically stable scalar utilities
 !>
-!> Tangent-frame construction on a sphere and the softplus (smooth maximum)
-!> function used by the smooth cavity construction
+!> Tangent-frame construction on a sphere, the proper-rotation test and the
+!> softplus (smooth maximum) function used by the smooth cavity construction
 module moist_math_linalg_geometry
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env_accuracy, only: wp
    implicit none(type, external)
    private
 
+   public :: identity3
    public :: cross_product
    public :: setup_tangent_frame
+   public :: is_rotation
    public :: logaddexp
+
+   !> 3x3 identity matrix
+   real(wp), parameter :: identity3(3, 3) = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, &
+      & 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
 
 contains
 
@@ -77,6 +84,27 @@ contains
       t2 = cross_product(n_normalized, t1)
 
    end subroutine setup_tangent_frame
+
+   !> Whether a matrix is a proper rotation: finite, orthonormal columns, determinant one
+   !>
+   !> - orthonormality within `1e-10` per entry of `A^T A - I`
+   !>
+   !> @param[in] a  Matrix [3,3]
+   !> @returns   ok Proper rotation
+   pure function is_rotation(a) result(ok)
+      !> Matrix
+      real(wp), intent(in) :: a(3, 3)
+      !> Whether it is a proper rotation
+      logical :: ok
+
+      real(wp), parameter :: tol = 1.0e-10_wp
+
+      ok = all(ieee_is_finite(a))
+      if (.not. ok) return
+      ok = maxval(abs(matmul(transpose(a), a) - identity3)) <= tol
+      if (.not. ok) return
+      ok = dot_product(cross_product(a(:, 1), a(:, 2)), a(:, 3)) > 0.0_wp
+   end function is_rotation
 
    !> Numerically stable softplus, the smooth maximum
    !>

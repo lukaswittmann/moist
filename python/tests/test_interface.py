@@ -112,9 +112,9 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                     nleb=26,
                     do_fine=True,
                     tolerance=1.0e-10,
-                    proj_maxiter=200,
-                    proj_level=2,
-                    branch_weight_s=0.08,
+                    proj_maxiter=50,
+                    proj_level=1,
+                    branch_dpdist_max=0.3,
                     rho_grid_h=0.8,
                     wleb_prune_level=1,
                 ),
@@ -129,9 +129,9 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                     nleb=26,
                     do_fine=True,
                     tolerance=1.0e-10,
-                    proj_maxiter=200,
-                    proj_level=2,
-                    branch_weight_s=0.08,
+                    proj_maxiter=50,
+                    proj_level=1,
+                    branch_dpdist_max=0.3,
                     rho_grid_h=0.8,
                     wleb_prune_level=1,
                 ),
@@ -170,26 +170,26 @@ def test_public_cavity_types_accept_their_optional_arguments(
 
 
 @pytest.fixture
-def branching_cross() -> Structure:
-    """Five-carbon cross whose concave seams branch at ``proj_level=7``.
+def branching_tetrahedron() -> Structure:
+    """Four carbons on alternate corners of a cube, skewed off its symmetry.
 
-    Same fixture as the Fortran suite's ``get_test_cross``. The default
-    projection level finds no second solution on it.
+    The spheres leave a hollow at the centre. With the default parameters at
+    ``nleb=302`` about 90 anchors branch, 60 of them with two rows above
+    weight 0.1: a partly open closest point and an open one on the hollow's
+    wall behind it. Random shifts of 0.1 bohr and other window, reach and
+    horizon bands keep dozens of them.
     """
 
-    aatoau = 1.8897261246257702
     return Structure(
-        np.array([6, 6, 6, 6, 6]),
+        np.array([6, 6, 6, 6]),
         np.array(
             [
-                [0.00, 4.21, 0.00],
-                [0.00, 0.00, 4.22],
-                [0.00, -4.18, 0.00],
-                [0.00, 0.00, -4.15],
-                [0.02, 0.10, -0.20],
+                [2.60, 2.63, 2.58],
+                [2.64, -2.60, -2.59],
+                [-2.61, 2.57, -2.60],
+                [-2.58, -2.59, 2.63],
             ]
-        )
-        * aatoau,
+        ),
     )
 
 
@@ -255,15 +255,19 @@ def test_uncomputed_results_are_absent_rather_than_zero(
         fine.get("not_a_field")
 
 
-def test_branching_is_read_from_the_cavity(branching_cross: Structure) -> None:
+def test_branching_is_read_from_the_cavity(branching_tetrahedron: Structure) -> None:
     """Branch data comes from moist's own arrays, not from unpacking an id."""
-    cavity = CavityDROP(parameters=DROPParameters(proj_level=7), context=CONTEXT)
-    cavity.update(branching_cross)
+    cavity = CavityDROP(parameters=DROPParameters(nleb=302), context=CONTEXT)
+    cavity.update(branching_tetrahedron)
     snapshot = cavity.snapshot()
 
+    # The fixture branches: some anchor shares its weight among two or more rows
+    _, weighted_rows = np.unique(snapshot.anchor_id[snapshot.wbranch > 0.0], return_counts=True)
+    assert weighted_rows.max(initial=0) >= 2, "fixture has no anchor with two weighted branches"
+
     assert snapshot.branch.min() == 1
-    assert snapshot.branch.max() > 1, "fixture stopped producing branches"
-    assert snapshot.branched.sum() > 0
+    assert snapshot.branch.max() > 1, "branched anchors read back without branch indices"
+    assert snapshot.branched.sum() > 0, "branched anchors read back with a branch count of one"
     assert np.array_equal(snapshot.branched, snapshot.branch_count > 1)
 
     # numbering is the packing of the two, so the arrays and the id agree.
@@ -277,6 +281,17 @@ def test_branching_is_read_from_the_cavity(branching_cross: Structure) -> None:
         group = snapshot.anchor_id == anchor
         assert snapshot.branch_count[group].min() == group.sum()
         assert np.array_equal(np.unique(snapshot.branch[group]), snapshot.branch[group])
+
+    # The zero-based row layout: anchor i owns rows offset[i]:offset[i + 1].
+    rows_per_anchor = np.diff(snapshot.offset)
+    assert snapshot.offset.shape == (snapshot.nmax + 1,)
+    assert snapshot.offset[0] == 0
+    assert snapshot.offset[-1] == snapshot.ngrid
+    assert np.array_equal(
+        snapshot.anchor_of_row, np.repeat(np.arange(snapshot.nmax), rows_per_anchor)
+    )
+    assert np.array_equal(snapshot.branch_count, rows_per_anchor[snapshot.anchor_of_row])
+    assert rows_per_anchor.max() > 1
 
 
 def test_named_results_reach_every_cavity_type(
@@ -310,6 +325,18 @@ def test_cavity_drop_is_the_svdw_surface() -> None:
 def test_drop_constructor_controls_are_validated_natively(lsf) -> None:
     with raises(RuntimeError, match="wleb_prune_level.*0-6"):
         CavityDROP(lsf=lsf, parameters=DROPParameters(wleb_prune_level=7), context=CONTEXT)
+
+
+@pytest.mark.parametrize(("values", "message"), [
+    ({"branch_reach_on": 2.0, "branch_reach_off": 2.0}, "Reach bounds"),
+    ({"w_0hor_off": 0.2, "w_0hor_on": 0.1}, "Horizon switch bounds"),
+])
+def test_drop_gate_bands_reach_the_native_validation(values, message) -> None:
+    with raises(RuntimeError, match=message):
+        CavityDROP(parameters=DROPParameters(**values), context=CONTEXT)
+    # Control: valid bands of the same fields are accepted
+    CavityDROP(parameters=DROPParameters(branch_reach_on=2.0, branch_reach_off=3.0, w_0hor_off=0.1,
+                                         w_0hor_on=0.2), context=CONTEXT)
 
 
 def test_cavity_specific_options_reach_the_native_implementations(
@@ -549,7 +576,7 @@ def test_model_parameters_text_lists_every_section(capsys) -> None:
     assert pressure[2:4] == ["2.50E-04", "Eh/bohr^3"] and pressure[-1] == "GPa"
     # 2.5e-4 Eh/bohr^3 is 7.355 GPa
     assert float(pressure[-2]) == approx(7.355, abs=1.0e-3)
-    assert any(line.split()[:3] == ["Number", "of", "Leb."] and "26" in line for line in lines)
+    assert any(line.split()[:2] == ["Lebedev", "points"] and "26" in line for line in lines)
 
     model.print_parameters()
     assert capsys.readouterr().out == text

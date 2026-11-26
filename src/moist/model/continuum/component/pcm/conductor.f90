@@ -8,7 +8,7 @@ module moist_model_continuum_component_pcm_conductor
    use moist_utils_prettyprint, only: prettyprinter
    use moist_utils_timer, only: cat_setup, cat_solve
    use moist_cavity_type, only: cavity_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, &
       & solver_type, moist_pcm_parameters_type, pcm_tangent_block, pcm_tangent_require, &
@@ -105,9 +105,14 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
+      !> Epsilon is a number and at least one
+      logical :: valid
 
       if (present(ctx)) self%ctx => ctx
-      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
+      ! NaN test first: an ordered comparison on a NaN raises invalid
+      valid = .not. ieee_is_nan(epsilon)
+      if (valid) valid = epsilon >= 1.0_wp
+      if (.not. valid) then
          call fatal_error(error, "[new_component_cpcm] Dielectric constant must be >= 1")
          return
       end if
@@ -144,9 +149,14 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
+      !> Epsilon is a number and at least one
+      logical :: valid
 
       if (present(ctx)) self%ctx => ctx
-      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
+      ! NaN test first: an ordered comparison on a NaN raises invalid
+      valid = .not. ieee_is_nan(epsilon)
+      if (valid) valid = epsilon >= 1.0_wp
+      if (.not. valid) then
          call fatal_error(error, "[new_component_cosmo] Dielectric constant must be >= 1")
          return
       end if
@@ -322,7 +332,7 @@ contains
       class(model_continuum_component_pcm_conductor), intent(inout) :: self
       class(coupling_view_type), intent(in) :: coupling
       class(cavity_type), intent(in) :: cavity
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xyz(:, :), w_a(:), w_xi(:), w_f(:)
 
@@ -368,11 +378,11 @@ contains
       !> Cavity the operator was assembled on
       class(cavity_type), intent(in) :: cavity
       !> Surface direction
-      class(cavity_surface_adjoint_type), intent(in) :: direction
+      class(cavity_adjoint_type), intent(in) :: direction
       !> Potential-trace direction
       real(wp), intent(in) :: dphi(:)
       !> Accumulator of the weight tangent
-      class(cavity_surface_adjoint_type), intent(inout) :: tangent
+      class(cavity_adjoint_type), intent(inout) :: tangent
       !> Tangent of the surface charges
       real(wp), allocatable, intent(out) :: dw_phi(:)
       !> Error handling
@@ -428,7 +438,7 @@ contains
       class(model_continuum_component_pcm_conductor), intent(inout) :: self
       class(coupling_view_type), intent(in) :: coupling
       class(cavity_type), intent(in) :: cavity
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
 
       call self%get_surface_weights(coupling, cavity, acc, error)

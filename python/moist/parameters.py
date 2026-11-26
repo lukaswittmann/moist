@@ -79,9 +79,13 @@ class DROPParameters(_Parameters):
     tolerance: float = _native_default("drop", "tolerance")
     proj_maxiter: int = _native_default("drop", "proj_maxiter")
     proj_level: int = _native_default("drop", "proj_level")
-    branch_weight_s: float = _native_default("drop", "branch_weight_s")
+    branch_dpdist_max: float = _native_default("drop", "branch_dpdist_max")
     rho_grid_h: float = _native_default("drop", "rho_grid_h")
     wleb_prune_level: int = _native_default("drop", "wleb_prune_level")
+    branch_reach_on: float = _native_default("drop", "branch_reach_on")
+    branch_reach_off: float = _native_default("drop", "branch_reach_off")
+    w_0hor_off: float = _native_default("drop", "w_0hor_off")
+    w_0hor_on: float = _native_default("drop", "w_0hor_on")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -123,6 +127,7 @@ class SvdWParameters(_Parameters):
     blend_1b: float = _native_default("svdw", "blend_1b")
     blend_2b: float = _native_default("svdw", "blend_2b")
     blend_3b: float = _native_default("svdw", "blend_3b")
+    scale: float = _native_default("svdw", "scale")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -134,6 +139,7 @@ class CFCParameters(_Parameters):
     a2: float = _native_default("cfc", "a2")
     c: float = _native_default("cfc", "c")
     m: int = _native_default("cfc", "m")
+    scale: float = _native_default("cfc", "scale")
 
 
 @dataclass(frozen=True, kw_only=True)

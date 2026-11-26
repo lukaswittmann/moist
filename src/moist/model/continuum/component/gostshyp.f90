@@ -9,6 +9,7 @@ module moist_model_continuum_component_gostshyp
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
+   use mctc_io_constants, only: pi
    use moist_model_parameters, only: moist_model_parameters_type
    use moist_output_citations, only: citation
    use moist_context, only: moist_context_type
@@ -20,8 +21,8 @@ module moist_model_continuum_component_gostshyp
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & gaussian_moment_request_type, moist_phase_energy, moist_phase_response, &
       & moist_phase_gradient, coupling_register, request_require
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_sigmoid_bump_type, new_swif_sigmoid_bump
+   use moist_cavity_adjoint, only: cavity_adjoint_type
+   use moist_math_smoothstep, only: moist_math_smoothstep_sigmoid_type, new_smoothstep_sigmoid
    use moist_utils_prettyprint, only: prettyprinter
 
    implicit none(type, external)
@@ -47,7 +48,7 @@ module moist_model_continuum_component_gostshyp
    end type moist_gostshyp_parameters_type
 
    !> Pi times ln 2, the numerator of the Gaussian width
-   real(wp), parameter :: pi_ln2 = acos(-1.0_wp)*log(2.0_wp)
+   real(wp), parameter :: pi_ln2 = pi*log(2.0_wp)
 
    !> Gaussian widths, bohr**-2, bracketing the C2 switch-off of narrow points
    !>
@@ -115,7 +116,7 @@ contains
       type(error_type), allocatable, intent(out), optional :: error
 
       self%name = "GOSTSHYP"
-      self%description = "Gaussians On Surface Tesserae To Simulate HYdrostatic Pressure"
+      self%description = "Gaussians On Surface Tesserae Simulate HYdrostatic Pressure"
       self%pressure = pressure
       if (present(param)) self%param = param
       if (present(ctx)) self%ctx => ctx
@@ -363,7 +364,7 @@ contains
       !> Trace switch S(|f|), its derivative, R(f) and R'(f) at one point
       real(wp) :: trace_switch, dtrace_switch, reciprocal, dreciprocal
       !> C-infinity trace switch rising from band_start to band_end
-      type(moist_cavity_drop_swif_sigmoid_bump_type) :: bump
+      type(moist_math_smoothstep_sigmoid_type) :: bump
       !> Area switch value and area derivative at one point
       real(wp) :: switch, dswitch
       !> Point index and evaluation diagnostics
@@ -392,7 +393,7 @@ contains
       stats = 0
       band_start = self%param%regularization_start
       band_end = self%param%regularization_end
-      call new_swif_sigmoid_bump(bump, band_start, band_end)
+      call new_smoothstep_sigmoid(bump, band_start, band_end)
       pressure = self%scale*self%pressure
       do i = 1, cavity%ngrid
          if (cavity%a(i) > 0.0_wp .and. omega(i) == 0.0_wp) stats(4) = stats(4) + 1
@@ -730,7 +731,7 @@ contains
       !> Live model cavity
       class(cavity_type), intent(in) :: cavity
       !> Surface accumulator
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 

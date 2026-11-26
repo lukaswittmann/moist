@@ -24,8 +24,6 @@ module test_model_continuum
    use moist_model_continuum_component_pcm_lpb, only: model_continuum_component_lpb, new_component_lpb
    use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv, &
       & model_continuum_component_gostshyp, new_component_gostshyp
-   use moist_model_continuum_component_type, only: autogpa
-   use mctc_io_codata2018, only: Hartree_energy, Bohr_radius
    use moist_model_continuum, only: model_continuum_type, new_continuum_model
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, moist_cavity_iswig_parameters_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop

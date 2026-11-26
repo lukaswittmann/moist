@@ -17,10 +17,13 @@ Each test fails without an active fill:
   that holds trivially without a fill, so these tests also raise the isovalue
   until the surface reaches into the fill ball, where an active fill must
   refuse the build
-- every projector but one keeps to the outer surface, the inner sheet being
-  some 4 bohr from every anchor; the Newton-deflation projector
-  (``proj_level=6``) converges onto it for some anchors when the fill is
-  missing, so with the fill it must return the default projector's cavity
+- at the default ``branch_dpdist_max`` the branch-search window stays near the
+  outer surface, the inner sheet being some 4 bohr from every anchor; widening
+  ``branch_dpdist_max`` at ``proj_level=3`` lets the coarse-mesh search reach
+  the unfilled inner cavity
+- the sheet's normals point back at the nucleus, so the default horizon switch
+  closes it; the search runs with the horizon switch off and a reach band past
+  the widened window (``INNER_GATE``)
 """
 
 import os
@@ -41,10 +44,26 @@ from moist.pyscf import DROP, Isodensity, PySCFHost
 
 #: Run context shared by every cavity in this module
 CONTEXT = Context()
-#: Projection level whose deflated Newton search reaches the inner sheet
-DEFLATION = 6
+#: Coarse-mesh projection level used to search for an unfilled inner sheet
+GLOBAL_SEARCH = 3
+#: Distance window (bohr) opening the level-3 search far enough to reach the nucleus
+INNER_BRANCH_DPDIST_MAX = 3.6
 #: Distance from an ECP nucleus, in bohr, inside which a surface point lies on the inner sheet
 INNER = 1.5
+#: Gate admitting the unfilled inner sheet, 3.4 to 4.0 bohr from its anchors:
+#:
+#: - horizon switch off: it closes every point whose normal points back into the
+#:   anchor's sphere, as on the inner sheet
+#: - reach open past the widened branch window (at most 5.5 bohr here), so the
+#:   reach gate is one on every point; the default band, 3.78 to 5.67 bohr,
+#:   would thin the pseudo-atom's sheet
+INNER_GATE = dict(w_0hor_on=0.0, branch_reach_on=6.0, branch_reach_off=7.0)
+#: Default ``reach_on`` in bohr, from which the default reach gate falls
+DEFAULT_REACH_ON = 3.78
+#: Lebedev points per atom of the inner-sheet search
+NLEB = 302
+#: Settings of the wide search for the inner sheet
+SEARCH = dict(proj_level=GLOBAL_SEARCH, branch_dpdist_max=INNER_BRANCH_DPDIST_MAX, **INNER_GATE)
 
 
 def _cavity(answers, structure, *, core_fill=True, rho_iso=None, **drop):
@@ -74,18 +93,45 @@ def _assert_fill_active(source, structure, rho_iso):
         _cavity(source, structure, rho_iso=rho_iso)
 
 
-def _assert_matches_default_projector(source, structure, **drop):
-    """The deflated projector, which reaches an unfilled inner sheet, returns the default cavity."""
-    deflated = _cavity(source, structure, proj_level=DEFLATION, **drop)
+def _assert_inner_sheet_is_filled(source, structure, center, **drop):
+    """The wide level-3 search reaches the unfilled inner sheet, and returns the default cavity with the fill.
+
+    Returns the unfilled cavity
+    """
+    unfilled = _cavity(source, structure, core_fill=False, **SEARCH, **drop)
+    filled = _cavity(source, structure, **SEARCH, **drop)
     reference = _cavity(source, structure, **drop)
-    assert len(deflated.xyz) == len(reference.xyz)
-    # Measured 9e-13: the two projectors converge onto the same points
-    assert deflated.area == pytest.approx(reference.area, rel=1e-9)
-    return deflated
+
+    _assert_shows_inner_sheet(unfilled, center)
+    assert len(unfilled.xyz) > len(reference.xyz), "the unfilled sheet adds no points to the default cavity"
+
+    assert _inner_points(filled, center) == 0, "the core fill leaves points on the inner sheet"
+    assert len(filled.xyz) == len(reference.xyz), "with the core fill the wide search changes the point count"
+    np.testing.assert_allclose(filled.xyz, reference.xyz, rtol=0.0, atol=1e-10)
+    assert filled.area == pytest.approx(reference.area, rel=1e-9)
+    return unfilled
+
+
+def _assert_shows_inner_sheet(cavity, center):
+    """The wide search shows the inner sheet of an unfilled density, whose points the default gate closes."""
+    inner = _inner_mask(cavity, center)
+    n_inner = int(inner.sum())
+    assert n_inner > 0, "the unfilled density shows no inner sheet: the wide search or its gate misses it"
+    # The sheet's normals point back at the nucleus: the default horizon switch closes all of them
+    inward = np.sum(cavity.normal0 * (cavity.xyz - center), axis=1) < 0.0
+    n_inward = int(np.sum(inward & inner))
+    assert n_inward == n_inner, "an inner-sheet normal points away from the nucleus"
+    # Reach gate one on every point: only the core fill and the search decide what the cavity shows
+    farthest = float(cavity.pdist.max())
+    assert farthest < INNER_GATE["branch_reach_on"], "a point lies in the reach band of INNER_GATE"
+
+
+def _inner_mask(cavity, center):
+    return np.linalg.norm(cavity.xyz - center, axis=1) < INNER
 
 
 def _inner_points(cavity, center):
-    return int(np.sum(np.linalg.norm(cavity.xyz - center, axis=1) < INNER))
+    return int(np.sum(_inner_mask(cavity, center)))
 
 
 def _assert_same_surface(left, right):
@@ -123,9 +169,15 @@ def test_pseudo_atom_outer_surface_is_untouched():
 
 def test_pseudo_atom_inner_sheet_is_filled():
     # The d-shell density vanishes at the nucleus, so the sheet exists without the fill
-    source, structure = _pseudo_atom(8)
-    deflated = _assert_matches_default_projector(source, structure, nleb=110)
-    assert _inner_points(deflated, 0.0) == 0
+    ecp, structure = _pseudo_atom(8)
+    all_electron, _ = _pseudo_atom(54)
+    unfilled = _assert_inner_sheet_is_filled(ecp, structure, 0.0, nleb=NLEB)
+    # The d-shell sheet lies past the default reach_on, where the default band would thin it
+    inner = _inner_mask(unfilled, 0.0)
+    assert np.any(unfilled.pdist[inner] > DEFAULT_REACH_ON), "the inner sheet lies inside the default reach"
+    # A charge of Z is never filled, whatever the density
+    unfilled_ae = _cavity(all_electron, structure, **SEARCH, nleb=NLEB)
+    _assert_shows_inner_sheet(unfilled_ae, 0.0)
 
 
 # -----------------------------------------------------------------------------
@@ -197,5 +249,4 @@ def test_auh_inner_sheet_is_filled(auh_ecp):
     gold = mol.atom_coord(0)
     # Without the fill the sheet exists: the ECP density dips below rho_iso at the nucleus
     assert host.density(gold, 1)[0] < IsodensityParameters().rho_iso
-    deflated = _assert_matches_default_projector(_answers(host), structure, nleb=26)
-    assert _inner_points(deflated, gold) == 0
+    _assert_inner_sheet_is_filled(_answers(host), structure, gold, nleb=NLEB)

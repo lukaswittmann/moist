@@ -24,7 +24,11 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinxcontrib.bibtex",
     "solvents",
+    "sphinx_subfigure",
 ]
+
+# Number captioned figures, so :numref: works
+numfig = True
 
 # Status icons shared by the support tables
 rst_prolog = """
@@ -61,7 +65,7 @@ html_theme_options = {
 html_sidebars = {}
 
 html_static_path = ["_static"]
-html_css_files = ["custom.css"]
+html_css_files = ["custom.css", "css/custom.css"]
 templates_path = ["_templates"]
 exclude_patterns = ["_build"]
 

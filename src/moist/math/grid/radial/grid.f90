@@ -161,7 +161,7 @@ contains
 
    !> Build the uniform r- and k-grid pair for the DST-IV radial transform
    !>
-   !> r_i = (i - 0.5)*dr, k_j = (j - 0.5)*dk with dk = acos(-1)/(npts*dr);
+   !> r_i = (i - 0.5)*dr, k_j = (j - 0.5)*dk with dk = pi/(npts*dr);
    !> weights dr and dk; both grids are tagged transform_dst4 and record their
    !> spacing
    !>
@@ -183,7 +183,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       integer :: i, stat
-      real(wp) :: pi_dst, dk
+      real(wp) :: dk
 
       if (npts < 1) then
          call fatal_error(error, "Uniform radial pair needs at least one point")
@@ -199,8 +199,7 @@ contains
       end if
 
       ! The DST-IV trafo recomputes dk with this expression and compares with ==
-      pi_dst = acos(-1.0_wp)
-      dk = pi_dst/(real(npts, wp)*dr)
+      dk = pi/(real(npts, wp)*dr)
 
       allocate (rgrid%r(npts), stat=stat)
       if (stat == 0) allocate (rgrid%w(npts), stat=stat)

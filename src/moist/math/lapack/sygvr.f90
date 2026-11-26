@@ -1,10 +1,10 @@
 module moist_math_lapack_sygvr
    use mctc_env, only: sp, dp, error_type, fatal_error
-   use moist_output_format, only: format_string
    use moist_math_lapack_type, only: eigen_solver_type
    use moist_math_lapack_sygst, only: wrap_sygst
    use moist_math_lapack_potrf, only: wrap_potrf
    use moist_math_blas_level3, only: wrap_trsm
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -327,7 +327,7 @@ contains
 
       if (info /= 0) then
          call fatal_error(error, "(sygvr) failed to solve eigenvalue problem.&
-            & info="//format_string(info, "(i0)"))
+            & info="//to_string(info))
       end if
    end subroutine handle_info
 

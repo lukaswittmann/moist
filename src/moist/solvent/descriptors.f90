@@ -4,9 +4,9 @@ module moist_solvent_descriptors
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
    use mctc_io, only: structure_type
+   use mctc_io_constants, only: codata
    use mctc_io_convert, only: aatoau
-   use mctc_io_codata2018, only: Avogadro_constant, Bohr_radius
-   use mctc_io_codata2018, only: Hartree_energy, atomic_unit_of_mass
+   use mctc_io_codata2018, only: Bohr_radius, Hartree_energy
    use mctc_io_utils, only: to_lower
    use, intrinsic :: iso_fortran_env, only: output_unit
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
@@ -164,7 +164,7 @@ contains
 
       ! Geometry-free values in atomic units
       descriptors%surface_tension_au = descriptors%surface_tension_si*(Bohr_radius**2)/Hartree_energy
-      descriptors%mass_density_au = descriptors%mass_density_si*(Bohr_radius**3)/atomic_unit_of_mass
+      descriptors%mass_density_au = descriptors%mass_density_si*(Bohr_radius**3)/codata%me
 
       call get_solvent_geometry(solvent_id, mol, error)
       if (allocated(error)) then
@@ -193,17 +193,17 @@ contains
       end do
 
       ! Mass: kg/mol -> me
-      descriptors%molecular_mass_au = descriptors%molar_mass_si/Avogadro_constant/atomic_unit_of_mass
+      descriptors%molecular_mass_au = descriptors%molar_mass_si/codata%NA/codata%me
 
       ! Density: kg/m^3 to 1/m^3
-      descriptors%number_density_si = Avogadro_constant*descriptors%mass_density_si/descriptors%molar_mass_si
+      descriptors%number_density_si = codata%NA*descriptors%mass_density_si/descriptors%molar_mass_si
 
       ! Solvent number density: 1/m^3 -> 1/bohr^3
       descriptors%number_density_au = descriptors%number_density_si*Bohr_radius**3
 
       ! Solvent molecular volume
       descriptors%molecular_volume_si = descriptors%molar_mass_si/ &
-                                        descriptors%mass_density_si/Avogadro_constant
+                                        descriptors%mass_density_si/codata%NA
 
       ! Solvent molecular volume: m^3 -> bohr^3
       descriptors%molecular_volume_au = descriptors%molecular_volume_si/(Bohr_radius**3)

@@ -4,101 +4,123 @@
 !> - every concrete LSF extends this base
 !>
 !> A concrete LSF supplies:
-!>   - its own constructor, carrying the per-LSF parameters (see e.g. SvdW's
-!>     [[moist_cavity_drop_lsf_svdw_type]]%new)
+!>   - its own constructor with the per-LSF parameters, e.g.
+!>     [[moist_cavity_drop_lsf_svdw_type]]%new
 !>   - a `candidate_space` declaration in that constructor (see below)
-!>   - implementations of the deferred procedures below
-!>   - optionally, overrides for the higher-order and direction-contracted
-!>     derivatives the base declares with erroring defaults (`f4_*`, `f2_rArB`,
-!>     `f3_r_rArB`, `f4_rr_rArB`, `f*_radrad`, `f*_rA_rad`, `normalized_f01_rA`,
-!>     `tangent_*`, `hvp_*`, `vjp_f1_rA`, `vjp_f1_rad`)
+!>   - implementations of the deferred procedures
+!>   - optionally, overrides of the higher-order and direction-contracted derivatives the base
+!>     declares with aborting defaults (`f4_*`, `f2_rArB`, `f3_r_rArB`, `f4_rr_rArB`,
+!>     `f*_radrad`, `f*_rA_rad`, `normalized_f01_rA`, `tangent_*`, `hvp_*`, `vjp_f1_rA`,
+!>     `vjp_f1_rad`)
 !>
 !> Coverage of that optional family:
-!>   - SvdW and CFC implement all of it
-!>   - the isodensity LSFs implement only the identically zero `vjp_f1_rA`, and
-!>     clear `radius_dependent` instead of implementing the radius family
-!>   - a fourth derivative there, or any radius-dependent query including
-!>     `vjp_f1_rad`, therefore aborts
-!>   - aborts rather than returns a zero the caller cannot tell from a real answer
+!>   - SvdW and CFC: all of it
+!>   - isodensity: only the identically zero `vjp_f1_rA`; clears `radius_dependent` instead of
+!>     implementing the radius family
+!>   - fourth derivatives and radius queries (including `vjp_f1_rad`) abort there rather than
+!>     return a zero the caller cannot tell from a real answer
 !>
-!> Two geometric-bound queries
-!> ---------------------------
-!> Shared by both:
-!>   - both ask "how far can something be"
-!>   - both are answered analytically from the LSF's own mathematics
-!>   - both let a caller skip work without knowing which concrete LSF it holds
+!> Packed spatial groups
+!> ---------------------
+!>   - symmetric spatial groups of the per-point accessors packed as [[moist_math_packed]]:
+!>     `rr` (6) xx, xy, yy, xz, yz, zz; `rrr` (10); `rrrr` (15)
+!>   - other indices keep their dense extents
+!>   - `vjp_f1_rA` / `vjp_f1_rad` seed `w2(6)` packed symmetric, off-diagonals not doubled
 !>
-!> Otherwise independent -- different subject, consumer and failure mode:
+!> Batched families
+!> ----------------
+!> Point-last, packed symmetric groups, one shared candidate list per tile; unreached columns
+!> read back through `unreached(column)`; looping default over the single-point path,
+!> overridable by a kernel:
 !>
-!>   - [[exclusion_radius]]`(lsf0)` -- how far a piece of *surface* must be from
-!>     the evaluation point, given the value there
-!>     - consumer: the octree surface coverage, "can I discard this region?"
-!>     - safe answer **zero**, i.e. certify nothing and prune nothing
-!>     - an over-estimate silently loses branches
-!>   - [[screening_offset]]`(radius)` -- how far an *atom* can be from the
-!>     evaluation point and still contribute above `screening_threshold`
+!>   - `evaluate_batch`: the jet, orders 0..4
+!>   - `vjp_f1_rA_batch`: seed-contracted nuclear derivative of the jet (batched `vjp_f1_rA`),
+!>     output `(3, ncand, np)`, exact zeros out of reach
+!>
+!> Unreached points
+!> ----------------
+!> A point beyond the reach of every atom: no atom survives the screen, the level-set argument
+!> (`PD`, `Z`) is not positive, or the jet is not finite on the exterior side (`S > 0`, or a
+!> NaN `S` from a round-off `Z <= 0`); SvdW and CFC only, never isodensity or SSES
+!>
+!>   - not an `error`: `error` is kept for genuine failures (refused configuration, host
+!>     callback, core fill, a jet not finite inside with `S <= 0`, e.g. on a nucleus)
+!>   - `unreached()` after `prepare` / `prepare_subset`; the per-point accessors abort there
+!>   - `unreached(column)` after `evaluate_batch` / `vjp_f1_rA_batch`, valid until the next
+!>     batch call on the same instance; an unreached column holds NaN derivatives and
+!>     `S` itself where finite (only a derivative overflowed), else `+Inf` (`-log 0`, the
+!>     exterior limit); a NaN `vjp_f1_rA_batch` result
+!>
+!> Atomic partition
+!> ----------------
+!> `atom_partition` splits the level set at a point into atomic shares summing to one, from the
+!> LSF's own atomic terms; `has_atom_partition` reports whether the override exists
+!>
+!>   - SvdW and CFC: each one-, two- and three-body term shared equally among its atoms
+!>   - internal isodensity: Mulliken split of the density
+!>   - callback isodensity: no atomic terms, aborting default
+!>
+!> Geometric bounds
+!> ----------------
+!> Two analytic "how far" queries that let a caller skip work without knowing the concrete LSF;
+!> opposite safe directions, so neither is expressible through the other:
+!>
+!>   - [[exclusion_radius]]`(lsf0)`: minimum distance from the point to any *surface*, given
+!>     the value there
+!>     - consumer: the lattice seeder, "can I discard this region?"
+!>     - safe answer **zero** (prune nothing); an over-estimate silently loses branches
+!>     - companion [[far_exclusion_radius]]`()`: same promise for every point no atom reaches
+!>       (an unreached batch column), a model constant, zero by default
+!>   - [[screening_offset]]`(radius)`: maximum distance from the point of an *atom* still
+!>     contributing above `screening_threshold` (SvdW with fade: the band end, threshold unread)
 !>     - consumer: screening, "can I skip this atom?"
-!>     - safe answer **huge**, i.e. screen nothing
-!>     - an under-estimate silently drops contributions
-!>
-!> Consequences of the opposite safe directions:
-!>   - neither bound can be expressed in terms of the other
-!>   - only the screening one carries a documented safety margin
-!>     (see [[lsf_screening_reach_margin]])
+!>     - safe answer **huge** (screen nothing); an under-estimate silently drops contributions
 !>
 !> Screening contract
 !> ------------------
-!> Every LSF answers exactly one screening question:
+!>    `screening_offset(radius)`: radial offset outward from the atom surface at which the
+!>    atom's contribution equals `screening_threshold`
 !>
-!>    `screening_offset(radius)` = the radial offset, measured outward from the
-!>    atom surface, at which this LSF's contribution from that atom equals
-!>    `screening_threshold`
-!>
-!> An *exact* analytic inverse, never a bound and never a search, and the single
-!> source of truth for both screening consumers:
-!>
-!>   - the **per-point gate** -- the base caches `(R + offset(R))**2` once per
-!>     `update`, interleaved with the atom center in `cand_screen`, and the gate
-!>     is a squared-distance compare against that cache, with no `exp` and no
-!>     `sqrt` anywhere in the reject path (see [[lsf_base_screen_candidates]])
-!>   - the **cell-grid reach** -- `neighbor_cutoff = lsf_screening_reach_margin *
-!>     offset`, handed to the cavity so it can size the molecular cell grid
-!>     without knowing the concrete LSF
-!>   - `neighbor_cutoff` is `non_overridable` precisely so the two consumers
-!>     cannot drift apart again
+!>   - exact analytic inverse, never a bound or a search
+!>   - single source of the reach `R + offset(R)` for both consumers, rebuilt together in
+!>     [[lsf_base_refresh_bounds]] so they cannot drift apart:
+!>     - per-point gate ([[lsf_base_screen_candidates]]): squared-distance compare against
+!>       `(R + offset(R))**2`, cached per `update` beside the center in `cand_screen`; no `exp`,
+!>       no `sqrt` in the reject path
+!>     - candidate cell list ([[lsf_base_candidates_in_box]],
+!>       [[lsf_base_candidates_in_sphere]]): reach without margin, a superset of the gate's
+!>       survivors; the gate stays the exact filter
 !>
 !> Candidate index space
 !> ---------------------
-!> The cavity's cell grid stores candidate atom ids in user space, and the two
-!> LSF families want opposite things from them:
+!> Space of the candidate ids reaching `prepare_subset` (from the cell list or a caller's
+!> `candidate_indices`), declared per LSF, never inferred:
 !>
-!>   - relabelled into the base's spatially-sorted ordering, which turns the
-!>     per-candidate geometry gathers in the screen loop into near-sequential
-!>     reads and is worth roughly 15% of a projection update
-!>   - left alone, for an LSF that indexes per-atom data with the caller's own ids
-!>
-!> That choice is *declared*, not inferred:
-!>
-!>   - each concrete LSF sets `candidate_space` to [[lsf_candidate_space_sorted]]
-!>     or [[lsf_candidate_space_user]] in its constructor
-!>   - the base performs, or skips, the relabelling accordingly in
-!>     [[lsf_base_remap_candidate_grid]]
-!>   - `update` aborts on an undeclared space, so a silent no-op can no longer
-!>     masquerade as a deliberate choice
+!>   - [[lsf_candidate_space_sorted]]: the base's spatial sort; near-sequential geometry gathers
+!>     in the screen loop, ~15% of a projection update
+!>   - [[lsf_candidate_space_user]]: the caller's own ids, for per-atom data indexed by them
+!>   - set in the constructor; `update` builds the candidate mirror (`cand_screen`,
+!>     `cand_radii`, `cand_to_user`) and the cell list in that space, and aborts on an
+!>     undeclared one
 !>
 !> Thread-local clones
 !> -------------------
-!>   - the cavity holds one `class(moist_cavity_drop_lsf_type), allocatable`
-!>     model and clones it per thread
-!>   - [[lsf_thread_slot]] wraps a clone, since Fortran does not (afaik) allow
-!>     `class(...), allocatable :: arr(:)`
+!>   - the cavity holds one `class(moist_cavity_drop_lsf_type), allocatable` model and clones
+!>     it per thread through `clone_worker`
+!>   - one clone per [[lsf_thread_slot]], each allocated independently
+!>   - `clone_worker` deep-copies by default; an LSF with large read-only data overrides it so
+!>     the worker borrows that data from the model instead of copying it
+!>   - a worker is for evaluation only: it lives no longer than one parallel loop, during which
+!>     the model is neither changed nor deallocated
 module moist_cavity_drop_lsf_base
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf
    use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type
-   use moist_math_sorter_counting_sort, only: counting_argsort
+   use moist_cavity_drop_lsf_screening, only: cell_list_type
+   use moist_math_sorter, only: counting_argsort, sort
    implicit none(type, external)
    private
 
@@ -108,8 +130,11 @@ module moist_cavity_drop_lsf_base
    public :: lsf_candidate_space_undeclared
    public :: lsf_candidate_space_user
    public :: lsf_candidate_space_sorted
-   public :: lsf_screening_reach_margin
    public :: lsf_cand_bound_sq
+   public :: lsf_batch_require_outputs
+   public :: lsf_vjp_batch_shape_message
+   public :: lsf_sorted_candidates
+   public :: lsf_screen_records
 
    !> Spatial dimension
    integer, parameter :: ndim = 3
@@ -138,27 +163,16 @@ module moist_cavity_drop_lsf_base
    !>   near-sequential access
    integer, parameter :: lsf_candidate_space_sorted = 2
 
-   !> Safety margin applied to `screening_offset` when sizing the cavity's
-   !> per-atom cell-grid reach
+   !> Default candidate count below which the candidate cell list is a single cell
    !>
-   !> The gate is exact, so a reach of exactly `R + offset(R)` already admits every
-   !> atom that can pass it for points inside the atom bounding box, the margin
-   !> buying headroom for the two places where that argument is not airtight:
-   !>
-   !> - the cell grid clamps out-of-box query points into the boundary cell
-   !> - cell membership is decided by a sphere/AABB test in a different
-   !>   floating-point expression than the gate itself
-   !>
-   !> A larger reach only ever adds candidates the gate then rejects, so the margin
-   !> can never change a result -- only the amount of work
-   !>
-   !> Replaces SvdW's historical trick of bisecting for `0.1 * threshold` instead of
-   !> `threshold`, the same margin expressed as an unnamed fudge on the target value:
-   !> `-3*ln(0.1*thr)/k` exceeds `-3*ln(thr)/k` by `3*ln(10)/k`, i.e. by ~8% at the
-   !> production threshold
-   real(wp), parameter :: lsf_screening_reach_margin = 1.10_wp
+   !> - initial value of `cell_full_scan_below`, changed through
+   !>   [[lsf_base_set_full_scan_below]]
+   !> - both modes return the same candidates, so the switch only affects speed
+   integer, parameter :: lsf_cell_list_full_scan_below = 200
 
    !> Abstract LSF base
+   !>
+   !> - a component added here must also be handled by [[lsf_base_copy_base_state]]
    type, abstract :: moist_cavity_drop_lsf_type
       !> Short name of the level-set model, e.g. `SvdW`; set by the constructor
       character(len=:), allocatable :: name
@@ -181,9 +195,28 @@ module moist_cavity_drop_lsf_base
       !> - direct users (tests calling the concrete without a cavity) may set it
       !>   before calling `update`
       real(wp) :: screening_threshold = 0.0_wp
+      !> Highest spatial derivative order `prepare` / `prepare_subset` provision (0..4)
+      !>
+      !> - written through `set_max_deriv`; a concrete LSF with another default
+      !>   sets it in its constructor (isodensity: 0)
+      !> - `evaluate_batch` ignores it: `order` governs there
+      integer :: max_deriv = 2
       !> Highest spatial derivative order actually present in the per-point cache after
       !> the latest `prepare`/`prepare_subset`
       integer :: prepared_deriv = -1
+      !> Point of the latest `prepare`/`prepare_subset` is unreached
+      !>
+      !> - set by every concrete `prepare`; SvdW and CFC only, never for the
+      !>   isodensity LSFs or SSES
+      !> - every accessor aborts on it ([[lsf_base_require_reached]]), except
+      !>   `active_count` and `active_atom`
+      logical :: prepared_unreached = .false.
+      !> Unreached columns of the latest batch call, read through `unreached(column)`
+      !>
+      !> - grows only ([[lsf_base_begin_batch]]); `batch_width` entries are valid
+      logical, allocatable :: batch_unreached(:)
+      !> Columns of the latest `evaluate_batch` / `vjp_f1_rA_batch`
+      integer :: batch_width = 0
 
       !> Index space the concrete LSF wants its `prepare_subset` candidate ids in
       !> Set by the concrete's constructor to [[lsf_candidate_space_user]] or
@@ -192,6 +225,14 @@ module moist_cavity_drop_lsf_base
 
       !> LSF dependency on atomic radii
       logical :: radius_dependent = .true.
+      !> Constant multiplier `alpha` of the level set, `S = alpha S_family`
+      !>
+      !> - every value and derivative an accessor returns carries it; the surface,
+      !>   normals and curvatures do not depend on it
+      !> - DROP's critical-gradient switch and projection tolerances read `S` in
+      !>   absolute terms; `alpha` brings `||grad S||` near one on the surface
+      !> - copied from the family's parameter `scale` by its constructor and `update`
+      real(wp) :: scale = 1.0_wp
 
       !* ------------------------- Spatial sort machinery -------------------------- *!
 
@@ -230,6 +271,14 @@ module moist_cavity_drop_lsf_base
       !> comes out in ascending user-space order, fed to the screen loop by
       !> `prepare` (the unscreened full scan) [ncenters]
       integer, allocatable :: full_scan_cand(:)
+      !> Candidate-space cell list over `cand_screen` centers with the gate's exact
+      !> reach `R + offset(R)`, no margin, rebuilt with the screening bounds
+      type(cell_list_type) :: cand_cells
+      !> Candidate count below which `cand_cells` is a single cell
+      !>
+      !> - set through [[lsf_base_set_full_scan_below]], which the cavity calls
+      !>   with `screening.cell_grid_full_scan_below`
+      integer :: cell_full_scan_below = lsf_cell_list_full_scan_below
    contains
 
       !* --------------------------- Geometry and screening --------------------------- *!
@@ -242,25 +291,32 @@ module moist_cavity_drop_lsf_base
       !> Move the atom centers without touching radii, parameters or derivative
       !> storage (used by nuclear finite-difference drivers)
       procedure, non_overridable :: set_centers => lsf_base_set_centers
-      !> Relabel the cavity's cell-grid candidate lists into the declared candidate
-      !> index space, not overridable since the declaration decides
-      procedure, non_overridable :: remap_candidate_grid => lsf_base_remap_candidate_grid
       !> Reject candidates whose contribution is below `screening_threshold`
       procedure, non_overridable :: screen_candidates => lsf_base_screen_candidates
+      !> Candidate ids whose screening reach sphere meets an axis-aligned box
+      procedure, non_overridable :: candidates_in_box => lsf_base_candidates_in_box
+      !> Candidate ids whose screening reach sphere meets a ball
+      procedure, non_overridable :: candidates_in_sphere => lsf_base_candidates_in_sphere
       !> Change `screening_threshold` in place, rewriting only the cached reach
       procedure, non_overridable :: set_screening_threshold => lsf_base_set_screening_threshold
+      !> Change the candidate count below which the candidate cell list is one cell
+      procedure, non_overridable :: set_full_scan_below => lsf_base_set_full_scan_below
+      !> Whether the cached reach still equals the live `screening_offset`
+      procedure, non_overridable :: reach_current => lsf_base_reach_current
       !> Exact radial offset from the atom surface at which this LSF's
       !> contribution equals `screening_threshold`
       procedure(lsf_screening_offset_iface), deferred :: screening_offset
+      !> Print the level-set settings for a verbosity level
+      procedure(lsf_print_parameters_iface), deferred :: print_parameters
       !> Geometric bound query 1 of 2: how far a *surface* can be from a point
       !> with a known LSF value (see the "Two geometric-bound queries" note above)
       procedure :: exclusion_radius => lsf_base_exclusion_radius
+      !> Surface-free radius around every point no atom reaches, a model constant
+      procedure :: far_exclusion_radius => lsf_base_far_exclusion_radius
+      !> Precompute local atom-center bounds for [[stationary_box_excluded]] over a region
+      procedure :: stationary_region_bounds => lsf_base_stationary_region_bounds
       !> Whether a box provably contains no stationary distance point
       procedure :: stationary_box_excluded => lsf_base_stationary_box_excluded
-      !> Geometric bound query 2 of 2, consumer side: how far an *atom* can be from
-      !> a point and still matter, derived from `screening_offset` and not
-      !> overridable, so gate and reach stay the same mathematics
-      procedure, non_overridable :: neighbor_cutoff => lsf_base_neighbor_cutoff
 
       !* -------------------------- Density and build phase --------------------------- *!
 
@@ -283,10 +339,26 @@ module moist_cavity_drop_lsf_base
       procedure(lsf_prepare_iface), deferred :: prepare
       !> Cache per-point state with a caller-provided candidate list
       procedure(lsf_prepare_subset_iface), deferred :: prepare_subset
+      !> Per-thread evaluation worker of this model
+      procedure :: clone_worker => lsf_base_clone_worker
+      !> Copy the base state into a fresh worker, for `clone_worker` overrides
+      procedure, non_overridable :: copy_base_state => lsf_base_copy_base_state
+      !> Forget state carried between evaluations, so the next one does not depend on
+      !> earlier ones (nothing to forget by default)
+      procedure :: reset_history => lsf_base_reset_history
       !> Configure the highest spatial derivative order required
-      procedure(lsf_set_max_deriv_iface), deferred :: set_max_deriv
+      procedure :: set_max_deriv => lsf_base_set_max_deriv
       !> Abort when an accessor is asked for an order `prepare` did not compute
       procedure :: require_deriv => lsf_base_require_deriv
+      !> Abort when an accessor reads the cache of an unreached prepare
+      procedure :: require_reached => lsf_base_require_reached
+      !> Whether the prepared point, or a column of the latest batch, is unreached
+      procedure, non_overridable :: unreached => lsf_base_unreached
+      !> Size and clear the unreached mask of a batch call
+      procedure, non_overridable :: begin_batch => lsf_base_begin_batch
+      !> Batched jet at many points, orders 0..4; the looping default is correct,
+      !> concrete LSFs override it with a vectorized kernel (SvdW: strip kernel)
+      procedure :: evaluate_batch => lsf_base_evaluate_batch
       !> Number of atoms currently active after `prepare`/`prepare_subset`
       procedure(lsf_active_count_iface), deferred :: active_count
       !> User-space atom id of the i-th currently active atom
@@ -329,6 +401,13 @@ module moist_cavity_drop_lsf_base
       !> Normalized level set S/||grad S|| and its nuclear gradient
       procedure :: normalized_f01_rA => lsf_base_normalized_f01_rA
 
+      !* ------------------------------ Atomic partition ------------------------------ *!
+
+      !> Whether this level set splits into atomic shares (no by default)
+      procedure :: has_atom_partition => lsf_base_has_atom_partition
+      !> Add the atomic shares of the level set at the prepared point
+      procedure :: atom_partition => lsf_base_atom_partition
+
       !* ---------------------- Directional and adjoint products ---------------------- *!
 
       !> Directional nuclear derivative of the value
@@ -358,18 +437,29 @@ module moist_cavity_drop_lsf_base
       !> Jet-contracted radius vector-Jacobian product: the radius gradient of
       !> that same jet contracted against the same per-point adjoint weights
       procedure :: vjp_f1_rad => lsf_base_vjp_f1_rad
+      !> Batched `vjp_f1_rA` over a tile, packed symmetric seeds, shared list;
+      !> the looping default is correct, concrete LSFs may override it
+      procedure :: vjp_f1_rA_batch => lsf_base_vjp_f1_rA_batch
    end type moist_cavity_drop_lsf_type
 
-   !> Wrapper struct for arrays of polymorphic-allocatable LSF clones
+   !> Slot holding one polymorphic per-thread LSF clone
    !>
-   !> Fortran does (afaik) not allow `class(...), allocatable :: arr(:)`, so per-thread LSF copies are
-   !> stored as `type(lsf_thread_slot) :: arr(:)` with the polymorphic clone living inside the wrapper
+   !> - `type(lsf_thread_slot) :: arr(:)`: each element allocated and cloned on its own, unlike a
+   !>   `class(...), allocatable :: arr(:)` allocated as a whole with one dynamic type
    type :: lsf_thread_slot
       class(moist_cavity_drop_lsf_type), allocatable :: lsf
    end type lsf_thread_slot
 
    abstract interface
 
+      !> Unreached contract shared with `prepare_subset`:
+      !>   - an unreached point (no atom within reach, `Z` / `PD` not positive, or a
+      !>     jet not finite on the exterior side) is no `error`: `unreached()` reports
+      !>     it, every accessor then aborts, `active_count` / `active_atom` keep working
+      !>   - `error` only for genuine failures (refused configuration, host
+      !>     callback, core fill, a jet not finite inside, e.g. on a nucleus)
+      !>   - isodensity and SSES are never unreached
+      !>
       !> @param[inout] self   LSF instance
       !> @param[in]    point  Evaluation point (3,)
       !> @param[out]   error  Evaluation failure at this point
@@ -381,10 +471,13 @@ module moist_cavity_drop_lsf_base
          type(error_type), allocatable, intent(out) :: error
       end subroutine lsf_prepare_iface
 
+      !> Unreached contract as [[lsf_prepare_iface]]
+      !>
       !> @param[inout] self              LSF instance
       !> @param[in]    point             Evaluation point (3,)
       !> @param[in]    candidate_indices Atom ids to consider, always in the
-      !>                                 LSF's declared `candidate_space`
+      !>                                 LSF's declared `candidate_space`; unique
+      !>                                 ids in 1..ncenters
       !> @param[out]   error             Evaluation failure at this point
       subroutine lsf_prepare_subset_iface(self, point, candidate_indices, error)
          import :: wp, error_type, moist_cavity_drop_lsf_type
@@ -394,15 +487,6 @@ module moist_cavity_drop_lsf_base
          integer, intent(in) :: candidate_indices(:)
          type(error_type), allocatable, intent(out) :: error
       end subroutine lsf_prepare_subset_iface
-
-      !> @param[inout] self LSF instance
-      !> @param[in]    n    Requested max derivative order
-      subroutine lsf_set_max_deriv_iface(self, n)
-         import :: moist_cavity_drop_lsf_type
-         implicit none(type, external)
-         class(moist_cavity_drop_lsf_type), intent(inout) :: self
-         integer, intent(in) :: n
-      end subroutine lsf_set_max_deriv_iface
 
       !> @param[in]  self LSF instance
       !> @returns         Number of currently active atoms
@@ -433,6 +517,8 @@ module moist_cavity_drop_lsf_base
          real(wp), intent(out) :: val
       end subroutine lsf_f0_iface
 
+      !> Packed Hessian (6): xx, xy, yy, xz, yz, zz
+      !>
       !> @param[in]  self     LSF instance
       !> @param[out] lsf0     LSF value (optional)
       !> @param[out] lsf1_r   Gradient w.r.t. spatial coords (optional)
@@ -443,27 +529,30 @@ module moist_cavity_drop_lsf_base
          class(moist_cavity_drop_lsf_type), intent(in) :: self
          real(wp), intent(out), optional :: lsf0
          real(wp), intent(out), optional :: lsf1_r(:)
-         real(wp), intent(out), optional :: lsf2_rr(:, :)
+         real(wp), intent(out), optional :: lsf2_rr(:)
       end subroutine lsf_f012_r_iface
 
+      !> Packed: `lsf2_rr` (6) xx, xy, yy, xz, yz, zz; `lsf3_rrr` (10) in `packed_index3` order
+      !>
       !> @param[in]  self     LSF instance
       !> @param[out] lsf0     LSF value (optional)
       !> @param[out] lsf1_r   Spatial gradient (optional)
       !> @param[out] lsf2_rr  Spatial Hessian (optional)
-      !> @param[out] lsf3_rrr Third spatial derivative tensor [3, 3, 3]
+      !> @param[out] lsf3_rrr Third spatial derivative tensor
       subroutine lsf_f3_rrr_iface(self, lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
          import :: wp, moist_cavity_drop_lsf_type
          implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(in) :: self
          real(wp), intent(out), optional :: lsf0
          real(wp), intent(out), optional :: lsf1_r(:)
-         real(wp), intent(out), optional :: lsf2_rr(:, :)
-         real(wp), intent(out) :: lsf3_rrr(:, :, :)
+         real(wp), intent(out), optional :: lsf2_rr(:)
+         real(wp), intent(out) :: lsf3_rrr(:)
       end subroutine lsf_f3_rrr_iface
 
       !> Every nuclear index is an active-list index: slot `i` belongs to the
       !> atom `active_atom(i)`. The caller owns all three buffers and sizes their
-      !> nuclear extent from `active_count()`
+      !> nuclear extent from `active_count()`. `lsf3_rr_rA` is packed (6, 3, n_active):
+      !> rr slot xx, xy, yy, xz, yz, zz; beta; nuclear slot
       !>
       !> @param[in]  self       LSF instance
       !> @param[out] lsf1_rA    LSF gradient w.r.t. nuclear positions (optional)
@@ -475,7 +564,7 @@ module moist_cavity_drop_lsf_base
          class(moist_cavity_drop_lsf_type), intent(in) :: self
          real(wp), intent(out), optional :: lsf1_rA(:, :)
          real(wp), intent(out), optional :: lsf2_r_rA(:, :, :)
-         real(wp), intent(out) :: lsf3_rr_rA(:, :, :, :)
+         real(wp), intent(out) :: lsf3_rr_rA(:, :, :)
       end subroutine lsf_f3_rr_rA_iface
 
       !> Exact radial offset, measured outward from the atom surface, at which the
@@ -490,8 +579,8 @@ module moist_cavity_drop_lsf_base
       !>     or the parameters make the criterion ill-defined
       !>
       !> Both screening consumers are derived from it: the per-point gate caches
-      !> `radius + screening_offset(radius)`, and the cavity cell-grid reach is
-      !> `lsf_screening_reach_margin` times this value
+      !> `(radius + screening_offset(radius))**2`, and the candidate cell list
+      !> takes `radius + screening_offset(radius)` as its per-atom reach
       !>
       !> @param[in] self    LSF instance
       !> @param[in] radius  Atom radius (Bohr)
@@ -503,6 +592,19 @@ module moist_cavity_drop_lsf_base
          real(wp), intent(in) :: radius
          real(wp) :: offset
       end function lsf_screening_offset_iface
+
+      !> Print the level-set settings
+      !>
+      !> @param[in] self  LSF instance
+      !> @param[in] unit  Output unit (default `output_unit`)
+      !> @param[in] level Verbosity level of the printout (default: all)
+      subroutine lsf_print_parameters_iface(self, unit, level)
+         import :: moist_cavity_drop_lsf_type
+         implicit none(type, external)
+         class(moist_cavity_drop_lsf_type), intent(in) :: self
+         integer, intent(in), optional :: unit
+         integer, intent(in), optional :: level
+      end subroutine lsf_print_parameters_iface
 
    end interface
 
@@ -629,50 +731,96 @@ contains
       call lsf_base_refresh_bounds(self)
    end subroutine lsf_base_rebuild_screening
 
-   !> Recompute the cached squared screening reach of every candidate
+   !> Recompute the cached squared screening reach of every candidate and rebuild
+   !> the candidate cell list from it
    !>
    !> Split out of [[lsf_base_rebuild_screening]] because it is the only part
-   !> that depends on `screening_threshold`: it touches no allocation and does
-   !> not re-sort, so [[lsf_base_set_screening_threshold]] can re-run it alone
+   !> that depends on `screening_threshold`: it does not re-sort, so
+   !> [[lsf_base_set_screening_threshold]] can re-run it alone
+   !>
+   !> - the cell list takes the unsquared reach and saturates it at `sqrt(huge)`
+   !>   exactly as the gate does, so both see bitwise the same squared reach
    !>
    !> @param[inout] self LSF instance with the candidate mirror already built
    subroutine lsf_base_refresh_bounds(self)
       !> LSF instance
       class(moist_cavity_drop_lsf_type), intent(inout) :: self
 
-      !> Screening reach of one atom and the largest bound whose square is finite
-      real(wp) :: bound, bound_sq_max
+      !> Screening reach of one atom
+      real(wp) :: bound
+      !> Screening reach per candidate, handed to the cell list
+      real(wp), allocatable :: reach(:)
       integer :: j
 
       if (.not. allocated(self%cand_screen)) return
+      allocate (reach(size(self%cand_radii)))
 
-      ! Largest bound whose square still fits; beyond it the gate saturates so
-      ! that "screening disabled" never turns into an overflow
-      bound_sq_max = sqrt(huge(0.0_wp))
       do j = 1, size(self%cand_radii)
          bound = self%cand_radii(j) + self%screening_offset(self%cand_radii(j))
-         if (bound >= bound_sq_max) then
-            self%cand_screen(lsf_cand_bound_sq, j) = huge(0.0_wp)
-         else
-            self%cand_screen(lsf_cand_bound_sq, j) = bound*bound
-         end if
+         reach(j) = bound
+         self%cand_screen(lsf_cand_bound_sq, j) = saturated_square(bound)
       end do
+
+      call self%cand_cells%build(self%cand_screen(lsf_cand_center(1):lsf_cand_center(2), :), &
+                                 reach, self%cell_full_scan_below)
    end subroutine lsf_base_refresh_bounds
+
+   !> Squared screening reach as the gate caches it
+   !>
+   !> - saturates at `huge` from `sqrt(huge)` on, so "screening disabled" never
+   !>   turns into an overflow
+   !>
+   !> @param[in] bound Screening reach `R + offset(R)`
+   !> @returns   sq    Cached squared reach
+   elemental function saturated_square(bound) result(sq)
+      !> Screening reach
+      real(wp), intent(in) :: bound
+      !> Cached squared reach
+      real(wp) :: sq
+
+      if (bound >= sqrt(huge(0.0_wp))) then
+         sq = huge(0.0_wp)
+      else
+         sq = bound*bound
+      end if
+   end function saturated_square
+
+   !> Whether the cached reach still equals the live `screening_offset`
+   !>
+   !> - recomputes candidate 1's squared reach from the live parameters exactly
+   !>   as [[lsf_base_refresh_bounds]] does and compares bitwise
+   !> - one candidate suffices: every cached reach comes from one refresh of one
+   !>   formula in `param` and `R_j`, so a stale refresh shows on any of them;
+   !>   O(1), cheap enough for every `prepare`
+   !> - catches a refresh made under other parameters, e.g. `param` changed,
+   !>   `set_screening_threshold` called, `param` restored
+   !> - `.true.` without candidates, `.false.` before `update`
+   !>
+   !> @param[in] self    LSF instance
+   !> @returns   current Cached reach built for the live parameters
+   pure function lsf_base_reach_current(self) result(current)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Cached reach built for the live parameters
+      logical :: current
+
+      current = .false.
+      if (.not. allocated(self%cand_screen)) return
+      current = .true.
+      if (size(self%cand_radii) == 0) return
+      current = self%cand_screen(lsf_cand_bound_sq, 1) == &
+                saturated_square(self%cand_radii(1) + self%screening_offset(self%cand_radii(1)))
+   end function lsf_base_reach_current
 
    !> Change the screening threshold in place
    !>
    !> Only the cached per-candidate reach depends on the threshold, so this
-   !> rewrites one row of `cand_screen` and leaves the spatial sort, the candidate
-   !> mirror and every allocation untouched
+   !> rewrites one row of `cand_screen`, rebuilds the candidate cell list and
+   !> leaves the spatial sort and the candidate mirror untouched
    !>
-   !> - cheap enough to bracket a solve with: O(ncenters) stores, no allocation
-   !>
-   !> The cell grid is *not* rebuilt:
-   !>
-   !> - its reach derives from the threshold the grid was built with, so this is
-   !>   safe only for a threshold *looser* than that one, a smaller reach keeping
-   !>   the grid a valid superset
-   !> - tightening the threshold below the grid's own would silently miss atoms
+   !> - cheap enough to bracket a solve with: O(ncenters) work
+   !> - tighter and looser thresholds both safe, the cell list taking the new reach
+   !> - candidate lists queried before the call are stale
    !>
    !> @param[inout] self      LSF instance
    !> @param[in]    threshold New screening threshold
@@ -686,6 +834,27 @@ contains
       self%screening_threshold = threshold
       call lsf_base_refresh_bounds(self)
    end subroutine lsf_base_set_screening_threshold
+
+   !> Change the candidate count below which the candidate cell list is one cell
+   !>
+   !> - stored, and the candidate cell list rebuilt when `update` already built
+   !>   one; otherwise read by the next `update`
+   !> - both modes return the same candidates, so only speed changes
+   !> - `error stop` on a negative count
+   !>
+   !> @param[inout] self LSF instance
+   !> @param[in]    n    Candidate count threshold, >= 0; 0 never collapses to one cell
+   subroutine lsf_base_set_full_scan_below(self, n)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+      !> Candidate count threshold
+      integer, intent(in) :: n
+
+      if (n < 0) error stop "moist DROP LSF: set_full_scan_below needs n >= 0"
+      if (n == self%cell_full_scan_below) return
+      self%cell_full_scan_below = n
+      call lsf_base_refresh_bounds(self)
+   end subroutine lsf_base_set_full_scan_below
 
    !> Coarse spatial bucket sort of the atom centers
    !>
@@ -718,6 +887,8 @@ contains
       integer, parameter :: n_buckets = nbx*nby*nbz
       !> Per-atom spatial bucket (0..n_buckets-1)
       integer, allocatable :: buckets(:)
+      !> Counters of the bucket sort
+      integer :: counts(0:n_buckets - 1)
 
       if (allocated(sorted_to_orig)) deallocate (sorted_to_orig)
       if (allocated(orig_to_sorted)) deallocate (orig_to_sorted)
@@ -755,12 +926,99 @@ contains
          buckets(i) = bx + by*nbx + bz*nbx*nby
       end do
 
-      call counting_argsort(buckets, n_buckets - 1, sorted_to_orig)
+      call counting_argsort(buckets, sorted_to_orig, counts)
       do j = 1, n
          orig_to_sorted(sorted_to_orig(j)) = j
       end do
       deallocate (buckets)
    end subroutine lsf_base_spatial_sort
+
+   !> Per-thread evaluation worker of this model: a deep copy
+   !>
+   !> - an override may let the worker borrow read-only data of `self` instead;
+   !>   such a worker must not outlive `self` nor see it changed
+   !>
+   !> @param[in]  self   LSF model
+   !> @param[out] worker Worker evaluating the same level set
+   subroutine lsf_base_clone_worker(self, worker)
+      !> LSF model
+      class(moist_cavity_drop_lsf_type), intent(in), target :: self
+      !> Worker evaluating the same level set
+      class(moist_cavity_drop_lsf_type), allocatable, intent(out) :: worker
+
+      allocate (worker, source=self)
+   end subroutine lsf_base_clone_worker
+
+   !> Copy the base state into a freshly allocated worker
+   !>
+   !> - for `clone_worker` overrides that build their worker component by
+   !>   component instead of copying the whole model
+   !> - copies the geometry, screening and candidate-space state; the per-point
+   !>   and per-batch evaluation state of `worker` stays at its defaults
+   !> - every base component is listed here, so a new one must be added
+   !>
+   !> @param[in]    self   LSF model
+   !> @param[inout] worker Freshly allocated worker, default-initialized
+   subroutine lsf_base_copy_base_state(self, worker)
+      !> LSF model
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Freshly allocated worker
+      class(moist_cavity_drop_lsf_type), intent(inout) :: worker
+
+      if (allocated(self%name)) worker%name = self%name
+      worker%ncenters = self%ncenters
+      worker%mol = self%mol
+      worker%center_lower = self%center_lower
+      worker%center_upper = self%center_upper
+      worker%center_bounds_valid = self%center_bounds_valid
+      if (allocated(self%radii)) worker%radii = self%radii
+      worker%screening_threshold = self%screening_threshold
+      worker%max_deriv = self%max_deriv
+      worker%candidate_space = self%candidate_space
+      worker%radius_dependent = self%radius_dependent
+      worker%scale = self%scale
+      if (allocated(self%orig_to_sorted)) worker%orig_to_sorted = self%orig_to_sorted
+      if (allocated(self%sorted_to_orig)) worker%sorted_to_orig = self%sorted_to_orig
+      if (allocated(self%cand_screen)) worker%cand_screen = self%cand_screen
+      if (allocated(self%cand_radii)) worker%cand_radii = self%cand_radii
+      if (allocated(self%cand_to_user)) worker%cand_to_user = self%cand_to_user
+      if (allocated(self%full_scan_cand)) worker%full_scan_cand = self%full_scan_cand
+      worker%cand_cells = self%cand_cells
+      worker%cell_full_scan_below = self%cell_full_scan_below
+      ! Evaluation state: prepared_deriv, prepared_unreached, batch_unreached and
+      ! batch_width keep the defaults of the fresh worker
+   end subroutine lsf_base_copy_base_state
+
+   !> Forget state carried between evaluations: nothing to forget
+   !>
+   !> - a level set whose result at a point depends on the points it evaluated
+   !>   before (a warm start) overrides it; callers reset at the start of every
+   !>   slice of work a thread may take in any order, so the results do not
+   !>   depend on the thread count
+   !>
+   !> @param[inout] self LSF instance
+   subroutine lsf_base_reset_history(self)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+
+      ! Evaluations carry no state by default: `self` is deliberately unused
+   end subroutine lsf_base_reset_history
+
+   !> Configure the highest spatial derivative order `prepare` provisions
+   !>
+   !> - clamped to 0..4; nothing is allocated here
+   !> - takes effect at the next `prepare` / `prepare_subset`
+   !>
+   !> @param[inout] self LSF instance
+   !> @param[in]    n    Requested max derivative order
+   subroutine lsf_base_set_max_deriv(self, n)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+      !> Requested max derivative order
+      integer, intent(in) :: n
+
+      self%max_deriv = min(4, max(0, n))
+   end subroutine lsf_base_set_max_deriv
 
    !> Abort when an accessor is asked for a derivative order the latest
    !> `prepare` did not compute
@@ -775,6 +1033,7 @@ contains
 
       character(len=16) :: got, want
 
+      call self%require_reached(caller)
       if (self%prepared_deriv < 0) then
          error stop "moist DROP LSF: "//caller//" read the per-point cache before "// &
             "any successful prepare -- the level-set jet is not a result"
@@ -787,6 +1046,325 @@ contains
          trim(want)//" but prepare ran at "//trim(got)// &
          " -- raise set_max_deriv before prepare"
    end subroutine lsf_base_require_deriv
+
+   !> Abort when an accessor reads the cache of an unreached prepare
+   !>
+   !> - the escape has no value, so an accessor returns nothing rather than a
+   !>   zero the caller cannot tell from a result
+   !> - [[lsf_base_require_deriv]] calls it first; accessors without an order
+   !>   check call it directly
+   !>
+   !> @param[in] self   LSF instance
+   !> @param[in] caller Accessor name, for the diagnostic
+   pure subroutine lsf_base_require_reached(self, caller)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Accessor name
+      character(len=*), intent(in) :: caller
+
+      if (.not. self%prepared_unreached) return
+      error stop "moist DROP LSF: accessor called after an unreached prepare ("//caller//")"
+   end subroutine lsf_base_require_reached
+
+   !> Whether the latest prepared point, or a column of the latest batch, is unreached
+   !>
+   !> - unreached: no atom within reach, `Z` / `PD` not positive, or a jet not
+   !>   finite on the exterior side; the LSF has no finite value there
+   !> - never for isodensity (an empty set is a defined value there) or SSES
+   !> - `column` absent: the latest `prepare` / `prepare_subset`
+   !> - `column` present: that column of the latest `evaluate_batch` /
+   !>   `vjp_f1_rA_batch`; `error stop` outside `1..batch_width`
+   !>
+   !> @param[in] self      LSF instance after `prepare` or a batch call
+   !> @param[in] column    Batch column (optional)
+   !> @returns   unreached Point or column is unreached
+   pure function lsf_base_unreached(self, column) result(unreached)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Batch column
+      integer, intent(in), optional :: column
+      !> Point or column is unreached
+      logical :: unreached
+
+      if (.not. present(column)) then
+         unreached = self%prepared_unreached
+         return
+      end if
+      if (column < 1 .or. column > self%batch_width) then
+         error stop "moist DROP LSF: unreached(column) outside the latest batch ("//self%name//")"
+      end if
+      unreached = self%batch_unreached(column)
+   end function lsf_base_unreached
+
+   !> Size and clear the unreached mask for a batch call of `n` columns
+   !>
+   !> - called by every `evaluate_batch` / `vjp_f1_rA_batch` after its argument checks
+   !> - grows only; `batch_unreached(1:n)` cleared, `batch_width = n`
+   !>
+   !> @param[inout] self LSF instance
+   !> @param[in]    n    Batch columns
+   pure subroutine lsf_base_begin_batch(self, n)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+      !> Batch columns
+      integer, intent(in) :: n
+
+      !> Capacity of the reallocated mask
+      integer :: cap
+
+      cap = max(n, 64)
+      if (allocated(self%batch_unreached)) then
+         if (size(self%batch_unreached) < n) then
+            cap = max(n, 2*size(self%batch_unreached))
+            deallocate (self%batch_unreached)
+         end if
+      end if
+      if (.not. allocated(self%batch_unreached)) allocate (self%batch_unreached(cap))
+      self%batch_unreached(1:n) = .false.
+      self%batch_width = n
+   end subroutine lsf_base_begin_batch
+
+   !> Level set jet at a batch of points, up to spatial derivative `order`
+   !>
+   !> Contract shared by the default and every vectorized override:
+   !>   - `points(3, n)` contiguous; outputs are filled for columns `1:n` only
+   !>   - `order` 0..4 selects which outputs are written: 0 -> `lsf0`, 1 -> `lsf1_r`
+   !>     too, 2 -> packed `lsf2_rr_packed(6, n)` too, 3 -> packed `lsf3_rrr(10, n)` too,
+   !>     4 -> packed `lsf4_rrrr(15, n)` too; an output above `order` is left
+   !>     untouched, a missing or misshaped output for the requested order aborts
+   !>   - `order` alone governs, whatever `set_max_deriv` holds; `max_deriv` is
+   !>     the same after the call as before
+   !>   - Hessian packed `lsf2_rr_packed(6, n)`: xx, xy, yy, xz, yz, zz;
+   !>     `unpack_sym_matrix` from [[moist_math_packed]] for a dense view
+   !>   - packed slots: sorted tuples `a <= b <= c <= d`, last index slowest,
+   !>     [[moist_math_packed]]'s `packed_index3` / `packed_index4`
+   !>   - `candidate_indices`, when present, is the atom list for *all* points
+   !>     (seeds of one anchor share the anchor's neighbourhood): unique ids in 1..ncenters (`error stop`
+   !>     otherwise), sorted ascending before use; absent means the full screen
+   !>     per point
+   !>   - unreached columns ([[lsf_base_unreached]]`(column)`, valid until the next
+   !>     batch call): `lsf0` the finite `S` where only a derivative overflowed,
+   !>     `+Inf` (`-log 0`, the exterior limit) otherwise, and every derivative
+   !>     through `order` a quiet NaN; no `error` for them
+   !>   - `error` names the first failing column and leaves the remaining columns
+   !>     and the unreached mask unspecified
+   !>   - the single-point accessor cache (`f0`, `f012_r`, ...) is unspecified
+   !>     after this call; re-`prepare` before reading it
+   !>
+   !> Looping default:
+   !>   - `prepare` / `prepare_subset` (on one ascending copy of the list) plus
+   !>     the per-point accessors for every column
+   !>   - `max_deriv` is `order` for the loop, so `prepare` provisions for `order`
+   !>     alone, and back at the caller's value on every exit, the `error` return
+   !>     included
+   !>   - `order` above what the level set's `prepare` provides aborts (`require_deriv`)
+   !>   - orders 2..4 call the packed `f012_r` / `f3_rrr` / `f4_rrrr` straight into the columns
+   !>   - unreached as the prepare's `unreached()` says (CFC: no atom in reach;
+   !>     isodensity: never, an empty set is a defined value there); `lsf0 = +Inf`
+   !>     there, the base has no per-point `S` to keep (CFC and SvdW override)
+   !>
+   !> @param[inout] self              LSF instance
+   !> @param[in]    points            Evaluation points (3, n)
+   !> @param[in]    order             Highest spatial derivative to write (0..4)
+   !> @param[out]   lsf0              Values (n)
+   !> @param[out]   lsf1_r            Gradients (3, n), written for order >= 1
+   !> @param[out]   lsf2_rr_packed    Packed Hessians (6, n), written for order >= 2
+   !> @param[out]   lsf3_rrr          Packed third derivatives (10, n), written for order >= 3
+   !> @param[out]   lsf4_rrrr         Packed fourth derivatives (15, n), written for order 4
+   !> @param[in]    candidate_indices Shared atom list in `candidate_space` (optional)
+   !> @param[out]   error             First failing point, by column
+   subroutine lsf_base_evaluate_batch(self, points, order, lsf0, lsf1_r, lsf2_rr_packed, &
+                                      lsf3_rrr, lsf4_rrrr, candidate_indices, error)
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+      real(wp), intent(in), contiguous :: points(:, :)
+      integer, intent(in) :: order
+      real(wp), intent(out), contiguous :: lsf0(:)
+      real(wp), intent(out), optional, contiguous :: lsf1_r(:, :)
+      real(wp), intent(out), optional, contiguous :: lsf2_rr_packed(:, :)
+      real(wp), intent(out), optional, contiguous :: lsf3_rrr(:, :)
+      real(wp), intent(out), optional, contiguous :: lsf4_rrrr(:, :)
+      integer, intent(in), optional :: candidate_indices(:)
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Derivative fill of an unreached column
+      real(wp) :: nan
+      !> Ascending copy of `candidate_indices(1:nc)`
+      integer, allocatable :: sorted(:)
+      !> Column, point count and list size
+      integer :: i, n, nc
+      !> `max_deriv` of the caller
+      integer :: caller_deriv
+      character(len=16) :: col
+
+      n = size(points, 2)
+      call lsf_batch_require_outputs(self%name, points, order, lsf0, lsf1_r, lsf2_rr_packed, &
+                                     lsf3_rrr, lsf4_rrrr)
+      call self%begin_batch(n)
+      if (present(candidate_indices)) then
+         allocate (sorted(size(candidate_indices)))
+         call lsf_sorted_candidates(candidate_indices, sorted, nc, self%ncenters)
+      end if
+
+      ! `prepare` computes at `max_deriv`: `order` for the loop, restored below
+      caller_deriv = self%max_deriv
+      self%max_deriv = order
+      do i = 1, n
+         if (present(candidate_indices)) then
+            call self%prepare_subset(points(:, i), sorted(1:nc), error)
+         else
+            call self%prepare(points(:, i), error)
+         end if
+         if (allocated(error)) then
+            write (col, "(i0)") i
+            error%message = "evaluate_batch failed at point "//trim(col)//": "//error%message
+            exit
+         end if
+         if (self%prepared_unreached) then
+            self%batch_unreached(i) = .true.
+            nan = ieee_value(0.0_wp, ieee_quiet_nan)
+            lsf0(i) = ieee_value(0.0_wp, ieee_positive_inf)
+            if (order >= 1) lsf1_r(:, i) = nan
+            if (order >= 2) lsf2_rr_packed(:, i) = nan
+            if (order >= 3) lsf3_rrr(:, i) = nan
+            if (order >= 4) lsf4_rrrr(:, i) = nan
+            cycle
+         end if
+         call self%require_deriv(order, "evaluate_batch")
+         select case (order)
+         case (0)
+            call self%f012_r(lsf0=lsf0(i))
+         case (1)
+            call self%f012_r(lsf0=lsf0(i), lsf1_r=lsf1_r(:, i))
+         case (2)
+            call self%f012_r(lsf0=lsf0(i), lsf1_r=lsf1_r(:, i), lsf2_rr=lsf2_rr_packed(:, i))
+         case (3)
+            call self%f3_rrr(lsf0=lsf0(i), lsf1_r=lsf1_r(:, i), lsf2_rr=lsf2_rr_packed(:, i), &
+                             lsf3_rrr=lsf3_rrr(:, i))
+         case default
+            call self%f3_rrr(lsf0=lsf0(i), lsf1_r=lsf1_r(:, i), lsf2_rr=lsf2_rr_packed(:, i), &
+                             lsf3_rrr=lsf3_rrr(:, i))
+            call self%f4_rrrr(lsf4_rrrr(:, i))
+         end select
+      end do
+      self%max_deriv = caller_deriv
+   end subroutine lsf_base_evaluate_batch
+
+   !> Abort on an `evaluate_batch` call whose outputs cannot hold `order`
+   !>
+   !> Shared by the looping default and every override, so the aborts read the
+   !> same everywhere
+   !>
+   !> - `points` with a leading extent other than 3
+   !> - `order` outside 0..4
+   !> - an output of the requested order absent, or with a leading extent other
+   !>   than its width (3, 6, 10, 15), or with fewer than `n` columns
+   !>
+   !> @param[in] who       LSF name for the diagnostic
+   !> @param[in] points    Evaluation points (3, n); only the extents are read
+   !> @param[in] order     Requested derivative order
+   !> @param[in] lsf0      Values
+   !> @param[in] lsf1_r    Gradients (optional)
+   !> @param[in] lsf2_rr_packed Packed Hessians (optional)
+   !> @param[in] lsf3_rrr  Packed third derivatives (optional)
+   !> @param[in] lsf4_rrrr Packed fourth derivatives (optional)
+   subroutine lsf_batch_require_outputs(who, points, order, lsf0, lsf1_r, lsf2_rr_packed, &
+                                        lsf3_rrr, lsf4_rrrr)
+      !> LSF name for the diagnostic
+      character(len=*), intent(in) :: who
+      !> Evaluation points; only the extents are read
+      real(wp), intent(in) :: points(:, :)
+      !> Requested derivative order
+      integer, intent(in) :: order
+      !> Values; only the extent is read
+      real(wp), intent(in) :: lsf0(:)
+      !> Gradients; only the extents are read
+      real(wp), intent(in), optional :: lsf1_r(:, :)
+      !> Packed Hessians; only the extents are read
+      real(wp), intent(in), optional :: lsf2_rr_packed(:, :)
+      !> Packed third derivatives; only the extents are read
+      real(wp), intent(in), optional :: lsf3_rrr(:, :)
+      !> Packed fourth derivatives; only the extents are read
+      real(wp), intent(in), optional :: lsf4_rrrr(:, :)
+
+      character(len=*), parameter :: pre = "moist DROP LSF evaluate_batch: "
+      !> Number of points
+      integer :: n
+
+      if (size(points, 1) /= ndim) error stop pre//"points must be (3, n) ("//who//")"
+      n = size(points, 2)
+      if (order < 0 .or. order > 4) error stop pre//"order must be 0..4 ("//who//")"
+      if (size(lsf0) < n) error stop pre//"lsf0 holds fewer than n columns ("//who//")"
+      if (order >= 1) then
+         if (.not. present(lsf1_r)) error stop pre//"order >= 1 needs lsf1_r ("//who//")"
+         if (size(lsf1_r, 1) /= ndim .or. size(lsf1_r, 2) < n) then
+            error stop pre//"lsf1_r must be (3, >= n) ("//who//")"
+         end if
+      end if
+      if (order >= 2) then
+         if (.not. present(lsf2_rr_packed)) then
+            error stop pre//"order >= 2 needs lsf2_rr_packed ("//who//")"
+         end if
+         if (size(lsf2_rr_packed, 1) /= 6 .or. size(lsf2_rr_packed, 2) < n) then
+            error stop pre//"lsf2_rr_packed must be packed (6, >= n) ("//who//")"
+         end if
+      end if
+      if (order >= 3) then
+         if (.not. present(lsf3_rrr)) error stop pre//"order >= 3 needs lsf3_rrr ("//who//")"
+         if (size(lsf3_rrr, 1) /= 10 .or. size(lsf3_rrr, 2) < n) then
+            error stop pre//"lsf3_rrr must be packed (10, >= n) ("//who//")"
+         end if
+      end if
+      if (order >= 4) then
+         if (.not. present(lsf4_rrrr)) error stop pre//"order 4 needs lsf4_rrrr ("//who//")"
+         if (size(lsf4_rrrr, 1) /= 15 .or. size(lsf4_rrrr, 2) < n) then
+            error stop pre//"lsf4_rrrr must be packed (15, >= n) ("//who//")"
+         end if
+      end if
+   end subroutine lsf_batch_require_outputs
+
+   !> Copy a shared candidate list into `out(1:n)`, ascending
+   !>
+   !> The batch contract's canonical order: atoms outside a point's reach add
+   !> exact zeros in that order, which is what makes tiling invisible
+   !>
+   !> - already ascending lists are copied, others sorted in place ([[sort]])
+   !> - contract: unique ids in 1..ncenters; a repeated or out-of-range id is a
+   !>   caller bug and aborts (`error stop`), checked after the sort
+   !> - allocation-free; `size(out) >= size(ids)`
+   !>
+   !> @param[in]  ids      Candidate ids in `candidate_space`
+   !> @param[out] out      Ascending copy in `out(1:n)`
+   !> @param[out] n        Number of ids
+   !> @param[in]  ncenters Largest valid id
+   pure subroutine lsf_sorted_candidates(ids, out, n, ncenters)
+      !> Candidate ids
+      integer, intent(in) :: ids(:)
+      !> Ascending copy
+      integer, intent(out) :: out(:)
+      !> Number of ids
+      integer, intent(out) :: n
+      !> Largest valid id
+      integer, intent(in) :: ncenters
+
+      integer :: i
+      logical :: ascending
+
+      n = size(ids)
+      if (size(out) < n) error stop "moist DROP LSF: candidate buffer smaller than the list"
+      ascending = .true.
+      do i = 1, n
+         out(i) = ids(i)
+         if (i > 1) ascending = ascending .and. ids(i - 1) <= ids(i)
+      end do
+      if (.not. ascending) call sort(out(1:n))
+      if (n == 0) return
+      if (out(1) < 1 .or. out(n) > ncenters) then
+         error stop "moist DROP LSF: candidate id outside 1..ncenters"
+      end if
+      do i = 2, n
+         if (out(i) == out(i - 1)) error stop "moist DROP LSF: repeated candidate id"
+      end do
+   end subroutine lsf_sorted_candidates
 
    !* ================================================================================= *!
    !*                Erroring defaults of the optional derivative set                   *!
@@ -805,10 +1383,10 @@ contains
    !> Erroring default of the pure spatial fourth derivative
    !>
    !> @param[in]  self      LSF instance
-   !> @param[out] lsf4_rrrr Fourth spatial derivative [3, 3, 3, 3]
+   !> @param[out] lsf4_rrrr Fourth spatial derivative, packed (15)
    subroutine lsf_base_f4_rrrr(self, lsf4_rrrr)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
-      real(wp), intent(out) :: lsf4_rrrr(:, :, :, :)
+      real(wp), intent(out) :: lsf4_rrrr(:)
 
       lsf4_rrrr = 0.0_wp*self%ncenters
       error stop "moist DROP LSF: Chosen level set does not support "// &
@@ -818,10 +1396,10 @@ contains
    !> Erroring default of the mixed fourth derivative d^4S / (dr^3 dR_A)
    !>
    !> @param[in]  self        LSF instance
-   !> @param[out] lsf4_rrr_rA Mixed fourth derivative [3, 3, 3, 3, n_active]
+   !> @param[out] lsf4_rrr_rA Mixed fourth derivative, packed rrr [10, 3, n_active]
    subroutine lsf_base_f4_rrr_rA(self, lsf4_rrr_rA)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
-      real(wp), intent(out) :: lsf4_rrr_rA(:, :, :, :, :)
+      real(wp), intent(out) :: lsf4_rrr_rA(:, :, :)
 
       lsf4_rrr_rA = 0.0_wp*self%ncenters
       error stop "moist DROP LSF: Chosen level set does not support "// &
@@ -833,12 +1411,12 @@ contains
    !> @param[in]  self        LSF instance
    !> @param[out] lsf1_rad    dS/dR_a [>= n_active] (optional)
    !> @param[out] lsf2_r_rad  d^2S/(dr dR_a) [3, >= n_active] (optional)
-   !> @param[out] lsf3_rr_rad d^3S/(dr^2 dR_a) [3, 3, >= n_active]
+   !> @param[out] lsf3_rr_rad d^3S/(dr^2 dR_a), packed rr [6, >= n_active]
    subroutine lsf_base_f3_rr_rad(self, lsf1_rad, lsf2_r_rad, lsf3_rr_rad)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(out), optional :: lsf1_rad(:)
       real(wp), intent(out), optional :: lsf2_r_rad(:, :)
-      real(wp), intent(out) :: lsf3_rr_rad(:, :, :)
+      real(wp), intent(out) :: lsf3_rr_rad(:, :)
 
       if (present(lsf1_rad)) lsf1_rad = 0.0_wp
       if (present(lsf2_r_rad)) lsf2_r_rad = 0.0_wp
@@ -876,10 +1454,10 @@ contains
    !> Erroring default of the mixed fourth derivative d^4S / (dr^2 dR_A dR_B)
    !>
    !> @param[in]  self         LSF instance
-   !> @param[out] lsf4_rr_rArB Mixed fourth derivative [3, 3, 3, n_act, 3, n_act]
+   !> @param[out] lsf4_rr_rArB Mixed fourth derivative, packed rr [6, 3, n_act, 3, n_act]
    subroutine lsf_base_f4_rr_rArB(self, lsf4_rr_rArB)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
-      real(wp), intent(out) :: lsf4_rr_rArB(:, :, :, :, :, :)
+      real(wp), intent(out) :: lsf4_rr_rArB(:, :, :, :, :)
 
       lsf4_rr_rArB = 0.0_wp*self%ncenters
       error stop "moist DROP LSF: Chosen level set does not support "// &
@@ -919,10 +1497,10 @@ contains
    !> Erroring default of the mixed fourth derivative d^4S / (dr^2 dR_a dR_b)
    !>
    !> @param[in]  self           LSF instance
-   !> @param[out] lsf4_rr_radrad d^4S/(dr^2 dR_a dR_b) [3, 3, >= n_act, >= n_act]
+   !> @param[out] lsf4_rr_radrad d^4S/(dr^2 dR_a dR_b), packed rr [6, >= n_act, >= n_act]
    subroutine lsf_base_f4_rr_radrad(self, lsf4_rr_radrad)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
-      real(wp), intent(out) :: lsf4_rr_radrad(:, :, :, :)
+      real(wp), intent(out) :: lsf4_rr_radrad(:, :, :)
 
       lsf4_rr_radrad = 0.0_wp*self%ncenters
       error stop "moist DROP LSF: Chosen level set does not support "// &
@@ -958,10 +1536,10 @@ contains
    !> Erroring default of the mixed fourth derivative d^4S / (dr^2 dR_A dR_b)
    !>
    !> @param[in]  self           LSF instance
-   !> @param[out] lsf4_rr_rA_rad d^4S/(dr^2 dR_A dR_b) [3, 3, 3, >= n_act, >= n_act]
+   !> @param[out] lsf4_rr_rA_rad d^4S/(dr^2 dR_A dR_b), packed rr [6, 3, >= n_act, >= n_act]
    subroutine lsf_base_f4_rr_rA_rad(self, lsf4_rr_rA_rad)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
-      real(wp), intent(out) :: lsf4_rr_rA_rad(:, :, :, :, :)
+      real(wp), intent(out) :: lsf4_rr_rA_rad(:, :, :, :)
 
       lsf4_rr_rA_rad = 0.0_wp*self%ncenters
       error stop "moist DROP LSF: Chosen level set does not support "// &
@@ -1018,11 +1596,11 @@ contains
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
-   !> @param[out] res  Contracted Hessian derivative [3, 3]
+   !> @param[out] res  Contracted Hessian derivative, packed (6)
    subroutine lsf_base_tangent_f2_rr(self, v, res)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(in) :: v(:, :)
-      real(wp), intent(out) :: res(:, :)
+      real(wp), intent(out) :: res(:)
 
       res = 0.0_wp*size(v, 2)*self%ncenters
       error stop "moist DROP LSF: Chosen level set does not support "// &
@@ -1033,11 +1611,11 @@ contains
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
-   !> @param[out] res  Contracted third-derivative derivative [3, 3, 3]
+   !> @param[out] res  Contracted third-derivative derivative, packed (10)
    subroutine lsf_base_tangent_f3_rrr(self, v, res)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(in) :: v(:, :)
-      real(wp), intent(out) :: res(:, :, :)
+      real(wp), intent(out) :: res(:)
 
       res = 0.0_wp*size(v, 2)*self%ncenters
       error stop "moist DROP LSF: Chosen level set does not support "// &
@@ -1084,12 +1662,12 @@ contains
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
-   !> @param[out] res  Contracted mixed fourth derivative [3, 3, 3, n_active]
+   !> @param[out] res  Contracted mixed fourth derivative, packed rr [6, 3, n_active]
    !> @param[in]  vrad Radius directions [ncenters] (optional)
    subroutine lsf_base_hvp_f3_rr_rA(self, v, res, vrad)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(in) :: v(:, :)
-      real(wp), intent(out) :: res(:, :, :, :)
+      real(wp), intent(out) :: res(:, :, :)
       real(wp), intent(in), optional :: vrad(:)
 
       res = 0.0_wp*size(v, 2)*self%ncenters
@@ -1141,12 +1719,12 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
    !> @param[in]  vrad Radius directions [ncenters]
-   !> @param[out] res  Contracted mixed fourth derivative [3, 3, n_active]
+   !> @param[out] res  Contracted mixed fourth derivative, packed rr [6, n_active]
    subroutine lsf_base_hvp_f3_rr_rad(self, v, vrad, res)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(in) :: v(:, :)
       real(wp), intent(in) :: vrad(:)
-      real(wp), intent(out) :: res(:, :, :)
+      real(wp), intent(out) :: res(:, :)
 
       res = 0.0_wp*size(v, 2)*size(vrad)*self%ncenters
       error stop "moist DROP LSF: Chosen level set does not support "// &
@@ -1163,7 +1741,7 @@ contains
    !> *nuclear* index against a displacement direction, this one contracts the
    !> *spatial* (jet) indices against per-point adjoint weights and keeps the
    !> nuclear index, so no implementation ever has to materialize the full
-   !> `[3, 3, 3, n_active]` tensor `f3_rr_rA` returns
+   !> `[6, 3, n_active]` packed tensor `f3_rr_rA` returns
    !>
    !> The name follows the family convention: this is the `f1_rA` rung, the
    !> nuclear-gradient row, just as `hvp_f1_rA` is that same rung contracted
@@ -1173,29 +1751,31 @@ contains
    !>
    !>     res(beta, i) = w0 * lsf1_rA(beta, i)
    !>                  + sum_a w1(a) * lsf2_r_rA(a, beta, i)
-   !>                  + sum_{a,b} w2(a, b) * lsf3_rr_rA(a, b, beta, i)
+   !>                  + sum_{a<=b} m_ab * w2(ab) * lsf3_rr_rA(ab, beta, i)
    !>
    !> for `i = 1 .. active_count()`, with the same compact active-index
    !> convention as `f3_rr_rA`, slot `i` belonging to atom `active_atom(i)`
    !>
    !> - columns beyond `active_count()` are left untouched, and nothing is written
    !>   when `active_count()` is zero
-   !> - `w2` is a general 3x3 matrix: all nine entries are contracted, with no
-   !>   symmetry assumption and no folded factor of two
+   !> - `w2` is the packed symmetric seed (6): xx, xy, yy, xz, yz, zz
+   !> - off-diagonals are not doubled; the contraction applies `m_ab` = 1 on the
+   !>   diagonal and 2 off it
+   !> - `pack_sym_part` of [[moist_math_packed]] packs a general seed
    !> - an implementation needs whatever prepared order its own `f3_rr_rA` needs,
    !>   2 for SvdW and 3 for CFC, which asks for the highest *total* order
-   !> - it must say so via `require_deriv(<that order>, "vjp_f1_rA")`
+   !> - must call `require_deriv(<that order>, "vjp_f1_rA")`
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  w0   Adjoint weight of the value
    !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
-   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian, packed (6)
    !> @param[out] res  Contracted nuclear gradient [3, >= n_active]
    subroutine lsf_base_vjp_f1_rA(self, w0, w1, w2, res)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(in) :: w0
       real(wp), intent(in) :: w1(3)
-      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(in) :: w2(:)
       real(wp), intent(out) :: res(:, :)
 
       res = 0.0_wp*w0*size(w1)*size(w2)*self%ncenters
@@ -1217,18 +1797,20 @@ contains
    !>
    !>     res(i) = w0 * lsf1_rad(i)
    !>            + sum_a w1(a) * lsf2_r_rad(a, i)
-   !>            + sum_{a,b} w2(a, b) * lsf3_rr_rad(a, b, i)
+   !>            + sum_{a<=b} m_ab * w2(ab) * lsf3_rr_rad(ab, i)
    !>
    !> for `i = 1 .. active_count()`, with the same compact active-index
    !> convention as `f3_rr_rad`, slot `i` belonging to atom `active_atom(i)`
    !>
    !> - entries beyond `active_count()` are left untouched, and nothing is written
    !>   when `active_count()` is zero
-   !> - `w2` is a general 3x3 matrix: all nine entries are contracted, with no
-   !>   symmetry assumption and no folded factor of two
+   !> - `w2` is the packed symmetric seed (6): xx, xy, yy, xz, yz, zz
+   !> - off-diagonals are not doubled; the contraction applies `m_ab` = 1 on the
+   !>   diagonal and 2 off it
+   !> - `pack_sym_part` of [[moist_math_packed]] packs a general seed
    !> - an implementation needs whatever prepared order its own `f3_rr_rad` needs,
    !>   2 for both SvdW and CFC today
-   !> - it must say so via `require_deriv(<that order>, "vjp_f1_rad")`
+   !> - must call `require_deriv(<that order>, "vjp_f1_rad")`
    !>
    !> Unlike `vjp_f1_rA`, which the isodensity LSFs override with an identically
    !> zero row, this default is *not* overridden there:
@@ -1243,19 +1825,208 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  w0   Adjoint weight of the value
    !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
-   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian, packed (6)
    !> @param[out] res  Contracted radius gradient [>= n_active]
    subroutine lsf_base_vjp_f1_rad(self, w0, w1, w2, res)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(in) :: w0
       real(wp), intent(in) :: w1(3)
-      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(in) :: w2(:)
       real(wp), intent(out) :: res(:)
 
       res = 0.0_wp*w0*size(w1)*size(w2)*self%ncenters
       error stop "moist DROP LSF: Chosen level set does not support "// &
          "vjp_f1_rad derivative"
    end subroutine lsf_base_vjp_f1_rad
+
+   !> Batched jet-contracted nuclear vector-Jacobian product over a tile of points
+   !>
+   !> Per column `p` the same contraction as [[lsf_base_vjp_f1_rA]] after
+   !> `prepare(points(:, p))`, written against the tile's shared candidate list
+   !>
+   !> Contract shared by the default and every override:
+   !>   - `points(3, np)`, `w0(np)`, `w1(3, np)`, `w2(6, np)` contiguous; columns
+   !>     `1:np` are read, outputs are filled for columns `1:np` only
+   !>   - `w2` packs the *symmetric part* of the `(3, 3)` seed in the order xx, xy, yy,
+   !>     xz, yz, zz, off-diagonal entries not doubled; the contraction applies the
+   !>     factor 2 on them, so the column equals `vjp_f1_rA` called with the same
+   !>     packed seed (`lsf2_rr` is symmetric: only the symmetric part of a seed
+   !>     contributes), and `pack_sym_part` from [[moist_math_packed]] packs a
+   !>     general seed
+   !>   - `candidate_indices` as in `evaluate_batch`: ids in the LSF's `candidate_space`,
+   !>     unique and in 1..ncenters (`error stop` otherwise), sorted ascending before
+   !>     use, so the order of the list moves no bits; absent means the ids
+   !>     1..ncenters, i.e. every atom, and the full screen per point
+   !>   - `res(3, ncand, np)` with `ncand = size(candidate_indices)`, or `ncenters`
+   !>     when absent; `res(:, k, p)` is the seed-contracted nuclear derivative at
+   !>     point `p` with respect to the atom of candidate `candidate_indices(k)` (id
+   !>     `k` when absent), in the list's own order; exact zero for a candidate out
+   !>     of reach of point `p`, never a skipped write
+   !>   - unreached columns ([[lsf_base_unreached]]`(column)`, valid until the next
+   !>     batch call): NaN in `res(:, :, p)`, never an `error`; the other columns are
+   !>     computed
+   !>   - `error` names the first failing column ("vjp_f1_rA_batch failed at point
+   !>     <i>: ...", a `prepare` / `prepare_subset` error) and the call returns; the
+   !>     failed and later columns and the unreached mask are unspecified, as in
+   !>     `evaluate_batch`
+   !>   - a shape that cannot hold the tile is a caller bug: `error stop`, see
+   !>     [[lsf_vjp_batch_shape_message]]
+   !>   - the single-point accessor cache is unspecified after this call
+   !>
+   !> Looping default:
+   !>   - `prepare` / `prepare_subset` (on one ascending copy of the list), then the
+   !>     per-point `vjp_f1_rA` with the packed seed, per column
+   !>   - the active slots scatter into the candidate positions through
+   !>     `active_atom` and `cand_to_user`; the rest of the column is zero
+   !>   - needs the prepared order the per-point `vjp_f1_rA` needs (2 for SvdW, 3 for
+   !>     CFC), a caller raises `set_max_deriv` first; the per-point abort stands
+   !>   - SSES runs this default, one `prepare` per column; both isodensity LSFs
+   !>     override it with evaluation-free zero rows
+   !>
+   !> @param[inout] self              LSF instance, `prepare` mutates its cache
+   !> @param[in]    points            Evaluation points (3, np)
+   !> @param[in]    w0                Adjoint weights of the value (np)
+   !> @param[in]    w1                Adjoint weights of the gradient (3, np)
+   !> @param[in]    w2                Packed symmetric part of the Hessian seed (6, np)
+   !> @param[out]   res               Contracted nuclear gradient (3, ncand, np)
+   !> @param[out]   error             First failing column
+   !> @param[in]    candidate_indices Shared atom list in `candidate_space` (optional)
+   subroutine lsf_base_vjp_f1_rA_batch(self, points, w0, w1, w2, res, error, &
+                                       candidate_indices)
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+      real(wp), intent(in), contiguous :: points(:, :)
+      real(wp), intent(in), contiguous :: w0(:)
+      real(wp), intent(in), contiguous :: w1(:, :)
+      real(wp), intent(in), contiguous :: w2(:, :)
+      real(wp), intent(out), contiguous :: res(:, :, :)
+      type(error_type), allocatable, intent(out) :: error
+      integer, intent(in), optional :: candidate_indices(:)
+
+      !> Fill of an unreached column
+      real(wp) :: nan
+      !> Per-point result over the active slots
+      real(wp), allocatable :: work(:, :)
+      !> Ascending copy of `candidate_indices(1:nc)`
+      integer, allocatable :: sorted(:)
+      !> Candidate position of user-space atom id, 0 when not a candidate [ncenters]
+      integer, allocatable :: position(:)
+      type(error_type), allocatable :: column_error
+      !> Column, point count, list size, slot, candidate position
+      integer :: p, np, ncand, nc, i, k
+      character(len=16) :: col
+      character(len=:), allocatable :: msg
+
+      np = size(points, 2)
+      ncand = self%ncenters
+      if (present(candidate_indices)) ncand = size(candidate_indices)
+      call lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand, msg)
+      if (len(msg) > 0) error stop msg
+      call self%begin_batch(np)
+
+      ! Candidate position by user-space id; ids validated and sorted as evaluate_batch
+      allocate (position(max(self%ncenters, 1)), work(ndim, max(self%ncenters, 1)))
+      position = 0
+      if (present(candidate_indices)) then
+         allocate (sorted(ncand))
+         call lsf_sorted_candidates(candidate_indices, sorted, nc, self%ncenters)
+         do k = 1, ncand
+            position(self%cand_to_user(candidate_indices(k))) = k
+         end do
+      else
+         do k = 1, ncand
+            position(self%cand_to_user(k)) = k
+         end do
+      end if
+      nan = ieee_value(0.0_wp, ieee_quiet_nan)
+
+      do p = 1, np
+         if (present(candidate_indices)) then
+            call self%prepare_subset(points(:, p), sorted(1:nc), column_error)
+         else
+            call self%prepare(points(:, p), column_error)
+         end if
+         if (allocated(column_error)) then
+            write (col, "(i0)") p
+            call move_alloc(column_error, error)
+            error%message = "vjp_f1_rA_batch failed at point "//trim(col)//": "// &
+                            error%message
+            return
+         end if
+         if (self%prepared_unreached) then
+            self%batch_unreached(p) = .true.
+            res(:, :, p) = nan
+            cycle
+         end if
+
+         call self%vjp_f1_rA(w0(p), w1(:, p), w2(:, p), work)
+         res(:, :, p) = 0.0_wp
+         do i = 1, self%active_count()
+            k = position(self%active_atom(i))
+            if (k == 0) then
+               error stop "moist DROP LSF vjp_f1_rA_batch: active atom outside the list"
+            end if
+            res(:, k, p) = work(:, i)
+         end do
+      end do
+   end subroutine lsf_base_vjp_f1_rA_batch
+
+   !> Describe a `vjp_f1_rA_batch` call whose arrays cannot hold the tile
+   !>
+   !> Shared by the looping default and every override, so the aborts read the
+   !> same everywhere; the caller `error stop`s on a nonempty message (`error stop`
+   !> is not testable in process, the message is)
+   !>
+   !> - `points` with a leading extent other than 3
+   !> - `w0` / `w1` / `w2` with a leading extent other than 1 / 3 / 6, or fewer
+   !>   than `np` columns
+   !> - `res` with extents other than `(3, ncand, >= np)`
+   !>
+   !> @param[in] who    LSF name for the diagnostic
+   !> @param[in] points Evaluation points (3, np); only the extents are read
+   !> @param[in] w0     Value weights (np); only the extent is read
+   !> @param[in] w1     Gradient weights (3, np); only the extents are read
+   !> @param[in] w2     Packed Hessian seeds (6, np); only the extents are read
+   !> @param[in] res    Result (3, ncand, np); only the extents are read
+   !> @param[in] ncand  Number of candidates, `size(candidate_indices)` or `ncenters`
+   !> @param[out] msg    Diagnostic, empty when the shapes fit
+   pure subroutine lsf_vjp_batch_shape_message(who, points, w0, w1, w2, res, ncand, msg)
+      !> LSF name for the diagnostic
+      character(len=*), intent(in) :: who
+      !> Evaluation points; only the extents are read
+      real(wp), intent(in) :: points(:, :)
+      !> Value weights; only the extent is read
+      real(wp), intent(in) :: w0(:)
+      !> Gradient weights; only the extents are read
+      real(wp), intent(in) :: w1(:, :)
+      !> Packed Hessian seeds; only the extents are read
+      real(wp), intent(in) :: w2(:, :)
+      !> Result; only the extents are read
+      real(wp), intent(in) :: res(:, :, :)
+      !> Number of candidates
+      integer, intent(in) :: ncand
+      !> Diagnostic, empty when the shapes fit
+      character(len=:), allocatable, intent(out) :: msg
+
+      character(len=*), parameter :: pre = "moist DROP LSF vjp_f1_rA_batch: "
+      integer :: np
+
+      msg = ""
+      if (size(points, 1) /= ndim) then
+         msg = pre//"points must be (3, np) ("//who//")"
+         return
+      end if
+      np = size(points, 2)
+      if (size(w0) < np) then
+         msg = pre//"w0 holds fewer than np entries ("//who//")"
+      else if (size(w1, 1) /= ndim .or. size(w1, 2) < np) then
+         msg = pre//"w1 must be (3, >= np) ("//who//")"
+      else if (size(w2, 1) /= 6 .or. size(w2, 2) < np) then
+         msg = pre//"w2 must be packed (6, >= np) ("//who//")"
+      else if (size(res, 1) /= ndim .or. size(res, 2) /= ncand &
+               .or. size(res, 3) < np) then
+         msg = pre//"res must be (3, ncand, >= np) ("//who//")"
+      end if
+   end subroutine lsf_vjp_batch_shape_message
 
    !* ================================================================================= *!
    !*                            Geometric bound queries                                *!
@@ -1270,13 +2041,13 @@ contains
    !>   in less than that distance
    !> - concrete LSFs override with their own `L` (SvdW has the exact `L = 1`)
    !>
-   !> What lets the octree surface coverage (`proj_level = 9`) discard boxes
-   !> within the search window: minima live on the surface, so a region proven
-   !> free of surface holds no minimum
+   !> What lets the lattice seeder skip cells within the search region:
+   !> minima live on the surface, so a region proven free of surface holds no
+   !> minimum
    !>
    !> Zero is the safe answer and the base returns it unconditionally: it
-   !> certifies nothing, so a search built on it prunes nothing and runs into
-   !> its own box budget rather than silently reporting a false certificate
+   !> certifies nothing, so a search built on it prunes nothing rather than
+   !> silently reporting a false certificate
    !>
    !> @param[in] self  LSF instance
    !> @param[in] lsf0  LSF value at the evaluation point
@@ -1290,13 +2061,77 @@ contains
       if (self%ncenters < 0 .and. lsf0 /= 0.0_wp) r = 0.0_wp
    end function lsf_base_exclusion_radius
 
+   !> Surface-free radius around every unreached point
+   !>
+   !> Valid for each point no atom reaches: the per-point path's empty active
+   !> list, an unreached batch column at order 0, i.e. every point whose nearest
+   !> atom surface lies at least the reach `R + screening_offset(R)` away
+   !>
+   !> - a constant of the model and geometry, no point argument; the caller
+   !>   applies it only to unreached points
+   !> - zero (certify nothing) by default and whenever no such bound exists
+   !> - SvdW and CFC with the fade on override it (band end minus the nearest-atom
+   !>   bound of any surface point)
+   !>
+   !> @param[in] self  LSF instance
+   !> @returns   r     Surface-free radius around an unreached point (zero when uncertified)
+   pure function lsf_base_far_exclusion_radius(self) result(r)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Surface-free radius
+      real(wp) :: r
+
+      r = 0.0_wp
+      if (self%ncenters < 0) r = 0.0_wp
+   end function lsf_base_far_exclusion_radius
+
+   !> Precompute local atom-center bounds for stationarity exclusion over a search region
+   !>
+   !> - returns `can_exclude = .false.` when the concrete LSF provides no stationarity
+   !>   certificate or when no box inside `[region_lo, region_hi]` can be excluded for `anchor`
+   !> - callers query this once per anchor search and pass `(atom_lower, atom_upper)` into
+   !>   [[lsf_base_stationary_box_excluded]] only when `can_exclude` is `.true.`
+   !>
+   !> @param[in]  self        LSF instance
+   !> @param[in]  anchor      Distance origin (3)
+   !> @param[in]  region_lo   Lower corner enclosing every tested box (3)
+   !> @param[in]  region_hi   Upper corner enclosing every tested box (3)
+   !> @param[out] atom_lower  Lower corner of active atom centers over the region (3)
+   !> @param[out] atom_upper  Upper corner of active atom centers over the region (3)
+   !> @param[out] can_exclude Whether any box in the region may be excluded
+   pure subroutine lsf_base_stationary_region_bounds(self, anchor, region_lo, region_hi, &
+                                                     atom_lower, atom_upper, can_exclude)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Distance origin
+      real(wp), intent(in) :: anchor(3)
+      !> Lower corner of search region
+      real(wp), intent(in) :: region_lo(3)
+      !> Upper corner of search region
+      real(wp), intent(in) :: region_hi(3)
+      !> Lower corner of active atom centers
+      real(wp), intent(out) :: atom_lower(3)
+      !> Upper corner of active atom centers
+      real(wp), intent(out) :: atom_upper(3)
+      !> Whether stationarity exclusion can fire inside the region
+      logical, intent(out) :: can_exclude
+
+      ! No certificate: `self`, `anchor` and the region are deliberately unused
+      atom_lower = 0.0_wp
+      atom_upper = 0.0_wp
+      can_exclude = .false.
+   end subroutine lsf_base_stationary_region_bounds
+
    !> Keep boxes when no stationarity bound is available
    !>
    !> @param[in] self       LSF instance
    !> @param[in] anchor     Distance origin (3)
    !> @param[in] center     Box midpoint (3)
    !> @param[in] half_width Nonnegative cube half-width
-   pure function lsf_base_stationary_box_excluded(self, anchor, center, half_width) result(excluded)
+   !> @param[in] atom_lower Optional precomputed lower corner of active atom centers (3)
+   !> @param[in] atom_upper Optional precomputed upper corner of active atom centers (3)
+   pure function lsf_base_stationary_box_excluded(self, anchor, center, half_width, &
+                                                  atom_lower, atom_upper) result(excluded)
       !> LSF instance
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       !> Distance origin
@@ -1305,9 +2140,14 @@ contains
       real(wp), intent(in) :: center(3)
       !> Cube half-width
       real(wp), intent(in) :: half_width
+      !> Optional precomputed lower corner of active atom centers
+      real(wp), intent(in), optional :: atom_lower(3)
+      !> Optional precomputed upper corner of active atom centers
+      real(wp), intent(in), optional :: atom_upper(3)
       !> No exclusion without a concrete LSF bound
       logical :: excluded
 
+      ! No certificate: every argument is deliberately unused
       excluded = .false.
    end function lsf_base_stationary_box_excluded
 
@@ -1324,6 +2164,31 @@ contains
       factor = 0.0_wp
       available = .false.
    end function lsf_base_density_adjoint_factor
+
+   !> Default: no atomic partition
+   !>
+   !> @param[in] self LSF instance
+   pure function lsf_base_has_atom_partition(self) result(available)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Whether `atom_partition` is implemented
+      logical :: available
+
+      available = .false.
+   end function lsf_base_has_atom_partition
+
+   !> Erroring default of the atomic partition
+   !>
+   !> @param[inout] self  LSF instance
+   !> @param[in]    scale Weight of the point
+   !> @param[inout] acc   Per-atom accumulator, user space [ncenters]
+   subroutine lsf_base_atom_partition(self, scale, acc)
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+      real(wp), intent(in) :: scale
+      real(wp), intent(inout) :: acc(:)
+
+      acc = acc + 0.0_wp*scale*self%ncenters
+      error stop "moist DROP LSF: Chosen level set has no atomic partition"
+   end subroutine lsf_base_atom_partition
 
    !> Default declaration: the level set reads nothing from the host
    !>
@@ -1385,56 +2250,9 @@ contains
       if (self%ncenters < 0 .and. size(xyz) < 0 .and. any(projected)) return
    end subroutine lsf_base_check_surface
 
-   !> Per-atom cell-grid reach: the screening offset plus an explicit safety margin
-   !>
-   !> The cavity adds the atom radius and hands the result to the molecular cell
-   !> grid, so a candidate list always contains every atom the per-point gate could
-   !> still accept
-   !>
-   !> - derived from the same `screening_offset` the gate uses, which is why this
-   !>   procedure is `non_overridable`
-   !>
-   !> @param[in] self    LSF instance
-   !> @param[in] radius  Atom radius (Bohr)
-   !> @returns           Radial offset from the atom surface (Bohr)
-   pure function lsf_base_neighbor_cutoff(self, radius) result(d)
-      class(moist_cavity_drop_lsf_type), intent(in) :: self
-      real(wp), intent(in) :: radius
-      real(wp) :: d
-
-      d = self%screening_offset(radius)
-      if (d >= huge(0.0_wp)/lsf_screening_reach_margin) then
-         ! Screening disabled: keep the reach unbounded instead of overflowing
-         d = huge(0.0_wp)
-      else
-         d = lsf_screening_reach_margin*d
-      end if
-   end function lsf_base_neighbor_cutoff
-
    !* ================================================================================= *!
    !*                                    Screening                                      *!
    !* ================================================================================= *!
-
-   !> Relabel the cavity's cell-grid candidate atom ids into the declared space
-   !>
-   !> The cavity always builds the grid with user-space ids; a `sorted` LSF gets
-   !> them rewritten once here, per projector, so that its per-point screen loop
-   !> pays nothing per candidate
-   !>
-   !> @param[in]    self      LSF instance (must have been `update`d)
-   !> @param[inout] cell_nlat Flat cell-grid candidate atom-id list
-   subroutine lsf_base_remap_candidate_grid(self, cell_nlat)
-      class(moist_cavity_drop_lsf_type), intent(in) :: self
-      integer, intent(inout) :: cell_nlat(:)
-
-      integer :: i
-
-      if (self%candidate_space /= lsf_candidate_space_sorted) return
-      if (.not. allocated(self%orig_to_sorted)) return
-      do i = 1, size(cell_nlat)
-         cell_nlat(i) = self%orig_to_sorted(cell_nlat(i))
-      end do
-   end subroutine lsf_base_remap_candidate_grid
 
    !> Reject the candidates whose contribution is below `screening_threshold`
    !>
@@ -1456,21 +2274,109 @@ contains
       integer, intent(out) :: active_cand(:)
       integer, intent(out) :: n_active
 
+      n_active = 0
+      if (.not. allocated(self%cand_screen)) return
+      call lsf_screen_records(self%cand_screen, point, candidate_indices, active_cand, n_active)
+   end subroutine lsf_base_screen_candidates
+
+   !> The gate of [[lsf_base_screen_candidates]] on the screening records alone
+   !>
+   !> - for a concrete LSF whose survivor buffer is a component of itself: the
+   !>   records and the buffer are disjoint actuals, never `self` plus a part
+   !>   of it
+   !>
+   !> @param[in]  screen            Screening records `cand_screen` [4, ncenters]
+   !> @param[in]  point             Evaluation point [ndim]
+   !> @param[in]  candidate_indices Candidate ids in the declared candidate space
+   !> @param[out] active_cand       Surviving candidate ids, first `n_active` entries
+   !> @param[out] n_active          Number of survivors
+   pure subroutine lsf_screen_records(screen, point, candidate_indices, active_cand, n_active)
+      !> Screening records
+      real(wp), intent(in) :: screen(:, :)
+      !> Evaluation point
+      real(wp), intent(in) :: point(ndim)
+      !> Candidate ids
+      integer, intent(in) :: candidate_indices(:)
+      !> Surviving candidate ids
+      integer, intent(out) :: active_cand(:)
+      !> Number of survivors
+      integer, intent(out) :: n_active
+
       integer :: i, c
       real(wp) :: dx, dy, dz
 
       n_active = 0
-      if (.not. allocated(self%cand_screen)) return
-
       do i = 1, size(candidate_indices)
          c = candidate_indices(i)
-         dx = point(1) - self%cand_screen(1, c)
-         dy = point(2) - self%cand_screen(2, c)
-         dz = point(3) - self%cand_screen(3, c)
-         if (dx*dx + dy*dy + dz*dz > self%cand_screen(lsf_cand_bound_sq, c)) cycle
+         dx = point(1) - screen(1, c)
+         dy = point(2) - screen(2, c)
+         dz = point(3) - screen(3, c)
+         if (dx*dx + dy*dy + dz*dz > screen(lsf_cand_bound_sq, c)) cycle
          n_active = n_active + 1
          active_cand(n_active) = c
       end do
-   end subroutine lsf_base_screen_candidates
+   end subroutine lsf_screen_records
+
+   !> Candidate ids whose screening reach sphere meets the box `[lo, hi]`
+   !>
+   !> Superset of the per-point gate for every point in the box, so feeding the
+   !> result to [[lsf_base_screen_candidates]] reproduces the full-scan active set
+   !>
+   !> - ascending in candidate space, ready for `prepare_subset`
+   !> - empty before `update`
+   !> - strict superset: the box test widens the squared reach by a few ulp, so
+   !>   FMA contraction in the gate cannot drop an active candidate; the gate is
+   !>   the exact filter
+   !> - error stop on a non-finite corner
+   !>
+   !> @param[in]  self  LSF instance
+   !> @param[in]  lo    box corner [ndim]
+   !> @param[in]  hi    opposite box corner [ndim]
+   !> @param[out] cand  candidate ids in `cand(1:n)`, `size(cand) >= ncenters`
+   !> @param[out] n     number of candidates
+   pure subroutine lsf_base_candidates_in_box(self, lo, hi, cand, n)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Box corner
+      real(wp), intent(in) :: lo(ndim)
+      !> Opposite box corner
+      real(wp), intent(in) :: hi(ndim)
+      !> Candidate ids
+      integer, intent(out) :: cand(:)
+      !> Number of candidates
+      integer, intent(out) :: n
+
+      call self%cand_cells%query_box(lo, hi, cand, n)
+   end subroutine lsf_base_candidates_in_box
+
+   !> Candidate ids whose screening reach sphere meets the ball `(center, r)`
+   !>
+   !> Superset of the per-point gate for every point in the ball
+   !>
+   !> - ascending in candidate space, ready for `prepare_subset`
+   !> - empty before `update`
+   !> - strict superset as for [[lsf_base_candidates_in_box]]; the gate is the
+   !>   exact filter
+   !> - error stop on a non-finite center or radius
+   !>
+   !> @param[in]  self    LSF instance
+   !> @param[in]  center  ball center [ndim]
+   !> @param[in]  r       ball radius, `>= 0`
+   !> @param[out] cand    candidate ids in `cand(1:n)`, `size(cand) >= ncenters`
+   !> @param[out] n       number of candidates
+   pure subroutine lsf_base_candidates_in_sphere(self, center, r, cand, n)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Ball center
+      real(wp), intent(in) :: center(ndim)
+      !> Ball radius
+      real(wp), intent(in) :: r
+      !> Candidate ids
+      integer, intent(out) :: cand(:)
+      !> Number of candidates
+      integer, intent(out) :: n
+
+      call self%cand_cells%query_sphere(center, r, cand, n)
+   end subroutine lsf_base_candidates_in_sphere
 
 end module moist_cavity_drop_lsf_base

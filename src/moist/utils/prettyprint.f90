@@ -1,12 +1,14 @@
 module moist_utils_prettyprint
-   use, intrinsic :: iso_fortran_env, only: output_unit, int8, int16, int32, int64, &
-     & real32, real64
+   use, intrinsic :: iso_fortran_env, only: output_unit, real64
+   use moist_utils_format, only: to_string, value_to_string, fixed_fmt, exp_fmt, int_fmt, logical_fmt, value_fmt
    implicit none(type, external)
    private
    public :: prettyprinter, new_prettyprinter
 
    type :: prettyprinter
       integer :: iu = output_unit
+      !> Whether output methods emit lines (false turns every write into a no-op)
+      logical :: active = .true.
       integer :: indent = 0
       integer :: indent_step = 2
       integer :: col_value = 32  ! 1-based column where the value starts
@@ -36,6 +38,8 @@ module moist_utils_prettyprint
       procedure :: kv2
       !> Print three values on the same line with optional units and formatting
       procedure :: kvvv
+      !> Print a finished work step with its wall time
+      procedure :: step
    end type prettyprinter
 
 contains
@@ -86,12 +90,13 @@ contains
       if (.not. allocated(self%fmt_int)) call int_fmt(self%fmt_len, self%fmt_int)
       if (.not. allocated(self%fmt_real)) call fixed_fmt(self%fmt_len, 6, self%fmt_real)
       if (.not. allocated(self%fmt_exp)) call exp_fmt(self%fmt_len, 2, self%fmt_exp)
-      if (.not. allocated(self%fmt_logical)) self%fmt_logical = "L1"
+      if (.not. allocated(self%fmt_logical)) call logical_fmt(self%fmt_len, self%fmt_logical)
 
       if (present(fmt_len)) then
          if (.not. present(fmt_int)) call int_fmt(self%fmt_len, self%fmt_int)
          if (.not. present(fmt_real)) call fixed_fmt(self%fmt_len, 6, self%fmt_real)
          if (.not. present(fmt_exp)) call exp_fmt(self%fmt_len, 2, self%fmt_exp)
+         if (.not. present(fmt_logical)) call logical_fmt(self%fmt_len, self%fmt_logical)
       end if
 
       if (present(fmt_int)) self%fmt_int = trim(fmt_int)
@@ -114,19 +119,23 @@ contains
    !> @param[in] fmt_real    Optional fixed real format override
    !> @param[in] fmt_exp     Optional exponential real format override
    !> @param[in] fmt_logical Optional logical format override
+   !> @param[in] active      Optional output gate (default `.true.`; `.false.` silences all writes)
    function new_prettyprinter(unit, col_value, col_value2, indent_step, dot_gap, dot_right, &
-      & dot_total, fmt_len, fmt_int, fmt_real, fmt_exp, fmt_logical) result(pp)
+      & dot_total, fmt_len, fmt_int, fmt_real, fmt_exp, fmt_logical, active) result(pp)
       !> Optional output unit
       integer, intent(in), optional :: unit
       !> Optional layout scalars
       integer, intent(in), optional :: col_value, col_value2, indent_step, dot_gap, dot_right, dot_total, fmt_len
       !> Optional explicit format strings
       character(*), intent(in), optional :: fmt_int, fmt_real, fmt_exp, fmt_logical
+      !> Optional output gate
+      logical, intent(in), optional :: active
       !> Constructed pretty printer
       type(prettyprinter) :: pp
 
       if (present(unit)) pp%iu = unit
-
+      if (present(active)) pp%active = active
+      ! Layout applies while inactive too, so a printer turned on later keeps it
       call pp%set_layout(col_value=col_value, col_value2=col_value2, indent_step=indent_step, &
          & dot_gap=dot_gap, dot_right=dot_right, dot_total=dot_total, fmt_len=fmt_len, &
          & fmt_int=fmt_int, fmt_real=fmt_real, fmt_exp=fmt_exp, fmt_logical=fmt_logical)
@@ -138,6 +147,7 @@ contains
    subroutine blank(self)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
+      if (.not. self%active) return
       write (self%iu, "(A)") ""
       flush (self%iu)
    end subroutine blank
@@ -151,6 +161,7 @@ contains
       class(prettyprinter), intent(inout) :: self
       !> Section title
       character(*), intent(in) :: title
+      if (.not. self%active) return
       write (self%iu, "(A)") repeat(" ", self%indent)//trim(title)
    end subroutine section
 
@@ -163,6 +174,7 @@ contains
       class(prettyprinter), intent(inout) :: self
       !> Section title
       character(*), intent(in) :: title
+      if (.not. self%active) return
       call self%section(title)
       self%indent = self%indent + self%indent_step
    end subroutine push
@@ -173,6 +185,7 @@ contains
    subroutine pop(self)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
+      if (.not. self%active) return
       self%indent = max(0, self%indent - self%indent_step)
    end subroutine pop
 
@@ -201,6 +214,7 @@ contains
       character(:), allocatable :: prefix, left, leader, vstr, line, eff_fmt
       integer :: ndots, nlead, nspaces
 
+      if (.not. self%active) return
       call self%set_layout()  ! ensure defaults are allocated
 
       prefix = repeat(" ", self%indent)
@@ -210,10 +224,10 @@ contains
          if (use_exp) then
             eff_fmt = self%fmt_exp
          else
-            call default_fmt(self, val, eff_fmt)
+            call value_fmt(val, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt)
          end if
       else
-         call default_fmt(self, val, eff_fmt)
+         call value_fmt(val, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt)
       end if
       call value_to_string(val, eff_fmt, vstr)
 
@@ -282,6 +296,7 @@ contains
       character(:), allocatable :: u1, u2
       integer :: ndots, nlead, nspaces
 
+      if (.not. self%active) return
       call self%set_layout()  ! ensure defaults are allocated
 
       if (present(fmt1)) then
@@ -290,10 +305,10 @@ contains
          if (use_exp1) then
             eff_fmt1 = self%fmt_exp
          else
-            call default_fmt(self, val1, eff_fmt1)
+            call value_fmt(val1, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt1)
          end if
       else
-         call default_fmt(self, val1, eff_fmt1)
+         call value_fmt(val1, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt1)
       end if
 
       if (present(fmt2)) then
@@ -302,10 +317,10 @@ contains
          if (use_exp2) then
             eff_fmt2 = self%fmt_exp
          else
-            call default_fmt(self, val2, eff_fmt2)
+            call value_fmt(val2, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt2)
          end if
       else
-         call default_fmt(self, val2, eff_fmt2)
+         call value_fmt(val2, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt2)
       end if
 
       call value_to_string(val1, eff_fmt1, vstr1)
@@ -386,6 +401,7 @@ contains
       integer, parameter :: value_gap = 2
       integer :: ndots, nlead, nspaces
 
+      if (.not. self%active) return
       call self%set_layout()  ! ensure defaults are allocated
 
       if (present(fmt1)) then
@@ -394,10 +410,10 @@ contains
          if (use_exp1) then
             eff_fmt1 = self%fmt_exp
          else
-            call default_fmt(self, val1, eff_fmt1)
+            call value_fmt(val1, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt1)
          end if
       else
-         call default_fmt(self, val1, eff_fmt1)
+         call value_fmt(val1, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt1)
       end if
 
       if (present(fmt2)) then
@@ -406,10 +422,10 @@ contains
          if (use_exp2) then
             eff_fmt2 = self%fmt_exp
          else
-            call default_fmt(self, val2, eff_fmt2)
+            call value_fmt(val2, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt2)
          end if
       else
-         call default_fmt(self, val2, eff_fmt2)
+         call value_fmt(val2, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt2)
       end if
 
       if (present(fmt3)) then
@@ -418,10 +434,10 @@ contains
          if (use_exp3) then
             eff_fmt3 = self%fmt_exp
          else
-            call default_fmt(self, val3, eff_fmt3)
+            call value_fmt(val3, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt3)
          end if
       else
-         call default_fmt(self, val3, eff_fmt3)
+         call value_fmt(val3, self%fmt_int, self%fmt_real, self%fmt_exp, self%fmt_logical, eff_fmt3)
       end if
 
       call value_to_string(val1, eff_fmt1, vstr1)
@@ -456,137 +472,22 @@ contains
       write (self%iu, "(A)") line
    end subroutine kvvv
 
-   subroutine default_fmt(self, val, fmt)
-      class(prettyprinter), intent(in) :: self
-      class(*), intent(in) :: val
-      character(:), allocatable, intent(out) :: fmt
+   !> Print a finished work step with its wall time: `label ... done (12.34s)`
+   !>
+   !> @param[inout] self    Pretty printer instance
+   !> @param[in]    desc    Step name
+   !> @param[in]    seconds Wall time spent in the step (s)
+   subroutine step(self, desc, seconds)
+      !> Pretty printer instance
+      class(prettyprinter), intent(inout) :: self
+      !> Step name
+      character(*), intent(in) :: desc
+      !> Wall time spent in the step (s)
+      real(real64), intent(in) :: seconds
 
-      select type (val)
-      type is (integer(int8))
-         fmt = self%fmt_int
-      type is (integer(int16))
-         fmt = self%fmt_int
-      type is (integer(int32))
-         fmt = self%fmt_int
-      type is (integer(int64))
-         fmt = self%fmt_int
-      type is (real(real32))
-         call default_real_fmt(self, real(val, kind=real64), fmt)
-      type is (real(real64))
-         call default_real_fmt(self, val, fmt)
-      type is (logical)
-         fmt = self%fmt_logical
-      type is (character(*))
-         fmt = "A"
-      class default
-         fmt = "A"
-      end select
-   end subroutine default_fmt
-
-   subroutine value_to_string(val, fmt, s)
-      class(*), intent(in) :: val
-      character(*), intent(in) :: fmt
-      character(:), allocatable, intent(out) :: s
-      character(256) :: buf
-      character(:), allocatable :: f
-
-      f = "("//trim(fmt)//")"
-      buf = ""
-
-      select type (val)
-      type is (integer(int8))
-         write (buf, f) val
-      type is (integer(int16))
-         write (buf, f) val
-      type is (integer(int32))
-         write (buf, f) val
-      type is (integer(int64))
-         write (buf, f) val
-      type is (real(real32))
-         if (val == 0.0_real32) then
-            call zero_value_string(fmt, s)
-            return
-         end if
-         write (buf, f) val
-      type is (real(real64))
-         if (val == 0.0_real64) then
-            call zero_value_string(fmt, s)
-            return
-         end if
-         write (buf, f) val
-      type is (logical)
-         write (buf, f) val
-      type is (character(*))
-         buf = val
-      class default
-         buf = "<unsupported type>"
-      end select
-
-      s = trim(buf)
-   end subroutine value_to_string
-
-   subroutine zero_value_string(fmt, s)
-      character(*), intent(in) :: fmt
-      character(:), allocatable, intent(out) :: s
-      character(256) :: buf
-      character(:), allocatable :: f
-      integer :: idot, w
-
-      f = "("//trim(fmt)//")"
-      write (buf, f) 0.0_real64
-      idot = index(buf, ".")
-      w = len_trim(buf)
-
-      if (idot > 1 .and. w > 0) then
-         s = repeat(" ", idot - 2)//"0.0"//repeat(" ", max(0, w - (idot + 1)))
-      else
-         s = "0.0"
-      end if
-   end subroutine zero_value_string
-
-   subroutine fixed_fmt(width, decimals, fmt)
-      integer, intent(in) :: width, decimals
-      character(:), allocatable, intent(out) :: fmt
-      character(32) :: wbuf, dbuf
-
-      write (wbuf, "(I0)") max(1, width)
-      write (dbuf, "(I0)") max(0, decimals)
-      fmt = "F"//trim(wbuf)//"."//trim(dbuf)
-   end subroutine fixed_fmt
-
-   subroutine exp_fmt(width, decimals, fmt)
-      integer, intent(in) :: width, decimals
-      character(:), allocatable, intent(out) :: fmt
-      character(32) :: wbuf, dbuf
-
-      write (wbuf, "(I0)") max(1, width)
-      write (dbuf, "(I0)") max(0, decimals)
-      fmt = "ES"//trim(wbuf)//"."//trim(dbuf)
-   end subroutine exp_fmt
-
-   subroutine int_fmt(width, fmt)
-      integer, intent(in) :: width
-      character(:), allocatable, intent(out) :: fmt
-      character(32) :: wbuf
-
-      write (wbuf, "(I0)") max(1, width - 7)
-      fmt = "I"//trim(wbuf)
-   end subroutine int_fmt
-
-   subroutine default_real_fmt(self, val, fmt)
-      class(prettyprinter), intent(in) :: self
-      real(real64), intent(in) :: val
-      character(:), allocatable, intent(out) :: fmt
-      real(real64) :: aval
-
-      aval = abs(val)
-      if (aval == 0.0_real64) then
-         fmt = self%fmt_real
-      else if (aval < 1.0e-6_real64 .or. aval >= 1.0e6_real64) then
-         fmt = self%fmt_exp
-      else
-         fmt = self%fmt_real
-      end if
-   end subroutine default_real_fmt
+      if (.not. self%active) return
+      ! Fixed width keeps the leading zero, which F0.d may drop; to_string strips the blanks
+      call self%kv(desc, "done ("//to_string(seconds, "(f20.2)")//"s)")
+   end subroutine step
 
 end module moist_utils_prettyprint

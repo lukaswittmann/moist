@@ -6,7 +6,7 @@ module moist_model_continuum_component_pcm_dpcm
    use moist_context, only: moist_context_type
    use moist_output_citations, only: citation
    use moist_cavity_type, only: cavity_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
@@ -63,8 +63,13 @@ contains
       !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
       type(moist_pcm_parameters_type) :: settings
+      !> Epsilon is a number and at least one
+      logical :: valid
 
-      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
+      ! NaN test first: an ordered comparison on a NaN raises invalid
+      valid = .not. ieee_is_nan(epsilon)
+      if (valid) valid = epsilon >= 1.0_wp
+      if (.not. valid) then
          call fatal_error(error, "DPCM epsilon must be >= 1")
          return
       end if
@@ -125,7 +130,7 @@ contains
    subroutine dpcm_layer_weights(self, cavity, acc, error)
       class(model_continuum_component_dpcm), intent(inout) :: self
       class(cavity_type), intent(in) :: cavity
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:)
       real(wp), allocatable :: w_a(:), w_xi(:), w_f(:)

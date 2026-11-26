@@ -18,6 +18,7 @@ module test_model_component_pcm_references
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf, ieee_is_finite
    use mctc_env, only: wp
    use mctc_io, only: structure_type, new
+   use mctc_io_constants, only: pi
    use mctc_io_convert, only: aatoau
    use mstore, only: get_structure
    use mctc_env_error, only: moist_error_type => error_type
@@ -1197,7 +1198,7 @@ contains
          do i = 1, cavity%ngrid
             r = norm2(cavity%xyz(:, i))
             phi(i) = charge*erf(beta(i)*r)/r
-            dphi(:, i) = (2.0_wp*charge*beta(i)/sqrt(acos(-1.0_wp))*exp(-(beta(i)*r)**2) &
+            dphi(:, i) = (2.0_wp*charge*beta(i)/sqrt(pi)*exp(-(beta(i)*r)**2) &
                & - phi(i))*cavity%xyz(:, i)/r**2
          end do
          call submit(coupling, "phi", phi)
@@ -1459,7 +1460,12 @@ contains
       associate (eps => physics%eps)
          select case (kind)
          case (pcm_cosmo)
-            feps = merge((eps - 1.0_wp)/(eps + 0.5_wp), 1.0_wp, ieee_is_finite(eps))
+            ! No merge: it evaluates both arms, and inf/inf raises invalid
+            if (ieee_is_finite(eps)) then
+               feps = (eps - 1.0_wp)/(eps + 0.5_wp)
+            else
+               feps = 1.0_wp
+            end if
          case (pcm_lpb)
             feps = 1.0_wp - 1.0_wp/(eps*(1.0_wp + physics%kappa*radius))
          case (pcm_slic)
@@ -1475,7 +1481,11 @@ contains
             feps = 1.0_wp/physics%eps_solute - 1.0_wp/eps &
                & - (1.0_wp/physics%eps_inf - 1.0_wp/eps)/(1.0_wp + nu)
          case default
-            feps = merge((eps - 1.0_wp)/eps, 1.0_wp, ieee_is_finite(eps))
+            if (ieee_is_finite(eps)) then
+               feps = (eps - 1.0_wp)/eps
+            else
+               feps = 1.0_wp
+            end if
          end select
       end associate
       energy = -0.5_wp*feps*charge**2/radius
@@ -2201,7 +2211,7 @@ contains
       real(wp), allocatable, intent(out) :: radii(:)
 
       !> TIP3P bond length (bohr) and half angle (rad)
-      real(wp), parameter :: r_oh = 0.9572_wp*aatoau, half_hoh = 0.5_wp*104.52_wp*acos(-1.0_wp)/180.0_wp
+      real(wp), parameter :: r_oh = 0.9572_wp*aatoau, half_hoh = 0.5_wp*104.52_wp*pi/180.0_wp
       !> Atomic numbers of the sphere centers
       integer, allocatable :: num(:)
       !> Sphere centers, bohr

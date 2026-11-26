@@ -7,13 +7,22 @@
 !>   *J. Comput. Chem.*, **24**(14), 1691-1702
 !>   [DOI: 10.1002/jcc.10321](https://doi.org/10.1002/jcc.10321)
 !>
+!> Grid components (optional grid model, e.g. symmetry): node u of a
+!> component of sphere a sits at c_a + r_a R u, R the component's rotation,
+!> and counts with the component's weight; the rotations follow the atoms,
+!> so every area derivative (`dsdr`, `area_grad`) carries the frame term
+!> through the per-component torque (`frame_torque`) and the grid Jacobians
+!> (`get_frame`)
 module moist_cavity_numsa
    use moist_output_citations, only: citation
    use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error, get_argument, wp
    use mctc_io_convert, only: aatoau
+   use moist_math_linalg_geometry, only: cross_product
    use moist_cavity_type, only: cavity_type, update_cavity_base
+   use moist_cavity_grid_model_type, only: grid_model_type
+   use moist_cavity_grid_frame, only: grid_frame_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use mctc_io, only: structure_type
@@ -63,6 +72,16 @@ module moist_cavity_numsa
       real(wp), allocatable :: ang_grid(:, :)
       !> Lebedev solid-angle weights (num_leb), summing to 4*pi
       real(wp), allocatable :: ang_weight(:)
+      !> Torque of a sphere's area on the rotation of each of its grid
+      !> components (3, ncomp)
+      !>
+      !> - tau_c = sum_p (p - c_i) x dA_i/dp over the nodes p of component c
+      !>   of sphere i, at fixed sphere centers; the frame term of `dsdr` is
+      !>   its contraction with the grid Jacobians ([[grid_frame_type]])
+      !> - not for the plain grid
+      real(wp), allocatable :: frame_torque(:, :)
+      !> Area of every grid component per unit component weight (ncomp), with it
+      real(wp), allocatable :: comp_area(:)
       !> Neighbor-list cutoff radius (bohr)
       real(wp) :: srcut
       !> Number of neighbors for each atom (nat)
@@ -83,6 +102,9 @@ module moist_cavity_numsa
       !> Atomic area gradients (unused, kept for compatibility)
       real(wp), allocatable :: atomic_area_grad(:, :, :)
       !> Atomic surface gradient w.r.t. atom positions (3, nat, nat)
+      !>
+      !> - dsdr(:, j, i) = dA_i/dR_j, with the frame term in the molecular
+      !>   orientation
       real(wp), allocatable :: dsdr(:, :, :)
 
    contains
@@ -123,12 +145,14 @@ contains
 
    !> Construct from parameter values; omission uses compiled defaults
    !>
-   !> @param[inout] self Object to initialize
+   !> @param[in,out] self Object to initialize
    !> @param[in] radii Atomic radius model to copy
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
    !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
-   subroutine new_cavity_numsa(self, radii, error, param, ctx)
+   !> @param[in] grid_model Grid model to copy, e.g. a symmetry model; omitted,
+   !>                       every sphere keeps its plain grid
+   subroutine new_cavity_numsa(self, radii, error, param, ctx, grid_model)
       !> Cavity to initialize
       type(cavity_type_numsa), intent(inout) :: self
       !> Radius model to copy
@@ -139,6 +163,8 @@ contains
       type(moist_cavity_numsa_parameters_type), intent(in), optional :: param
       !> Borrowed run context; omitted, a model supplies its own
       type(moist_context_type), intent(in), target, optional :: ctx
+      !> Grid model to copy; omitted means the plain grid
+      class(grid_model_type), intent(in), optional :: grid_model
       !> Resolved configuration
       type(moist_cavity_numsa_parameters_type) :: settings
 
@@ -149,6 +175,7 @@ contains
       self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
       allocate(self%radius_model, source=radii)
+      call self%set_grid_model(grid_model)
       ! A constructed cavity has no structure, no surface and no coupling yet
       if (allocated(self%mol)) deallocate (self%mol)
       self%updated = .false.
@@ -172,17 +199,25 @@ contains
 
    !> Update cavity surface and gradients for current molecular geometry
    !>
-   !> @param[inout] self   The cavity object to update
-   !> @param[in]    mol    Molecular structure with coordinates
+   !> - sphere a integrates over the nodes of its grid components (`grid`);
+   !>   the plain grid integrates bitwise over c + r u
+   !> - molecular orientation: `dsdr` and `area_grad` carry the frame term
+   !>   ([[add_frame_jacobians]])
+   !>
+   !> @param[in,out] self  The cavity object to update
+   !> @param[in]     mol   Molecular structure with coordinates
+   !> @param[out]    error Error handling
    subroutine update_cavity_numsa(self, mol, error)
+      !> NumSA cavity
       class(cavity_type_numsa), intent(inout) :: self
+      !> Molecular structure
       type(structure_type), intent(in) :: mol
+      !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
       integer :: nat
       real(wp), allocatable :: surface(:)
-      real(wp), allocatable :: dsdr(:, :, :)
-      integer :: iat, jatom
+      real(wp), allocatable :: derivs(:, :, :)
 
       call update_cavity_base(self, mol, error)
       if (allocated(error)) return
@@ -200,6 +235,8 @@ contains
       if (allocated(error)) return
       allocate (self%radii(size(self%radius_model%f0)))
       self%radii = self%radius_model%f0
+      call self%update_grid_model(error)
+      if (allocated(error)) return
 
       if (.not. allocated(self%asph)) allocate (self%asph(nat))
 
@@ -209,13 +246,25 @@ contains
       if (allocated(error)) return
       call update_nnlist(self, mol%xyz)
 
+      ! Grid components of every sphere: the plain nodes and no torque, or
+      ! those of the grid model; NumSA has no Gaussian widths
+      call self%build_grid(self%ang_grid, self%ang_weight, 0.0_wp, error)
+      if (allocated(error)) return
+      if (self%plain_grid()) then
+         if (allocated(self%frame_torque)) deallocate (self%frame_torque)
+         if (allocated(self%comp_area)) deallocate (self%comp_area)
+      end if
+
       allocate (surface(nat))
-      allocate (dsdr(3, nat, nat))
+      allocate (derivs(3, nat, nat))
+      if (allocated(self%area_grad)) deallocate (self%area_grad)
+      allocate (self%area_grad(3, nat))
 
-      ! compute surface and gradients via internal implementation
-      call compute_numsa(self, mol%xyz, surface, dsdr)
+      ! Surface, its derivatives with the frame term, and the total-area
+      ! gradient (the sum of dsdr over the spheres)
+      call compute_numsa(self, mol%xyz, surface, derivs, self%area_grad)
 
-      self%dsdr = dsdr
+      call move_alloc(derivs, self%dsdr)
       self%asph = surface
 
       if (.not. allocated(self%total_area)) allocate (self%total_area)
@@ -224,18 +273,7 @@ contains
       ! numsa integrator does not provide cavity volume; set to zero for now
       self%total_volume = 0.0_wp
 
-      ! cache dsdr inside area_grad storage for later gradient computation
-      if (allocated(self%area_grad)) deallocate (self%area_grad)
-      allocate (self%area_grad(3, nat))
-      self%area_grad = 0.0_wp
-      ! accumulate total-area gradient by summing contributions of each sphere
-      do jatom = 1, nat
-         do iat = 1, nat
-            self%area_grad(:, jatom) = self%area_grad(:, jatom) + dsdr(:, jatom, iat)
-         end do
-      end do
-
-      deallocate (surface, dsdr)
+      deallocate (surface)
       self%updated = .true.
       self%built = .true.
 
@@ -252,11 +290,14 @@ contains
 !> \sum_i \frac{\partial A_i}{\partial {\bf R}_j}
 !> $$
 !>
-!> where $A_{\mathrm{tot}} = \sum_i A_i$ is the total surface area
+!> where $A_{\mathrm{tot}} = \sum_i A_i$ is the total surface area; in the
+!> molecular orientation it includes the turn of the sphere grids with the
+!> atoms (frame term)
 !>
-!> @param[inout] self  The cavity object with cached gradients
-!> @param[out]   error Error handling
+!> @param[in,out] self  The cavity object with cached gradients
+!> @param[out]    error Error handling
    subroutine compute_area_gradient_numsa(self, error)
+      !> NumSA cavity
       class(cavity_type_numsa), intent(inout) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -495,15 +536,28 @@ contains
    !> The switching function product ensures that buried points (inside neighbors)
    !> contribute zero, while exposed points contribute their full weight
    !>
-   !> @param[inout] self    The cavity object with grid and parameters
-   !> @param[in]    xyz     Atomic coordinates (3, nat) in bohr
-   !> @param[out]   surface Atomic surface areas (nat) in bohr^2
-   !> @param[out]   dsdrt   Surface gradients (3, nat, nat) in bohr^2/bohr
-   subroutine compute_numsa(self, xyz, surface, dsdrt)
+   !> Sphere i sums over the nodes of its grid components (`grid`), each
+   !> node counting with its component's weight; unless the grid is plain,
+   !> `frame_torque(:, c)` takes the sum over the nodes of component c of
+   !> (x_p - c_i) x dA_i/dx_p (c_i the center); `dsdrt` gains the frame term
+   !> of sphere i ([[add_frame_jacobians]]) while its row is in cache
+   !>
+   !> @param[in,out] self      The cavity object with grid and parameters
+   !> @param[in]     xyz       Atomic coordinates (3, nat) in bohr
+   !> @param[out]    surface   Atomic surface areas (nat) in bohr^2
+   !> @param[out]    dsdrt     Surface gradients (3, nat, nat) in bohr^2/bohr
+   !> @param[out]    area_grad Total-area gradient (3, nat), the sum of dsdrt over the spheres
+   subroutine compute_numsa(self, xyz, surface, dsdrt, area_grad)
+      !> NumSA cavity
       class(cavity_type_numsa), intent(inout) :: self
-      real(wp), intent(in) :: xyz(:, :)
+      !> Atomic coordinates; contiguous, passed on per node without a copy
+      real(wp), intent(in), contiguous :: xyz(:, :)
+      !> Atomic surface areas
       real(wp), intent(out) :: surface(:)
-      real(wp), intent(out) :: dsdrt(:, :, :)
+      !> Surface gradients: dsdrt(:, j, i) = dA_i/dR_j
+      real(wp), intent(out), contiguous :: dsdrt(:, :, :)
+      !> Total-area gradient
+      real(wp), intent(out), contiguous :: area_grad(:, :)
 
       !> Current atom index
       integer :: iat
@@ -537,9 +591,30 @@ contains
       real(wp), allocatable :: grads(:, :)
       !> Indices of affecting neighbors (maxneigh)
       integer, allocatable :: grdi(:)
+      !> Whether the spheres follow a molecular frame
+      logical :: frame
+      !> Grid component, the offset of its nodes and its weighted radial weight
+      integer :: icomp, n0, nnode
+      real(wp) :: wrc
+      !> Node offset from the atom center, molecular orientation only
+      real(wp) :: dnode(3)
+      !> Derivative of a node's contribution in its position
+      real(wp) :: dpoint(3)
+      !> Grid Jacobians, molecular orientation only
+      type(grid_frame_type) :: jacobians
 
+      ! Every sphere assigns its whole row of dsdrt below
       surface(:) = 0.0_wp
-      dsdrt(:, :, :) = 0.0_wp
+      area_grad(:, :) = 0.0_wp
+
+      frame = .not. self%grid%plain
+      if (frame) then
+         call self%get_frame(jacobians)
+         if (allocated(self%frame_torque)) deallocate (self%frame_torque)
+         allocate (self%frame_torque(3, self%grid%ncomp), source=0.0_wp)
+         if (allocated(self%comp_area)) deallocate (self%comp_area)
+         allocate (self%comp_area(self%grid%ncomp), source=0.0_wp)
+      end if
 
       allocate (grads(3, self%nsph))
       grads = 0.0_wp
@@ -555,37 +630,100 @@ contains
          xyza(:) = xyz(:, iat)
          wr = self%wrp(iat)
 
-         ! Lebedev quadrature over angular grid
-         do ip = 1, size(self%ang_grid, 2)
-            ! Place grid point on SASA sphere
-            xyzp(:) = xyza(:) + rsas*self%ang_grid(:, ip)
-            ! Compute accessibility weight and gradients at this point
-            call compute_w_sp(self, self%nsph, self%nnlists(:nno, iat), self%trj2, &
-                              self%vdwsa, xyz, nno, xyzp, self%ah0, self%ah1, self%ah3, sasap, &
-                              grds, nni, grdi)
+         do icomp = self%grid%sph_first(iat), self%grid%sph_first(iat + 1) - 1
+            n0 = self%grid%set_first(self%grid%comp_set(icomp)) - 1
+            ! The component weight scales every node of the component (1.0
+            ! for a single component)
+            wrc = wr*self%grid%comp_weight(icomp)
 
-            ! Accumulate surface contribution if point is accessible
-            if (sasap > self%param%tolsesp) then
-               wsa = self%ang_weight(ip)*wr*sasap
-               sasai = sasai + wsa
-               ! Accumulate gradient contributions
-               ! grds contains d(sasap)/d(R_j) for each affecting neighbor
-               do jj = 1, nni
-                  nnj = grdi(jj)
-                  drjj(:) = wsa*grds(:, jj)
-                  grads(:, iat) = grads(:, iat) + drjj(:)
-                  grads(:, nnj) = grads(:, nnj) - drjj(:)
-               end do
-            end if
+            nnode = self%grid%comp_first(icomp + 1) - self%grid%comp_first(icomp)
+
+            ! Lebedev quadrature over the angular grid of the component; the
+            ! associate names keep the node loop off the container's index
+            ! arithmetic (measurably faster)
+            associate (node => self%grid%node(:, n0 + 1:n0 + nnode), wang => self%grid%wang(n0 + 1:n0 + nnode))
+            do ip = 1, nnode
+               ! Place grid point on SASA sphere, in the component's orientation
+               if (frame) then
+                  dnode(:) = rsas*node(:, ip)
+                  xyzp(:) = xyza(:) + dnode(:)
+               else
+                  xyzp(:) = xyza(:) + rsas*node(:, ip)
+               end if
+               ! Compute accessibility weight and gradients at this point
+               call compute_w_sp(self, self%nsph, self%nnlists(:nno, iat), self%trj2, &
+                                 self%vdwsa, xyz, nno, xyzp, self%ah0, self%ah1, self%ah3, sasap, &
+                                 grds, nni, grdi)
+
+               ! Accumulate surface contribution if point is accessible
+               if (sasap > self%param%tolsesp) then
+                  wsa = wang(ip)*wrc*sasap
+                  sasai = sasai + wsa
+                  ! Accumulate gradient contributions
+                  ! grds contains d(sasap)/d(R_j) for each affecting neighbor
+                  do jj = 1, nni
+                     nnj = grdi(jj)
+                     drjj(:) = wsa*grds(:, jj)
+                     grads(:, iat) = grads(:, iat) + drjj(:)
+                     grads(:, nnj) = grads(:, nnj) - drjj(:)
+                  end do
+                  ! The node also turns with its component: delta x_p = omega x dnode
+                  if (frame) then
+                     dpoint(:) = 0.0_wp
+                     do jj = 1, nni
+                        dpoint(:) = dpoint(:) + grds(:, jj)
+                     end do
+                     dpoint(:) = wsa*dpoint(:)
+                     self%frame_torque(:, icomp) = self%frame_torque(:, icomp) + cross_product(dnode, dpoint)
+                     self%comp_area(icomp) = self%comp_area(icomp) + wang(ip)*wr*sasap
+                  end if
+               end if
+            end do
+            end associate
          end do
 
          surface(iat) = sasai
+         if (frame) call add_frame_jacobians(self, jacobians, iat, grads)
          dsdrt(:, :, iat) = grads
+         area_grad(:, :) = area_grad(:, :) + grads(:, :)
       end do
 
       deallocate (grads, grds, grdi)
 
    end subroutine compute_numsa
+
+   !> Frame term of the area derivatives: component rotations that follow the atoms
+   !>
+   !> The nodes of component c of sphere i turn with the angular velocity
+   !> omega of its rotation, which reaches every atom j ([[grid_frame_type]]),
+   !> so dA_i/dR_j gains tau_c . d omega_c/dR_j with tau_c =
+   !> `frame_torque(:, c)`; only sphere i's own nodes enter A_i
+   !>
+   !> - called per sphere from [[compute_numsa]], on the row it just summed
+   !>
+   !> @param[in]     self  Cavity with the torques and areas of sphere i's components
+   !> @param[in]     frame Grid Jacobians
+   !> @param[in]     isph  Sphere i
+   !> @param[in,out] dsdr  Surface gradients of sphere i (3, nat), dsdr(:, j) = dA_i/dR_j
+   subroutine add_frame_jacobians(self, frame, isph, dsdr)
+      !> NumSA cavity
+      class(cavity_type_numsa), intent(in) :: self
+      !> Grid Jacobians
+      type(grid_frame_type), intent(in) :: frame
+      !> Sphere
+      integer, intent(in) :: isph
+      !> Surface gradients
+      real(wp), intent(inout), contiguous :: dsdr(:, :)
+
+      integer :: icomp
+
+      do icomp = self%grid%sph_first(isph), self%grid%sph_first(isph + 1) - 1
+         call frame%add_scalar(icomp, self%frame_torque(:, icomp), dsdr)
+         ! A_i is the weighted sum of its components' areas
+         call frame%add_weight(icomp, self%comp_area(icomp), dsdr)
+      end do
+
+   end subroutine add_frame_jacobians
 
    !> Compute switching weight at a single surface point
    !>

@@ -15,6 +15,7 @@ module test_math_grid_radial_trafo
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use test_helpers, only: expect_error
    use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_chebyshev2_type, &
       & new_chebyshev2_rule
    use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_becke_type, &
@@ -363,7 +364,6 @@ contains
       real(wp), parameter :: spacings(2) = [0.05_wp, 0.03_wp]
       real(wp), parameter :: expo(2) = [0.7_wp, 0.91_wp]
       real(wp), parameter :: thr = 3.0e-15_wp
-      real(wp), parameter :: pi_dst = acos(-1.0_wp)
       type(moist_math_grid_radial_type) :: rgrid, kgrid
       class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       type(mctc_error), allocatable :: merr
@@ -382,7 +382,7 @@ contains
          allocate (f(n, 2), fk(n, 2), got(n, 2))
          do ic = 1, 2
             f(:, ic) = exp(-expo(ic)*rgrid%r**2)
-            fk(:, ic) = (pi_dst/expo(ic))**1.5_wp*exp(-kgrid%r**2/(4.0_wp*expo(ic)))
+            fk(:, ic) = (pi/expo(ic))**1.5_wp*exp(-kgrid%r**2/(4.0_wp*expo(ic)))
          end do
 
          call trafo%fbt_r2k(f(:, 1), got(:, 1), merr)
@@ -1026,27 +1026,5 @@ contains
       call new_dst4_trafo(trafo, rgrid, bad_k, merr)
       call expect_error(error, merr, "k spacing does not match")
    end subroutine test_dst4_k_spacing_fails
-
-   !> Fail an expected-failure test only on the targeted library error
-   !>
-   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
-   !>   verdict: a raised test failure passes, a clean return fails
-   !> - Fails the test only when `err` names `expected`; no error or a
-   !>   different one returns cleanly, so the test is reported as failed
-   !>
-   !> @param[out] error     test failure, set only on the expected error
-   !> @param[in]  err       library error, possibly unallocated
-   !> @param[in]  expected  substring the expected error message must contain
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(mctc_error), allocatable, intent(in) :: err
-      !> Substring the expected error message must contain
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (index(err%message, expected) > 0) call test_failed(error, err%message)
-   end subroutine expect_error
 
 end module test_math_grid_radial_trafo

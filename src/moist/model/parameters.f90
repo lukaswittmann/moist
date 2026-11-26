@@ -126,9 +126,12 @@ contains
 
    !> Read JSON or TOML, apply defaults for missing fields, then validate
    !>
+   !> - a key no registered field reads is an error, so a misspelt or
+   !>   renamed key cannot fall back to its default unnoticed
+   !>
    !> @param[inout] self Parameter values
    !> @param[in] filepath Input path ending in .json or .toml
-   !> @param[out] error File, conversion, or validation error
+   !> @param[out] error File, conversion, unknown-key or validation error
    subroutine read_file(self, filepath, error)
       class(moist_model_parameters_type), intent(inout), target :: self
       character(len=*), intent(in) :: filepath
@@ -161,12 +164,68 @@ contains
             self%reading = .true.
             call self%register_entries()
             call move_alloc(self%failure, error)
+            ! Every read field left the document; what remains is unknown
+            if (.not. allocated(error)) call reject_unread(root, error)
          end if
       end if
       call self%clear_document()
       !$omp end critical (moist_parameter_documents)
       if (.not. allocated(error)) call self%validate(error)
    end subroutine read_file
+
+   !> Refuse a document with entries no registered field consumed
+   !>
+   !> @param[inout] root Document after reading
+   !> @param[out] error Unknown keys, all named
+   subroutine reject_unread(root, error)
+      type(toml_table), intent(inout) :: root
+      type(error_type), allocatable, intent(out) :: error
+      !> Comma-separated dotted names
+      character(len=:), allocatable :: names
+      !> Number of unknown keys
+      integer :: nnames
+
+      names = ""
+      nnames = 0
+      call collect_unread(root, "", names, nnames)
+      if (nnames == 1) then
+         call fatal_error(error, "Unknown parameter: "//names)
+      else if (nnames > 1) then
+         call fatal_error(error, "Unknown parameters: "//names)
+      end if
+   end subroutine reject_unread
+
+   !> Name the entries left in a document table, descending into subtables
+   !>
+   !> - an emptied subtable is a group whose fields were all read
+   !>
+   !> @param[inout] table Document table
+   !> @param[in] prefix Dotted path of the table, empty or ending in a dot
+   !> @param[inout] names Comma-separated dotted names found so far
+   !> @param[inout] nnames Number of names found so far
+   recursive subroutine collect_unread(table, prefix, names, nnames)
+      type(toml_table), intent(inout) :: table
+      character(len=*), intent(in) :: prefix
+      character(len=:), allocatable, intent(inout) :: names
+      integer, intent(inout) :: nnames
+      type(toml_key), allocatable :: keys(:)
+      class(toml_value), pointer :: entry
+      integer :: i
+
+      call table%get_keys(keys)
+      do i = 1, size(keys)
+         call table%get(keys(i)%key, entry)
+         if (.not. associated(entry)) cycle
+         select type (entry)
+         type is (toml_table)
+            call collect_unread(entry, prefix//keys(i)%key//".", names, nnames)
+         class default
+            if (nnames > 0) names = names//", "
+            names = names//prefix//keys(i)%key
+            nnames = nnames + 1
+         end select
+      end do
+   end subroutine collect_unread
 
    !> Collect parameter values into a temporary document
    !>
@@ -446,7 +505,10 @@ contains
       if (.not. associated(parent)) return
       if (self%reading) then
          call get_value(parent, leaf, parsed, stat=stat)
-         if (stat == 0) value = parsed
+         if (stat == 0) then
+            value = parsed
+            call parent%delete(leaf)
+         end if
       else
          call set_value(parent, leaf, value, stat=stat)
       end if
@@ -474,7 +536,10 @@ contains
       if (.not. associated(parent)) return
       if (self%reading) then
          call get_value(parent, leaf, parsed, stat=stat)
-         if (stat == 0) value = parsed
+         if (stat == 0) then
+            value = parsed
+            call parent%delete(leaf)
+         end if
       else
          call set_value(parent, leaf, value, stat=stat)
       end if
@@ -502,7 +567,10 @@ contains
       if (.not. associated(parent)) return
       if (self%reading) then
          call get_value(parent, leaf, parsed, stat=stat)
-         if (stat == 0) value = parsed
+         if (stat == 0) then
+            value = parsed
+            call parent%delete(leaf)
+         end if
       else
          call set_value(parent, leaf, value, stat=stat)
       end if
@@ -545,6 +613,7 @@ contains
                if (stat /= 0) exit
             end do
          end if
+         if (stat == 0 .and. self%reading) call parent%delete(leaf)
       else
          stat = 1
       end if
@@ -572,7 +641,10 @@ contains
       if (.not. associated(parent)) return
       if (self%reading) then
          call get_value(parent, leaf, parsed, stat=stat)
-         if (stat == 0) call move_alloc(parsed, value)
+         if (stat == 0) then
+            call move_alloc(parsed, value)
+            call parent%delete(leaf)
+         end if
       else
          call set_value(parent, leaf, value, stat=stat)
       end if

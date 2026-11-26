@@ -5,7 +5,7 @@
 !> defined in exactly one place
 module moist_output_ascii
    use moist_build_info, only: git_commit, build_host
-   use moist_version, only: get_moist_version
+   use moist_version, only: get_moist_version, moist_version_string
    implicit none(type, external)
    private
 
@@ -27,15 +27,50 @@ contains
    !> Return the canonical banner as text with newline-terminated lines
    !>
    !> @param[in] style One of the BANNER_* constants
-   function moist_banner_text(style) result(text)
+   pure function moist_banner_text(style) result(text)
       !> Banner selector
       integer, intent(in) :: style
       !> Host-printable banner text
-      character(len=:), allocatable :: text
-      !> Release and build metadata
-      character(len=:), allocatable :: version, line
+      character(len=banner_text_len(style)) :: text
+
+      !> Banner as built
+      character(len=:), allocatable :: built
+
+      call build_banner_text(style, built)
+      text = built
+   end function moist_banner_text
+
+   !> Length of the banner text of a style
+   !>
+   !> @param[in] style One of the BANNER_* constants
+   pure function banner_text_len(style) result(n)
+      !> Banner selector
+      integer, intent(in) :: style
+      !> Number of characters
+      integer :: n
+
+      !> Banner as built
+      character(len=:), allocatable :: built
+
+      call build_banner_text(style, built)
+      n = len(built)
+   end function banner_text_len
+
+   !> Assemble the banner text of a style
+   !>
+   !> @param[in]  style One of the BANNER_* constants
+   !> @param[out] text  Banner with newline-terminated lines
+   pure subroutine build_banner_text(style, text)
+      !> Banner selector
+      integer, intent(in) :: style
+      !> Banner text
+      character(len=:), allocatable, intent(out) :: text
+
+      !> Release and commit line
+      character(len=:), allocatable :: line
       !> Newline separator
       character(len=1), parameter :: nl = achar(10)
+
       text = ""
       if (style == BANNER_FULL .or. style == BANNER_LOGO) then
          text = "                            _   _     _             "//nl// &
@@ -54,8 +89,7 @@ contains
          text = text//"     '---------------------------------------------'"//nl//nl
       end if
       if (style == BANNER_BUILD .or. style == BANNER_COMPACT) then
-         call get_moist_version(string=version)
-         line = "v"//version//" ("//trim(git_commit)//")"
+         line = "v"//moist_version_string//" ("//trim(git_commit)//")"
       end if
       if (style == BANNER_BUILD) then
          text = "     .---------------------------------------------."//nl//boxed("moist "//line)//nl
@@ -73,15 +107,15 @@ contains
       end if
    contains
       !> Center one build metadata line inside the banner
-      function boxed(value) result(row)
+      pure function boxed(value) result(row)
          character(len=*), intent(in) :: value
-         character(len=:), allocatable :: row
+         character(len=7 + max(45, len(value))) :: row
          integer :: left, right
          left = max(0, (45-len(value))/2)
          right = max(0, 45-len(value)-left)
          row = "     |"//repeat(" ",left)//value//repeat(" ",right)//"|"
       end function boxed
-   end function moist_banner_text
+   end subroutine build_banner_text
 
    !> Print a moist banner, BANNER_FULL unless `style` is given
    subroutine moist_header(unit, style)

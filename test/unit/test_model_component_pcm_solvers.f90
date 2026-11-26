@@ -20,11 +20,10 @@
 !>   local minimum of |F| (singular Jacobian, root out of reach), iteration limit
 module test_model_component_pcm_solvers
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf
-   use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp, sp
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use mctc_env_error, only: moist_error_type => error_type
-   use test_helpers, only: check_moist_error
+   use test_helpers, only: check_moist_error, expect_error, det_rand
    use moist_math_lapack, only: getrf, getrs, sytrf, sytrs
    use moist_model_continuum_component_pcm_solvers, only: pcm_operator, pcm_complex_operator, &
       & pcm_solver, pcm_dense_solver, pcm_gmres_solver, pcm_block_jacobi, &
@@ -794,7 +793,7 @@ contains
       call new_test_operator(op, a, 1, .false., .false.)
       call solver%reset(1)
       call solver%solve(op, .false., b(:, 1), x, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "right-hand side is not finite")
    end subroutine test_dense_rejects_nan_rhs
 
    !> Dense transposed solve rejects an infinite right-hand side
@@ -812,7 +811,7 @@ contains
       call new_test_operator(op, a, 1, .false., .false.)
       call solver%reset(1)
       call solver%solve(op, .true., b(:, 1), x, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "right-hand side is not finite")
    end subroutine test_dense_rejects_inf_rhs
 
    !> Dense solve rejects a NaN operator with a finite forcing
@@ -830,7 +829,7 @@ contains
       call new_test_operator(op, a, 1, .false., .false.)
       call solver%reset(1)
       call solver%solve(op, .false., b(:, 1), x, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "solution is not finite")
    end subroutine test_dense_rejects_nan_operator
 
    !> Dense complex solve rejects a NaN right-hand side
@@ -850,7 +849,7 @@ contains
       zb(3) = cmplx(1.0_wp, ieee_value(1.0_wp, ieee_quiet_nan), kind=wp)
       call solver%reset(1)
       call solver%solve_complex(zop, .false., zb, zx, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "right-hand side is not finite")
    end subroutine test_dense_complex_rejects_nan_rhs
 
    !> Legacy LU wrapper rejects a NaN right-hand side
@@ -864,7 +863,7 @@ contains
       call rhs_block(b)
       b(4, 1) = ieee_value(1.0_wp, ieee_quiet_nan)
       call solve_pcm_lu(a, b(:, 1), q, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "right-hand side is not finite")
    end subroutine test_lu_rejects_nan_rhs
 
    !> Legacy LU wrapper rejects a NaN matrix
@@ -878,7 +877,7 @@ contains
       call rhs_block(b)
       a(2, 2) = ieee_value(1.0_wp, ieee_quiet_nan)
       call solve_pcm_lu(a, b(:, 1), q, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "solution is not finite")
    end subroutine test_lu_rejects_nan_matrix
 
    !> A rejected non-finite right-hand side is not counted as a solve
@@ -1687,25 +1686,6 @@ contains
       call check(error, solver%factorization(1), 0, "failed setup_complex discards the old factors")
    end subroutine test_dense_setup_complex_replaces
 
-   !> Pseudo-random numbers in [-1, 1) from the MINSTD generator
-   !>
-   !> @param[in,out] seed  generator state in 1..2147483646
-   !> @param[out]    v     random numbers
-   pure subroutine minstd_fill(seed, v)
-      !> Generator state
-      integer(int64), intent(inout) :: seed
-      !> Random numbers
-      real(wp), intent(out) :: v(:)
-
-      integer(int64), parameter :: modulus = 2147483647_int64
-      integer :: i
-
-      do i = 1, size(v)
-         seed = mod(48271_int64*seed, modulus)
-         v(i) = 2.0_wp*real(seed, wp)/real(modulus, wp) - 1.0_wp
-      end do
-   end subroutine minstd_fill
-
    !> Well-conditioned random matrix: diagonal 2..3 plus a random part of norm ~0.3
    !>
    !> - The symmetric part is positive definite, so restarted GMRES converges
@@ -1721,14 +1701,10 @@ contains
       !> Matrix
       real(wp), intent(out) :: a(nr, nr)
 
-      integer(int64) :: state
-      integer :: i
+      integer :: state, i
 
-      state = int(seed, int64)
-      call minstd_fill(state, a(:, 1))
-      do i = 2, nr
-         call minstd_fill(state, a(:, i))
-      end do
+      state = seed
+      call det_rand(a, state, -1.0_wp, 1.0_wp)
       a = 0.5_wp/sqrt(real(nr, wp))*a
       if (symmetric) a = 0.5_wp*(a + transpose(a))
       do i = 1, nr
@@ -1766,13 +1742,10 @@ contains
       !> Right-hand sides
       real(wp), intent(out) :: b(:, :)
 
-      integer(int64) :: state
-      integer :: k
+      integer :: state
 
-      state = int(seed, int64)
-      do k = 1, size(b, 2)
-         call minstd_fill(state, b(:, k))
-      end do
+      state = seed
+      call det_rand(b, state, -1.0_wp, 1.0_wp)
    end subroutine random_rhs
 
    !> GMRES solver with a block-Jacobi preconditioner of a given block size
@@ -1816,15 +1789,12 @@ contains
       real(wp), intent(out) :: a(64, 64)
 
       real(wp), parameter :: weight(2, 2) = reshape([1.0_wp, -0.3_wp, 0.4_wp, 0.8_wp], [2, 2])
-      integer(int64) :: state
+      integer :: state
       real(wp) :: coupling
       integer :: i, j, fa, fb
 
-      state = 12345_int64
-      call minstd_fill(state, xyz(:, 1))
-      do i = 2, 32
-         call minstd_fill(state, xyz(:, i))
-      end do
+      state = 12345
+      call det_rand(xyz, state, -1.0_wp, 1.0_wp)
       do i = 1, 32
          xyz(1, i) = xyz(1, i) + 100.0_wp*real(mod(i - 1, 4), wp)
       end do
@@ -2621,7 +2591,7 @@ contains
       x = 1.0_wp
       problem%offset = ieee_value(1.0_wp, ieee_quiet_nan)
       call problem%solve(x, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "residual at zero is not finite")
    end subroutine test_nonlinear_rejects_nan_forcing
 
    !> Newton rejects an infinite forcing
@@ -2638,7 +2608,7 @@ contains
       x = 1.0_wp
       problem%offset = ieee_value(1.0_wp, ieee_positive_inf)
       call problem%solve(x, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "residual at zero is not finite")
    end subroutine test_nonlinear_rejects_inf_forcing
 
    !> Exact zero forcing returns x = 0 without error

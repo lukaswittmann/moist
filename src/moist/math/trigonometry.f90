@@ -5,7 +5,7 @@
 !> surface normals
 module moist_math_trigonometry
    use mctc_env_accuracy, only: wp
-   use moist_math_linalg, only: cross_product
+   use moist_math_linalg, only: identity3, cross_product
    implicit none(type, external)
    private
 
@@ -35,7 +35,7 @@ contains
 
       if (c > 1.0_wp - tol) then
          ! n_hat ~ +z, identity
-         R = reshape([1, 0, 0, 0, 1, 0, 0, 0, 1], [3, 3])
+         R = identity3
          return
       end if
 

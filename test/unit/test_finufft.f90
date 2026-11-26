@@ -5,11 +5,13 @@
 !> every output mode is checked against the direct sum
 module test_finufft
    use mctc_env, only: wp
+   use mctc_io_constants, only: pi
    use iso_fortran_env, only: int64
    use iso_c_binding, only: c_int, c_int64_t, c_double, c_double_complex, c_ptr, c_null_ptr, c_loc
    use finufft_mod, only: finufft_opts
    use moist_math_fft_finufft, only: finufft_default_opts, finufft_destroy
-   use testdrive, only: new_unittest, unittest_type, error_type, check, to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -25,8 +27,6 @@ module test_finufft
    !>
    !> Measured 2.2e-10 with default options and 7.3e-10 with upsampfac = 1.25
    real(wp), parameter :: thr = 5.0e-9_wp
-   !> pi = acos(-1.0_wp)
-   real(wp), parameter :: pi = 3.14159265358979323846_wp
    !> `finufft_opts%modeord` for centered output, frequencies -N/2 .. N/2-1
    integer, parameter :: centered_modes = 0
    !> `finufft_opts%modeord` for FFT-ordered output, frequencies 0 .. N/2-1, -N/2 .. -1

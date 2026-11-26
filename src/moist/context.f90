@@ -23,14 +23,17 @@
 !>   0  silent          nothing (warnings always print)
 !>   1  minimal         header block and results, once per run
 !>   2  normal          key parameters once per run, a summary per geometry
-!>   3  detailed        all parameters and per-geometry tables
-!>   4  solver summary  one block per inner solve (DROP projection, ...)
-!>   5  solver trace    per-iteration and per-point lines of inner solves
-!>   6  debug           everything; the debug stream itself needs `debug`
+!>   3  detailed        the remaining parameters and per-geometry tables
+!>   4  solver summary  numerical internals (DROP switching windows), one block
+!>                      per inner solve (DROP projection, ...)
+!>   5  solver detail   additional statistics of inner solves
+!>   6  debug           solver trace: per-iteration and per-point lines of inner
+!>                      solves; the debug stream itself needs `debug`
 !>
 module moist_context
    use, intrinsic :: iso_fortran_env, only: output_unit, error_unit
    use mctc_env, only: error_type, fatal_error
+   use mctc_io_resize, only: resize
    use moist_utils_timer, only: timer_type, timer_name_len => name_len, cat_host
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_output_citations, only: citation, print_citations
@@ -101,6 +104,8 @@ module moist_context
       procedure :: debug_message => context_debug_message
       !> Write a warning to the output unit, optionally copied to stderr
       procedure :: warning => context_warning
+      !> Pretty printer routed to the context unit and gated by verbosity
+      procedure :: printer => context_printer
       !> OpenMP thread count fixed at construction
       procedure :: get_num_threads => context_get_num_threads
       !> Render the run settings via the pretty printer
@@ -451,15 +456,9 @@ contains
       class(moist_context_type), intent(inout) :: self
       !> Node to push
       integer, intent(in) :: id
-      !> Grown stack
-      integer, allocatable :: frames(:)
 
       if (.not. allocated(self%host_frames)) allocate (self%host_frames(8))
-      if (self%nhost == size(self%host_frames)) then
-         allocate (frames(2*self%nhost))
-         frames(:self%nhost) = self%host_frames(:self%nhost)
-         call move_alloc(frames, self%host_frames)
-      end if
+      if (self%nhost == size(self%host_frames)) call resize(self%host_frames, 2*self%nhost)
       self%nhost = self%nhost + 1
       self%host_frames(self%nhost) = id
 
@@ -565,6 +564,28 @@ contains
       !$omp end critical(moist_context_io)
 
    end subroutine context_warning
+
+   !> Pretty printer routed to the context unit and gated by verbosity
+   !>
+   !> - silent (no-op on every write) when run verbosity is below `level`
+   !>
+   !> @param[in] self   context instance
+   !> @param[in] level  verbosity level required to emit output (default 1)
+   function context_printer(self, level) result(pp)
+      !> Context instance
+      class(moist_context_type), intent(in) :: self
+      !> Verbosity level required to emit output
+      integer, intent(in), optional :: level
+      !> Configured pretty printer
+      type(prettyprinter) :: pp
+      !> Effective verbosity threshold
+      integer :: lvl
+
+      lvl = 1
+      if (present(level)) lvl = level
+      pp = new_prettyprinter(unit=self%unit, active=self%verbosity(lvl))
+
+   end function context_printer
 
    !> OpenMP thread count for the run
    !>

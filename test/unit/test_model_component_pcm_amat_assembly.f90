@@ -3,6 +3,7 @@ module test_model_component_pcm_amat_assembly
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type
+   use mctc_io_constants, only: pi
    use moist_cavity_iswig, only: cavity_type_iswig
    use test_pcm_conductor_probe, only: probe_conductor_matrix
    use test_helpers, only: get_test_structures, center_at_origin, &
@@ -60,7 +61,7 @@ contains
       real(wp) :: p, r
 
       if (i == j) then
-         a = sqrt(2.0_wp/(4.0_wp*atan(1.0_wp)))*xi(i)/f(i)
+         a = sqrt(2.0_wp/pi)*xi(i)/f(i)
       else
          p = xi(i)*xi(j)/sqrt(xi(i)*xi(i) + xi(j)*xi(j))
          r = norm2(xyz(:, i) - xyz(:, j))
@@ -296,7 +297,7 @@ contains
       end do
 
       p = xi(1)*xi(2)/sqrt(xi(1)*xi(1) + xi(2)*xi(2))
-      limit = 2.0_wp*p/sqrt(4.0_wp*atan(1.0_wp))
+      limit = 2.0_wp*p/sqrt(pi)
       call check(error, amat(1, 2), limit, thr=ref_thr*limit, &
                  more="coincident pair does not reach the Gaussian overlap limit")
       if (allocated(error)) return

@@ -294,8 +294,8 @@ def test_pcm_iterative_controls_round_trip(component):
 @pytest.mark.parametrize("lsf", [moist.SvdW(), moist.CFC(), moist.Isodensity()])
 def test_all_drop_surfaces_share_parameters(lsf, gaussian_density, build_with):
     parameters = moist.DROPParameters(
-        nleb=26, tolerance=2e-9, proj_maxiter=200, proj_level=2,
-        branch_weight_s=.08, rho_grid_h=.8, wleb_prune_level=1,
+        nleb=26, tolerance=2e-9, proj_maxiter=200, proj_level=1,
+        branch_dpdist_max=0.3, rho_grid_h=0.8, wleb_prune_level=1,
     )
     config = moist.DROP(lsf=lsf, parameters=parameters)
     source = gaussian_density if config.density_dependent else None
@@ -652,7 +652,7 @@ def test_gostshyp_registered_parameter_printout():
     assert all(len(found) == 1 for found in rows.values())
     assert float(rows["regularization_start"][0][-1]) == 1e-12
     assert float(rows["regularization_end"][0][-1]) == 1e-10
-    assert rows["suppress_negative_amplitudes"][0][-1] == "F"
+    assert rows["suppress_negative_amplitudes"][0][-1] == "no"
 
 
 @pytest.mark.parametrize("lsf", [moist.SvdW(), moist.CFC()])

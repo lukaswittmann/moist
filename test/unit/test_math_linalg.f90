@@ -1,9 +1,10 @@
 !> Test suite for linalg utilities in moist_math_linalg
 module test_math_linalg
    use mctc_env, only: wp
-   use mctc_io_utils, only: to_string
+   use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame, sym3_21, &
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+   use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame, is_rotation, identity3, sym3_21, &
                                 outer3, outer3_linear, outer_matrix, logaddexp, eig_2x2_symmetric, &
                                 outer4, sym4_31, sym4_22, sym4_211
    use moist_math_lapack, only: getrf, getri, getrs, sytrf, sytrs
@@ -14,6 +15,7 @@ module test_math_linalg
    use moist_math_linalg_lusol_ez, only: solve
    use moist_math_linalg_lsmr, only: lsmr, lsmr_operator
    use moist_math_linalg_lsqr, only: lsqr_solver_ez
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -63,6 +65,7 @@ contains
                   new_unittest("symmetric_indefinite_solve", test_symmetric_indefinite_solve), &
                   new_unittest("tangent_frame_orthonormal", test_tangent_frame_orthonormal), &
                   new_unittest("tangent_frame_axes", test_tangent_frame_axes), &
+                  new_unittest("is_rotation", test_is_rotation), &
                   new_unittest("sym3_21", test_sym3_21), &
                   new_unittest("outer3", test_outer3), &
                   new_unittest("outer3_linear", test_outer3_linear), &
@@ -70,6 +73,7 @@ contains
                   new_unittest("logaddexp_stability", test_logaddexp_stability), &
                   new_unittest("logaddexp_values", test_logaddexp_values), &
                   new_unittest("eig_2x2_symmetric", test_eig_2x2_symmetric), &
+                  new_unittest("eig_2x2_symmetric_near_degenerate", test_eig_2x2_near_degenerate), &
                   new_unittest("outer4_brute_force", test_outer4_brute_force), &
                   new_unittest("outer4_full_symmetry", test_outer4_full_symmetry), &
                   new_unittest("outer4_outer_matrix", test_outer4_outer_matrix), &
@@ -377,6 +381,35 @@ contains
       call check(error, abs(t1(3)) < 1.0e-12_wp, "t1(3) should be 0")
    end subroutine test_tangent_frame_axes
 
+   !> Proper rotations pass; reflections, scaled, sheared and non-finite matrices fail
+   subroutine test_is_rotation(error)
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: rot(3, 3), bad(3, 3), c, s
+
+      c = cos(0.7_wp)
+      s = sin(0.7_wp)
+      rot = reshape([c, s, 0.0_wp, -s, c, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
+      call check(error, is_rotation(identity3), "identity is a rotation")
+      if (allocated(error)) return
+      call check(error, is_rotation(rot), "turn about z is a rotation")
+      if (allocated(error)) return
+      call check(error, is_rotation(matmul(rot, transpose(rot(:, [3, 1, 2])))), "product of rotations is a rotation")
+      if (allocated(error)) return
+      bad = rot
+      bad(:, 3) = -bad(:, 3)
+      call check(error, .not. is_rotation(bad), "reflection is not a rotation")
+      if (allocated(error)) return
+      call check(error, .not. is_rotation(1.001_wp*rot), "scaled matrix is not a rotation")
+      if (allocated(error)) return
+      bad = rot
+      bad(1, 2) = bad(1, 2) + 1.0e-6_wp
+      call check(error, .not. is_rotation(bad), "sheared matrix is not a rotation")
+      if (allocated(error)) return
+      bad = rot
+      bad(2, 2) = ieee_value(1.0_wp, ieee_quiet_nan)
+      call check(error, .not. is_rotation(bad), "non-finite matrix is not a rotation")
+   end subroutine test_is_rotation
+
    !> Check selected sym3_21 entries
    subroutine test_sym3_21(error)
       type(error_type), allocatable, intent(out) :: error
@@ -645,6 +678,57 @@ contains
       call check(error, abs(v_min_analytic(1)) > 0.999_wp .and. &
                  abs(v_max_analytic(2)) > 0.999_wp, "Ascending diagonal eigenvectors")
    end subroutine test_eig_2x2_symmetric
+
+   !> Near-degenerate matrices keep their eigenvalues to rounding
+   !>
+   !> - `R = Q diag(beta, beta (1 + gap)) Q^T` with a generic rotation `Q`, so the entries
+   !>   carry rounding and `trace^2 - 4 det` cancels to noise of order `eps beta^2`; its
+   !>   square root moved both eigenvalues by up to `sqrt(eps) beta`, about 1e-8 (the
+   !>   2026-10-05 umbilic bug of the DROP focal switch)
+   !> - eigenvalues against LAPACK, gaps from zero to 1e-6 relative; eigenvectors are
+   !>   ill-conditioned here and not compared
+   subroutine test_eig_2x2_near_degenerate(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Eigenvalue deviation allowed, in units of the largest entry
+      !>
+      !> - measured 1.5e-16 with the sum of squares
+      !> - 1.4e-8 with the cancelling discriminant, above the bound at every gap
+      real(wp), parameter :: thr = 16.0_wp*epsilon(1.0_wp)
+      !> Smaller eigenvalue of every case
+      real(wp), parameter :: beta = 0.375_wp
+      !> Relative eigenvalue gaps
+      real(wp), parameter :: gaps(4) = [0.0_wp, 1.0e-14_wp, 1.0e-10_wp, 1.0e-6_wp]
+      !> Rotations per gap
+      integer, parameter :: nrot = 16
+      real(wp) :: R(2, 2), rot(2, 2), theta, scale, lambda_min, lambda_max, v_min(2), v_max(2)
+      real(wp) :: evals(2), work(8)
+      integer(lapack_ik) :: info
+      integer :: i, k
+
+      do k = 1, size(gaps)
+         do i = 1, nrot
+            theta = 0.1_wp + 0.19_wp*real(i, wp)
+            rot = reshape([cos(theta), sin(theta), -sin(theta), cos(theta)], [2, 2])
+            R = matmul(rot, matmul(reshape([beta, 0.0_wp, 0.0_wp, beta*(1.0_wp + gaps(k))], [2, 2]), &
+                                   transpose(rot)))
+            R(2, 1) = R(1, 2)
+            scale = maxval(abs(R))
+            call eig_2x2_symmetric(R(1, 1), R(1, 2), R(2, 2), lambda_min, lambda_max, v_min, v_max)
+            call dsyev("N", "U", int(2, lapack_ik), R, int(2, lapack_ik), evals, work, int(8, lapack_ik), info)
+            if (info /= 0) then
+               call check(error, .false., "LAPACK dsyev failed for gap "//to_string(gaps(k)))
+               return
+            end if
+            call check(error, abs(lambda_min - evals(1)) <= thr*scale .and. abs(lambda_max - evals(2)) <= thr*scale, &
+                       "near-degenerate eigenvalues off LAPACK, gap "//to_string(gaps(k))//", rotation "// &
+                       to_string(i)//": "//to_string(lambda_min - evals(1))//", "// &
+                       to_string(lambda_max - evals(2)))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_eig_2x2_near_degenerate
 
    ! outer4(v) = v_i v_j v_k v_l
 
@@ -1322,7 +1406,7 @@ contains
 
          minmn = min(m, n)
          dampsq = damp**2
-         fourpi = 4.0_wp*3.141592_wp
+         fourpi = 4.0_wp*pi
          alfa = fourpi/m
          beta = fourpi/n
 
