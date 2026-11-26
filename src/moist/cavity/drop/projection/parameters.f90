@@ -153,26 +153,28 @@ contains
       integer, intent(in) :: level
       logical, intent(in) :: horizon_closes_back
 
+      ! Every field from the level: nothing of an earlier level stays
+      self%seed_size = 1.0_wp
+      self%refine_levels = 0
+      self%filter_cone = .false.
+      self%filter_grazing = .false.
+      self%filter_back_facing = .false.
+      self%filter_focal = .false.
+      self%cone_scale = 1.5_wp
       select case (level)
       case (4)
          self%seed_size = 0.2_wp
          self%refine_levels = 1
       case (3)
          self%seed_size = 0.3_wp
-         self%refine_levels = 0
          self%filter_cone = .true.
       case (2)
          self%seed_size = 0.5_wp
-         self%refine_levels = 0
          self%filter_cone = .true.
          self%filter_grazing = .true.
-         self%filter_back_facing = .true. .and. horizon_closes_back
+         self%filter_back_facing = horizon_closes_back
          self%filter_focal = .true.
-      case default
-         self%seed_size = 1.0_wp
-         self%refine_levels = 0
       end select
-      self%cone_scale = 1.5_wp
    end subroutine seed_init_level
 
 end module moist_cavity_drop_projection_parameters

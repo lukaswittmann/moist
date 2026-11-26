@@ -4215,23 +4215,6 @@ contains
       w = (1.0_wp - t)**(fade_order + 1)*acc
    end subroutine smoothstep_slope_weight
 
-   !> Exclude stationary points by a common sign of atomic cross products
-   !>
-   !> For nonnegative blend coefficients, Z has non-negative coefficients in
-   !> `g_A = w_A u_A`, each `g_A` non-increasing in `d_A`, so grad S is a
-   !> nonnegative combination of atom normals
-   !>
-   !> - coefficients `Z_A ((k/3) g_A + |w_A'| u_A)/(k Z) >= 0`; needs a monotone
-   !>   fade (`w' <= 0`), which every polynomial smoothstep `S_n` gives; fade off
-   !>   is `w = 1`
-   !> - stationarity needs `(x - anchor) x grad S = 0`; each atom gives
-   !>   `(x - anchor) x (anchor - atom)` over a positive distance, and a component
-   !>   with one strict sign for every atom throughout the box cannot cancel
-   !> - a cached enclosure of all atom centers bounds the whole positive cone in
-   !>   constant work per box, covering every possible subset of atoms in reach
-   !> - outward-rounded interval arithmetic includes coordinate rounding
-   !> - an inconclusive enclosure keeps the box for subdivision or refinement
-   !>
    !> Whether SvdW parameters and cached center bounds admit the positive-cone
    !> stationarity certificate
    !>
@@ -4311,6 +4294,23 @@ contains
       can_exclude = .true.
    end subroutine lsf_svdw_stationary_region_bounds
 
+   !> Exclude stationary points by a common sign of atomic cross products
+   !>
+   !> For nonnegative blend coefficients, Z has non-negative coefficients in
+   !> `g_A = w_A u_A`, each `g_A` non-increasing in `d_A`, so grad S is a
+   !> nonnegative combination of atom normals
+   !>
+   !> - coefficients `Z_A ((k/3) g_A + |w_A'| u_A)/(k Z) >= 0`; needs a monotone
+   !>   fade (`w' <= 0`), which every polynomial smoothstep `S_n` gives; fade off
+   !>   is `w = 1`
+   !> - stationarity needs `(x - anchor) x grad S = 0`; each atom gives
+   !>   `(x - anchor) x (anchor - atom)` over a positive distance, and a component
+   !>   with one strict sign for every atom throughout the box cannot cancel
+   !> - a cached enclosure of all atom centers bounds the whole positive cone in
+   !>   constant work per box, covering every possible subset of atoms in reach
+   !> - outward-rounded interval arithmetic includes coordinate rounding
+   !> - an inconclusive enclosure keeps the box for subdivision or refinement
+   !>
    !> @param[in] self       Positive-mixture SvdW model
    !> @param[in] anchor     Distance origin (3)
    !> @param[in] center     Box midpoint (3)

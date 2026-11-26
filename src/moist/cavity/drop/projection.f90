@@ -276,7 +276,7 @@ contains
                write (report, "(a,i0,a,3es12.4)") "Lost anchor ", self%anchor%id(ia), ": ", &
                   self%anchor%xyz(:, ia)
             end if
-            call self%ctx%debug_message(trim(report))
+            call self%ctx%message(trim(report), level=6)
          end do
       end if
 

@@ -397,7 +397,7 @@ contains
       self%filter_focal = seed%filter_focal
       self%cone_scale = seed%cone_scale
       self%initialized = .false.
-      self%built = .false.
+      call clear_lattice(self)
       if (.not. (self%sample_size > 0.0_wp)) then
          call fatal_error(error, "Lattice seeder: sample size must be positive")
          return

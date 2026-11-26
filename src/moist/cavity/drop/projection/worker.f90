@@ -854,7 +854,7 @@ contains
          end if
          if (n > size(self%queue)) then
             allocate (tmp(max(n, 2*size(self%queue))))
-            tmp(1:n - 1) = self%queue(1:n - 1)
+            tmp(1:size(self%queue)) = self%queue
             call move_alloc(tmp, self%queue)
          end if
          if (m > size(self%near_seeds, 2)) then
